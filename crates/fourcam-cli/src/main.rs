@@ -5,6 +5,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod web;
+
 const USAGE: &str = "\
 4cam - 4th-axis rotary CAM engine
 
@@ -16,6 +18,8 @@ USAGE:
       Defaults: --plunge 60, --safe = highest Z reached by a G0 move.
   4cam toolpath <job.json>
       Print the machine-neutral toolpath IR as JSON.
+  4cam serve [--port <port>]
+      Start the local web UI on http://127.0.0.1:<port> (default 8080).
 ";
 
 fn main() -> ExitCode {
@@ -88,6 +92,15 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "run" => cmd_run(&parse(rest, &["machine", "out"])?),
         "verify" => cmd_verify(&parse(rest, &["plunge", "safe"])?),
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
+        "serve" => {
+            let o = parse(rest, &["port"])?;
+            let port = match o.flag("port") {
+                Some(p) => p.parse().map_err(|_| format!("--port: not a port: {p}"))?,
+                None => 8080,
+            };
+            web::serve(port)?;
+            Ok(ExitCode::SUCCESS)
+        }
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
