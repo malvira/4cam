@@ -1,5 +1,7 @@
 // 4cam web UI: job editor -> engine (WebAssembly, in a worker) -> G-code, checks, previews.
 
+import { cylinder, heightmapSolid, revolveProfile } from "./meshes.js";
+
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------- engine (worker RPC)
@@ -358,7 +360,8 @@ async function getThree() {
     const sun = new THREE.DirectionalLight(0xffffff, 1.2);
     sun.position.set(20, -30, 40);
     scene.add(sun);
-    scene.add(new THREE.AxesHelper(5));
+    const axes = new THREE.AxesHelper(5);
+    scene.add(axes);
     const groups = { part: new THREE.Group(), stock: new THREE.Group(), path: new THREE.Group(), sim: new THREE.Group(), tool: new THREE.Group() };
     for (const g of Object.values(groups)) scene.add(g);
     const resize = () => {
@@ -375,7 +378,7 @@ async function getThree() {
       requestAnimationFrame(loop);
     };
     loop();
-    state.three = { THREE, renderer, scene, camera, controls, groups, fitted: null };
+    state.three = { THREE, renderer, scene, camera, controls, groups, axes, fitted: null };
     $("viewNote").textContent = "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. The part turns, so the path is drawn around it (A rotates about X).";
   } catch (e) {
     state.three = { failed: true };
@@ -442,22 +445,21 @@ async function updateView() {
     if (res.mesh_bounds) xs.push(res.mesh_bounds[0][0], res.mesh_bounds[1][0]);
     const xmin = Math.min(...xs) - 3, xmax = Math.max(...xs) + 1;
     const R = res.stock.radius;
-    const cyl = new THREE.CylinderGeometry(R, R, xmax - xmin, 96, 1, true);
-    cyl.rotateZ(-Math.PI / 2);
-    cyl.translate((xmin + xmax) / 2, 0, 0);
-    groups.stock.add(new THREE.Mesh(cyl, new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false })));
-    const partMat = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.3, roughness: 0.5, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+    v.bounds = { xmin, xmax, R };
+    // closed solids (web/meshes.js): caps and shoulder faces, outward winding, front faces only
+    groups.stock.add(new THREE.Mesh(toGeometry(THREE, cylinder(R, xmin, xmax, 96)), new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.15, depthWrite: false })));
+    const partMat = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.3, roughness: 0.5 });
     if (state.mesh && res.mesh_bounds) {
       const { result } = await engine("meshTriangles", state.job, { max_triangles: 150000 }, state.mesh);
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(result.triangles, 3));
       g.computeVertexNormals();
-      groups.part.add(new THREE.Mesh(g, partMat));
+      // a user's mesh may have inconsistent winding: show both sides
+      const meshMat = partMat.clone();
+      meshMat.side = THREE.DoubleSide;
+      groups.part.add(new THREE.Mesh(g, meshMat));
     } else if (prof && prof.length > 1) {
-      // LatheGeometry revolves (radius, y) about Y; turn Y into X
-      const lathe = new THREE.LatheGeometry(prof.map(([x, r]) => new THREE.Vector2(r, x)), 120);
-      lathe.rotateZ(-Math.PI / 2);
-      groups.part.add(new THREE.Mesh(lathe, partMat));
+      groups.part.add(new THREE.Mesh(toGeometry(THREE, revolveProfile(prof, 120)), partMat));
     }
     if (!v.fitted) {
       const span = xmax - xmin;
@@ -502,31 +504,21 @@ function ramp(t) {
   return stops[i].map((c, k) => (c * (1 - u) + stops[i + 1][k] * u) / 255);
 }
 
-/** Heightmap -> surface around X, coloured by material left over the part (0..0.5 mm). */
-function simMesh(THREE, sim, r) {
-  const { x0, dx, nx, na } = sim.grid;
-  const pos = new Float32Array(nx * na * 3), col = new Float32Array(nx * na * 3);
-  for (let i = 0; i < nx; i++) {
-    const x = x0 + (i + 0.5) * dx;
-    for (let j = 0; j < na; j++) {
-      const phi = ((j + 0.5) * 2 * Math.PI) / na;
-      const k = i * na + j, rr = r[k], part = sim.part[k];
-      pos.set([x, rr * Math.cos(phi), rr * Math.sin(phi)], 3 * k);
-      col.set(part > 0 ? ramp((rr - part) / 0.5) : [0.75, 0.75, 0.75], 3 * k);
-    }
-  }
-  const idx = [];
-  for (let i = 0; i + 1 < nx; i++)
-    for (let j = 0; j < na; j++) {
-      const a = i * na + j, b = i * na + ((j + 1) % na), c = (i + 1) * na + j, d = (i + 1) * na + ((j + 1) % na);
-      idx.push(a, b, c, b, d, c);
-    }
+/** Indexed geometry from a web/meshes.js mesh, with normals (and colours if present). */
+function toGeometry(THREE, m) {
   const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  g.setAttribute("color", new THREE.BufferAttribute(col, 3));
-  g.setIndex(idx);
+  g.setAttribute("position", new THREE.BufferAttribute(m.positions, 3));
+  if (m.colors) g.setAttribute("color", new THREE.BufferAttribute(m.colors, 3));
+  g.setIndex(new THREE.BufferAttribute(m.indices, 1));
   g.computeVertexNormals();
-  return new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.7 }));
+  return g;
+}
+
+/** Simulated stock -> closed solid around X, coloured by material left over the part. */
+function simMesh(THREE, sim, r) {
+  const color = (k) => (sim.part[k] > 0 ? ramp((r[k] - sim.part[k]) / 0.5) : [0.75, 0.75, 0.75]);
+  const m = heightmapSolid(sim.grid, r, color);
+  return new THREE.Mesh(toGeometry(THREE, m), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }));
 }
 
 // ---------------------------------------------------------------- wiring
@@ -852,3 +844,34 @@ $("importUrlBtn").addEventListener("click", async () => {
   }
 });
 $("job").addEventListener("change", renderTools);
+
+// ---------------------------------------------------------------- view hooks (used by the e2e test)
+/** Camera presets: "iso", "front" (looking down the axis from +X), "back" (from -X). `show`
+ *  picks layers: { path, part, stock, sim }. Renders immediately. */
+window.__4cam.setView = async (name, show = {}) => {
+  const v = await getThree();
+  if (!v || v.failed || !v.bounds) return false;
+  const { xmin, xmax, R } = v.bounds;
+  const cx = (xmin + xmax) / 2, span = xmax - xmin;
+  if (name === "front") v.camera.position.set(xmax + 6 * R, 0, 0);
+  else if (name === "back") v.camera.position.set(xmin - 6 * R, 0, 0);
+  else v.camera.position.set(cx - span * 0.2, -span * 1.3, R * 2.2);
+  v.controls.target.set(cx, 0, 0);
+  v.controls.update();
+  for (const [k, on] of Object.entries(show)) if (v.groups[k]) v.groups[k].visible = on;
+  if (show.path === false) v.groups.tool.visible = false;
+  v.axes.visible = show.axes ?? true;
+  v.renderer.render(v.scene, v.camera);
+  return true;
+};
+
+/** "r,g,b" at a fraction (fx, fy) of the 3D canvas, after a fresh render. */
+window.__4cam.pixelAt = (fx, fy) => {
+  const v = state.three;
+  v.renderer.render(v.scene, v.camera);
+  const gl = v.renderer.getContext();
+  const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+  const buf = new Uint8Array(4);
+  gl.readPixels(Math.floor(fx * w), Math.floor((1 - fy) * h), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+  return `${buf[0]},${buf[1]},${buf[2]}`;
+};

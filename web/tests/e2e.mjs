@@ -122,6 +122,37 @@ const state = () => js("document.body.dataset.state");
 async function waitDone(what, timeoutMs) {
   return waitFor(async () => { const s = await state(); if (s === "error") throw new Error(await js("document.getElementById('error').textContent")); return s === "done"; }, what, timeoutMs);
 }
+// Solids must render closed: looking down the rotary axis at either end, the middle of the
+// view must show the end face, not the background through an open shell.
+const VIEW_PREFIX = process.env.FOURCAM_SHOT_PREFIX || "";
+async function closedViews(tag) {
+  const bg = [0, 0, 0];
+  const out = [];
+  for (const layer of ["part", "stock", "sim"]) {
+    const has = await js(`window.__4cam.state.three.groups.${layer}.children.length > 0`);
+    if (!has) continue;
+    for (const end of ["front", "back"]) {
+      const show = { path: false, axes: false, part: layer === "part", stock: layer === "stock", sim: layer === "sim" };
+      await js(`window.__4cam.setView(${JSON.stringify(end)}, ${JSON.stringify(show)})`);
+      await sleep(200);
+      // the axis line of sight and a small ring around it must all hit the end face
+      let px = [], filled = true;
+      for (const [fx, fy] of [[0.5, 0.5], [0.49, 0.5], [0.51, 0.5], [0.5, 0.49], [0.5, 0.51]]) {
+        const p = String(await js(`window.__4cam.pixelAt(${fx}, ${fy})`)).split(",").map(Number);
+        if (!p.some((c, k) => Math.abs(c - bg[k]) > 4)) filled = false; // background is exactly black
+        px = p;
+      }
+      await shot(`${VIEW_PREFIX}view_${tag}_${layer}_${end}`);
+      out.push({ layer, end, filled, px });
+    }
+    await js(`window.__4cam.setView("iso", { path: false, axes: false, part: ${layer === "part"}, stock: ${layer === "stock"}, sim: ${layer === "sim"} })`);
+    await sleep(200);
+    await shot(`${VIEW_PREFIX}view_${tag}_${layer}_iso`);
+  }
+  await js(`window.__4cam.setView("iso", { path: true, axes: true, part: true, stock: true, sim: true })`);
+  return out;
+}
+
 const golden = (name) => readFileSync(join(root, "tests", "golden", `${name}.nc`), "utf8").replace(/\r\n/g, "\n");
 
 let failed = false;
@@ -176,6 +207,9 @@ try {
   const simText = await js("document.getElementById('summary').innerText");
   check("simulated stock: no gouges, no rapids through stock", /deepest gouge 0\.000 mm; 0 rapid/.test(simText), simText.split("\n").pop());
   await shot("03_knob_simulated");
+  const kv = await closedViews("knob");
+  check("knob: part, stock and simulated stock render closed (end faces filled)",
+    kv.length === 6 && kv.every((v) => v.filled), kv.map((v) => `${v.layer}/${v.end}:${v.filled ? "filled" : "OPEN " + v.px}`).join(" "));
 
   // 5. LinuxCNC machine (G93)
   await js("document.getElementById('machine').value = 'linuxcnc-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
@@ -248,6 +282,9 @@ try {
   const msim = await js("document.getElementById('summary').innerText");
   check("mesh job simulated: no gouges", /deepest gouge 0\.0\d\d mm; 0 rapid/.test(msim), msim.split("\n").pop());
   await shot("05_mesh_simulated");
+  const mv = await closedViews("mesh");
+  check("mesh job: part, stock and simulated stock render closed (end faces filled)",
+    mv.length === 6 && mv.every((v) => v.filled), mv.map((v) => `${v.layer}/${v.end}:${v.filled ? "filled" : "OPEN " + v.px}`).join(" "));
 
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

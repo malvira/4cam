@@ -1,0 +1,147 @@
+// Closed (watertight) display meshes for the 3D view, built without three.js so they can be
+// tested in Node (web/tests/meshes.test.mjs). Every solid has end caps and the annular faces
+// at steps, outward winding, and its own vertices per face group so normals stay crisp.
+//
+// Geometry: X is the rotary axis; a point at radius r and part angle phi is
+// (x, r cos phi, r sin phi).
+
+/** A growing indexed triangle list. */
+class Builder {
+  constructor() {
+    this.pos = [];
+    this.col = [];
+    this.idx = [];
+  }
+  vertex(x, y, z, c) {
+    this.pos.push(x, y, z);
+    if (c) this.col.push(c[0], c[1], c[2]);
+    return this.pos.length / 3 - 1;
+  }
+  tri(a, b, c) {
+    this.idx.push(a, b, c);
+  }
+  done() {
+    return {
+      positions: new Float32Array(this.pos),
+      colors: this.col.length ? new Float32Array(this.col) : null,
+      indices: new Uint32Array(this.idx),
+    };
+  }
+}
+
+/** Ring of `n` vertices at axial position x; `radius(j)` and `color(j)` per angle index. */
+function ring(b, x, n, radius, color) {
+  const out = [];
+  for (let j = 0; j < n; j++) {
+    const phi = ((j + 0.5) * 2 * Math.PI) / n;
+    const r = radius(j);
+    out.push(b.vertex(x, r * Math.cos(phi), r * Math.sin(phi), color && color(j)));
+  }
+  return out;
+}
+
+/** Band between two rings, outward for increasing x (a -> b along +x, angle increasing). */
+function band(b, ra, rb) {
+  const n = ra.length;
+  for (let j = 0; j < n; j++) {
+    const k = (j + 1) % n;
+    // (angle) x (+x) points outward: [a_j, a_k, b_j] and [a_k, b_k, b_j]
+    b.tri(ra[j], ra[k], rb[j]);
+    b.tri(ra[k], rb[k], rb[j]);
+  }
+}
+
+/** Disc cap at x closing a ring: faces -x when `back`, +x otherwise. */
+function cap(b, x, n, radius, back, color) {
+  const rv = ring(b, x, n, radius, color);
+  const c = b.vertex(x, 0, 0, color && color(0));
+  for (let j = 0; j < n; j++) {
+    const k = (j + 1) % n;
+    if (back) b.tri(c, rv[k], rv[j]);
+    else b.tri(c, rv[j], rv[k]);
+  }
+}
+
+/**
+ * Revolve a profile [[x, r], ...] (ascending x; equal x = a step) about X into a closed solid.
+ * Steps become annular faces; both ends get caps.
+ */
+export function revolveProfile(points, segments = 120) {
+  const pts = points.filter((p, i) => i === 0 || p[0] !== points[i - 1][0] || p[1] !== points[i - 1][1]);
+  const b = new Builder();
+  if (pts.length < 2) return b.done();
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [x0, r0] = pts[i];
+    const [x1, r1] = pts[i + 1];
+    // each face group gets its own vertices (crisp normals at shoulders)
+    const ra = ring(b, x0, segments, () => r0);
+    const rb = ring(b, x1, segments, () => r1);
+    // a side, or at a step (x0 === x1) the annulus: its normal comes out -x when stepping up
+    // and +x when stepping down, so the same winding is outward in every case
+    band(b, ra, rb);
+  }
+  cap(b, pts[0][0], segments, () => pts[0][1], true);
+  cap(b, pts[pts.length - 1][0], segments, () => pts[pts.length - 1][1], false);
+  return b.done();
+}
+
+/** Closed cylinder of radius r from x0 to x1. */
+export function cylinder(r, x0, x1, segments = 96) {
+  return revolveProfile([[x0, r], [x1, r]], segments);
+}
+
+/**
+ * Closed solid from a radial heightmap (grid {x0, dx, nx, na}, radii r[i * na + j]) with an
+ * optional per-cell colour. Rings sit at cell centres; the ends are capped.
+ */
+export function heightmapSolid(grid, r, color) {
+  const { x0, dx, nx, na } = grid;
+  const b = new Builder();
+  if (nx < 1) return b.done();
+  const c = color ? (i) => (j) => color(i * na + j) : () => null;
+  let prev = null;
+  for (let i = 0; i < nx; i++) {
+    const cur = ring(b, x0 + (i + 0.5) * dx, na, (j) => r[i * na + j], c(i));
+    if (prev) band(b, prev, cur);
+    prev = cur;
+  }
+  cap(b, x0 + 0.5 * dx, na, (j) => r[j], true, c(0));
+  cap(b, x0 + (nx - 0.5) * dx, na, (j) => r[(nx - 1) * na + j], false, c(nx - 1));
+  return b.done();
+}
+
+/**
+ * Check a mesh is a closed, consistently oriented surface: after welding equal positions,
+ * every edge is used exactly twice, once in each direction. Returns { closed, volume,
+ * badEdges, triangles }.
+ */
+export function checkClosed({ positions, indices }) {
+  const key = (i) => `${positions[3 * i].toFixed(5)},${positions[3 * i + 1].toFixed(5)},${positions[3 * i + 2].toFixed(5)}`;
+  const weld = new Map();
+  const id = new Int32Array(positions.length / 3);
+  for (let i = 0; i < id.length; i++) {
+    const k = key(i);
+    if (!weld.has(k)) weld.set(k, weld.size);
+    id[i] = weld.get(k);
+  }
+  const edges = new Map();
+  let volume = 0;
+  for (let t = 0; t < indices.length; t += 3) {
+    const v = [indices[t], indices[t + 1], indices[t + 2]];
+    const w = v.map((i) => id[i]);
+    if (w[0] === w[1] || w[1] === w[2] || w[0] === w[2]) continue; // degenerate
+    for (let e = 0; e < 3; e++) {
+      const a = w[e], c = w[(e + 1) % 3];
+      const k = `${a}>${c}`;
+      edges.set(k, (edges.get(k) || 0) + 1);
+    }
+    const p = v.map((i) => [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]]);
+    volume += (p[0][0] * (p[1][1] * p[2][2] - p[1][2] * p[2][1]) - p[0][1] * (p[1][0] * p[2][2] - p[1][2] * p[2][0]) + p[0][2] * (p[1][0] * p[2][1] - p[1][1] * p[2][0])) / 6;
+  }
+  let bad = 0;
+  for (const [k, n] of edges) {
+    const [a, c] = k.split(">");
+    if (n !== 1 || edges.get(`${c}>${a}`) !== 1) bad++;
+  }
+  return { closed: bad === 0, volume, badEdges: bad, triangles: indices.length / 3 };
+}
