@@ -267,7 +267,22 @@ impl Project {
             }
         }
         let mut setups = std::collections::HashSet::new();
-        for s in &self.setups {
+        let mut outputs = std::collections::HashSet::new();
+        for (k, s) in self.setups.iter().enumerate() {
+            if k == 0 && matches!(s.stock, StockDef::FromPrevious { .. }) {
+                return Err(format!(
+                    "setup {:?}: the first setup cannot take its stock from a previous one",
+                    s.id
+                ));
+            }
+            for out in &s.outputs {
+                if !outputs.insert(out.name.clone()) {
+                    return Err(format!(
+                        "output name {:?} is used twice (G-code files would overwrite each other)",
+                        out.name
+                    ));
+                }
+            }
             if !setups.insert(&s.id) {
                 return Err(format!("setup id {:?} is used twice", s.id));
             }
@@ -401,6 +416,66 @@ impl Project {
     }
 }
 
+/// Result of simulating a whole project: setups in order on one simulated bar.
+#[derive(Debug, Clone)]
+pub struct ProjectSim {
+    /// Stock after each setup: `(setup id, stock)`.
+    pub after: Vec<(String, crate::sim::RadialMap)>,
+    pub part: crate::sim::Part,
+    /// Rapids that went through stock, per setup.
+    pub rapid_hits: Vec<(String, usize)>,
+}
+
+/// Simulate every setup in order. A setup whose stock is `from_previous` starts from the
+/// previous setup's result (same work origin); otherwise it starts from fresh bar stock. The
+/// grid covers the first setup's part (as [`crate::simulate_job`] does).
+pub fn simulate_project(
+    p: &Project,
+    jobs: &[(String, Job)],
+    mesh_for: &dyn Fn(&Job) -> Option<crate::Mesh>,
+    dx: f64,
+    na: usize,
+) -> Result<ProjectSim, String> {
+    let (_, first) = jobs.first().ok_or("the project has no setups")?;
+    let mesh0 = mesh_for(first);
+    let base =
+        crate::simulate_job(first, &[], mesh0.as_ref(), dx, na, 0.02).map_err(|e| e.to_string())?;
+    let grid = base.stock.grid;
+    let mut stock: Option<crate::sim::RadialMap> = None;
+    let mut after = Vec::new();
+    let mut rapid_hits = Vec::new();
+    for (id, job) in jobs {
+        let setup = p.setup(id).ok_or(format!("unknown setup {id:?}"))?;
+        let start = match (&setup.stock, &stock) {
+            (StockDef::FromPrevious { .. }, Some(prev)) => prev.clone(),
+            (StockDef::FromPrevious { .. }, None) => {
+                return Err(format!(
+                    "setup {id:?}: stock from_previous, but it is the first setup"
+                ))
+            }
+            (StockDef::Cylinder { radius, .. }, _) => crate::sim::RadialMap::filled(grid, *radius),
+        };
+        let mesh = mesh_for(job);
+        let tps = crate::plan_with_mesh(job, mesh.as_ref()).map_err(|e| e.to_string())?;
+        let cutters = |t: u32| job.tool(t).and_then(|d| crate::cutter_for(t, d.shape).ok());
+        let mut s = start;
+        let mut hits = 0;
+        for tp in &tps {
+            hits += crate::sim::simulate(&mut s, tp, &cutters, (dx * 2.0).min(0.1))
+                .rapid_hits
+                .len();
+        }
+        rapid_hits.push((id.clone(), hits));
+        after.push((id.clone(), s.clone()));
+        stock = Some(s);
+    }
+    Ok(ProjectSim {
+        after,
+        part: base.part,
+        rapid_hits,
+    })
+}
+
 /// Jobs to plan from a 0.1 job or 0.2 project text: one per setup, as `(setup id, job)`.
 pub fn jobs_from_any(text: &str, libraries: &[ToolLibrary]) -> Result<Vec<(String, Job)>, String> {
     let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
@@ -471,6 +546,76 @@ mod tests {
         bad.setups[0].part.push("ghost".into());
         assert!(bad.validate().unwrap_err().contains("unknown model"));
         assert!(Project::from_json_any("{\"schema_version\": \"9\"}").is_err());
+    }
+
+    /// The knob as two setups: turning on fresh bar, then knurl + chamfer on the turned stock.
+    pub(crate) fn two_setups() -> Project {
+        let (mut p, _) = Project::from_json_any(KNOB).unwrap();
+        let mut s2 = p.setups[0].clone();
+        let s1 = &mut p.setups[0];
+        s1.operations.truncate(1);
+        s1.outputs.truncate(1);
+        s2.id = "setup2".into();
+        s2.name = "Knurl (re-chucked)".into();
+        s2.stock = StockDef::FromPrevious {
+            radius: 12.5,
+            length: 100.0,
+        };
+        s2.operations.remove(0);
+        s2.outputs.remove(0);
+        p.setups.push(s2);
+        p
+    }
+
+    #[test]
+    fn two_setups_plan_like_one_and_carry_the_stock() {
+        let p = two_setups();
+        p.validate().unwrap();
+        let text = serde_json::to_string(&p).unwrap();
+        let jobs = jobs_from_any(&text, &[]).unwrap();
+        assert_eq!(jobs.len(), 2);
+        // each setup posts exactly the program it had in the single-setup job
+        let one = Job::from_json(KNOB).unwrap();
+        let m = crate::Machine::makera_z1();
+        let single: Vec<String> = crate::plan(&one)
+            .unwrap()
+            .iter()
+            .map(|t| crate::post(t, &m))
+            .collect();
+        let split: Vec<String> = jobs
+            .iter()
+            .flat_map(|(_, j)| crate::plan(j).unwrap())
+            .map(|t| crate::post(&t, &m))
+            .collect();
+        assert!(single == split, "G-code differs when split into setups");
+        // the second setup cuts the stock the first one left
+        let carried = simulate_project(&p, &jobs, &|_| None, 0.2, 90).unwrap();
+        let (one_p, _) = Project::from_json_any(KNOB).unwrap();
+        let one_jobs = jobs_from_any(KNOB, &[]).unwrap();
+        let whole = simulate_project(&one_p, &one_jobs, &|_| None, 0.2, 90).unwrap();
+        assert_eq!(
+            carried.after[1].1.r, whole.after[0].1.r,
+            "carried stock differs from one setup"
+        );
+        // ... and from fresh bar it would not match
+        let mut fresh = p.clone();
+        fresh.setups[1].stock = StockDef::Cylinder {
+            radius: 12.5,
+            length: 100.0,
+        };
+        let f = simulate_project(&fresh, &jobs, &|_| None, 0.2, 90).unwrap();
+        assert_ne!(f.after[1].1.r, whole.after[0].1.r);
+        assert_eq!(
+            carried.rapid_hits,
+            vec![("setup1".into(), 0), ("setup2".into(), 0)]
+        );
+        // a first setup cannot carry stock; output names must be unique
+        let mut bad = p.clone();
+        bad.setups.swap(0, 1);
+        assert!(bad.validate().unwrap_err().contains("first setup"));
+        let mut bad = p.clone();
+        bad.setups[1].outputs[0].name = "knob_1_profile".into();
+        assert!(bad.validate().unwrap_err().contains("used twice"));
     }
 
     #[test]

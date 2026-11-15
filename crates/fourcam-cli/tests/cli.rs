@@ -294,3 +294,27 @@ fn ops_registry_and_upgrade() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn two_setup_project_runs_every_setup() {
+    let out = out_dir("setups");
+    let o = bin()
+        .args(["run", "examples/knob/knob_two_setups.project.json", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    let s = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "{s}");
+    assert!(
+        s.contains("== setup setup1") && s.contains("== setup setup2"),
+        "{s}"
+    );
+    for name in ["knob_1_profile", "knob_2_knurl"] {
+        let ours = std::fs::read(out.join(format!("{name}.nc"))).unwrap();
+        let golden = std::fs::read_to_string(root().join(format!("tests/golden/{name}.nc")))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert_eq!(ours, golden.as_bytes(), "{name}");
+    }
+    std::fs::remove_dir_all(&out).ok();
+}

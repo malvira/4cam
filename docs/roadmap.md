@@ -75,7 +75,7 @@ goldens are still byte-identical.
 
    A setup is planned by lowering it to a 0.1 job, so the goldens stay identical.
 2. **Operation registry. Done:** `crates/fourcam-core/src/ops.rs` describes each type (parameters with units, defaults and limits; tool shapes; geometry; machine needs; whether it shapes the part on purpose). `4cam ops list|show|check`, WASM `opTypes`/`checkProject`. A test keeps the specs in step with the engine.
-3. Setups: rotary first, with stock carried between setups.
+3. **Setups. Done (rotary):** `4cam run` plans every setup (each with its own machine); a setup with `"stock": {"shape": "from_previous"}` starts from the previous setup's simulated stock (`project::simulate_project`); validation rejects a first setup that carries stock and duplicate output names. Example: `examples/knob/knob_two_setups.project.json`. Not yet: work-offset changes between setups (re-chucking at a different X or A), non-rotary holding.
 4. Geometry selection.
 5. The knurl wizard on the general API.
 6. A frontend setup/operation tree: type, tool, geometry chosen by clicking the model,

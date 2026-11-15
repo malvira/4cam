@@ -229,14 +229,37 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
 
 fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
     let job_path = o.one_input()?;
-    let job = load_job(job_path)?;
     let reg = profiles_cmd::Registry::load();
+    let jobs = fourcam::project::jobs_from_any(&read(job_path)?, &reg.libraries())
+        .map_err(|e| format!("{job_path}: {e}"))?;
+    let mut bad = 0;
+    for (setup, job) in &jobs {
+        if jobs.len() > 1 {
+            println!("== setup {setup}");
+        }
+        bad += run_setup(o, job_path, job, &reg)?;
+    }
+    Ok(if bad == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+/// Plan, post, verify and check one setup's job; returns the number of problems.
+fn run_setup(
+    o: &Opts,
+    job_path: &str,
+    job: &Job,
+    reg: &profiles_cmd::Registry,
+) -> Result<usize, String> {
+    let job = job.clone();
     let wanted = o
         .flag("machine")
         .map(str::to_string)
         .or_else(|| job.machine.clone())
         .unwrap_or_else(|| "makera-z1-4axis".into());
-    let profile = profiles_cmd::resolve_machine(&reg, &wanted)?;
+    let profile = profiles_cmd::resolve_machine(reg, &wanted)?;
     println!("machine: {} ({})", profile.id, profile.name);
     let machine: Machine = profile.post.clone();
     let out = PathBuf::from(o.flag("out").unwrap_or("."));
@@ -284,11 +307,7 @@ fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
             }
         }
     }
-    Ok(if bad == 0 {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
+    Ok(bad)
 }
 
 fn highest_rapid_z(text: &str) -> Option<f64> {
