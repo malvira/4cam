@@ -487,7 +487,8 @@ pub fn stock_png(title: &str, stock: &RadialMap, part: &RadialMap, stock_r: f64)
         px: [80.0, 540.0, w as f64 - 30.0, 950.0],
         data: [xa, 0.0, xb, 360.0],
     };
-    // material left: 0 (blue) .. 0.5 mm (red); grey where the part is absent; black = gouge
+    // material left: 0 (blue) .. 0.5 mm (red); light grey where the part is absent;
+    // below the part (knurls, chamfers, gouges): grey-violet, darker = deeper (0..1 mm)
     let (l, t, r, b) = (un.px[0], un.px[1], un.px[2], un.px[3]);
     for py in t as i64..=b as i64 {
         for px in l as i64..=r as i64 {
@@ -501,7 +502,7 @@ pub fn stock_png(title: &str, stock: &RadialMap, part: &RadialMap, stock_r: f64)
             } else {
                 let left = stock.at(i, j) - p;
                 if left < -0.01 {
-                    [0, 0, 0]
+                    below((-left).min(1.0))
                 } else {
                     ramp(left / 0.5)
                 }
@@ -514,9 +515,25 @@ pub fn stock_png(title: &str, stock: &RadialMap, part: &RadialMap, stock_r: f64)
         let x = w as f64 - 260.0 + i as f64;
         cv.line(x, 975.0, x, 990.0, ramp(i as f64 / 199.0), 1.0);
     }
+    for i in 0..120 {
+        let x = 120.0 + i as f64;
+        cv.line(x, 975.0, x, 990.0, below(i as f64 / 119.0), 1.0);
+    }
+    cv.text(20, 978, 1, "BELOW 0", [60, 60, 60]);
+    cv.text(246, 978, 1, "1MM", [60, 60, 60]);
     cv.text(w as i64 - 390, 978, 1, "LEFT 0", [60, 60, 60]);
     cv.text(w as i64 - 54, 978, 1, "0.5MM", [60, 60, 60]);
     cv.to_png()
+}
+
+/// Colour for material removed below the part, `t` = depth / 1 mm.
+fn below(t: f64) -> [u8; 3] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        (200.0 - 170.0 * t) as u8,
+        (190.0 - 170.0 * t) as u8,
+        (225.0 - 150.0 * t) as u8,
+    ]
 }
 
 fn nice(span: f64) -> f64 {

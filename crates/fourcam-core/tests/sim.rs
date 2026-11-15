@@ -127,3 +127,156 @@ fn rough_never_cuts_below_allowance_surface() {
         "levels should alternate direction: {dirs:?}"
     );
 }
+
+/// Knob body radius (knob_rotary.py body_R) and the designed knurl depth (knurl_depth).
+fn body_r(x: f64) -> f64 {
+    8.0 + 2.0 * (-x) / 15.0
+}
+
+fn knurl_depth(x: f64) -> f64 {
+    let p_perp = 2.0 * std::f64::consts::PI * body_r(x) / 30.0 * 30f64.to_radians().cos();
+    0.95 * p_perp / (2.0 * 45f64.to_radians().tan())
+}
+
+/// Helix angle swept by a groove from its start at x = -15.6 (degrees), as in the program.
+fn theta_deg(x: f64) -> f64 {
+    let t = 30f64.to_radians().tan() * (0.6 / 10.0 + 7.5 * (10.0 / body_r(x)).ln());
+    t.to_degrees()
+}
+
+#[test]
+fn knurl_program_cuts_the_designed_diamonds() {
+    // the cut G-code: profile, then knurl + V-bit chamfer, on one simulated bar
+    let job = job("knob.job.json");
+    let tps = plan(&job).unwrap();
+    let grid = {
+        let res = simulate_job(&job, &tps[..1], None, 0.05, 720, 0.02).unwrap();
+        res.stock.grid
+    };
+    let cutters = |t: u32| {
+        job.tool(t)
+            .and_then(|d| fourcam::cutter_for(t, d.shape).ok())
+    };
+    let mut stock = sim::RadialMap::filled(grid, job.stock.radius);
+    let st1 = sim::simulate(&mut stock, &tps[0], &cutters, 0.1);
+    let after_profile = stock.clone();
+    let st2 = sim::simulate(&mut stock, &tps[1], &cutters, 0.1);
+    assert!(
+        st1.rapid_hits.is_empty() && st2.rapid_hits.is_empty(),
+        "{st1:?} {st2:?}"
+    );
+    assert!(st2.samples > 10_000, "the knurl program was not simulated");
+    let g = grid;
+    let col =
+        |phi_deg: f64| ((phi_deg.rem_euclid(360.0) / 360.0 * g.na as f64) as usize).min(g.na - 1);
+    let row = |x: f64| (((x - g.x0) / g.dx) as usize).min(g.nx - 1);
+
+    // 1. nothing behind the knurl's reach (tool tip runs out to -15.6, V-bit radius 1.5875)
+    let mut touched_behind = 0;
+    for i in 0..g.nx {
+        if g.x(i) < -15.6 - 1.6 {
+            for j in 0..g.na {
+                if (after_profile.at(i, j) - stock.at(i, j)).abs() > 1e-6 {
+                    touched_behind += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(touched_behind, 0, "the knurl program cut the boss or neck");
+
+    // 2. thirty grooves per family, at the designed depth, where the helix says
+    let mut worst = 0.0f64;
+    let mut checked = 0;
+    let mut x = -14.0;
+    while x <= -1.5 {
+        let i = row(x);
+        let xc = g.x(i);
+        let want = body_r(xc) - knurl_depth(xc);
+        for fam in [1.0, -1.0] {
+            for k in 0..30 {
+                let a = k as f64 * 12.0 + fam * theta_deg(xc);
+                let phi = 90.0 - a; // tool at A sits over part angle 90 - A
+                let j = col(phi) as i64;
+                // groove bottom: lowest cell within +-1 deg of the predicted centre
+                let bottom = (-2..=2)
+                    .map(|d| stock.at(i, (j + d).rem_euclid(g.na as i64) as usize))
+                    .fold(f64::INFINITY, f64::min);
+                worst = worst.max((bottom - want).abs());
+                checked += 1;
+            }
+        }
+        x += 0.5;
+    }
+    eprintln!(
+        "knurl: {checked} groove bottoms checked, worst |bottom - designed| = {worst:.3} mm \
+         (designed depth {:.3} mm at x=-14 .. {:.3} mm at x=-1.5)",
+        knurl_depth(-14.0),
+        knurl_depth(-1.5)
+    );
+    assert!(worst < 0.05, "groove bottoms off by {worst} mm");
+    assert!(knurl_depth(-14.0) < 0.86 && knurl_depth(-1.5) > 0.69);
+
+    // 3. never deeper than the designed groove anywhere on the body (no over-cut), and the
+    //    diamond tops survive: fill 0.95 leaves small flats at the body radius. Tops lie on
+    //    rows about 1.6 mm apart along X, so look for them in 2 mm windows.
+    let mut deepest_excess = 0.0f64;
+    for i in 0..g.nx {
+        let xc = g.x(i);
+        if !(-14.5..=-1.0).contains(&xc) {
+            continue;
+        }
+        let floor = body_r(xc) - knurl_depth(xc);
+        for j in 0..g.na {
+            deepest_excess = deepest_excess.max(floor - stock.at(i, j));
+        }
+    }
+    let mut lowest_top = f64::INFINITY;
+    let mut x0 = -14.5;
+    while x0 + 2.0 <= -1.0 {
+        let top = (row(x0)..row(x0 + 2.0))
+            .map(|i| {
+                (0..g.na)
+                    .map(|j| stock.at(i, j) - body_r(g.x(i)))
+                    .fold(f64::NEG_INFINITY, f64::max)
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+        lowest_top = lowest_top.min(top);
+        x0 += 1.0;
+    }
+    eprintln!(
+        "knurl: deepest cut below the designed groove floor {deepest_excess:.3} mm;          in every 2 mm of body the highest diamond top is {lowest_top:+.3} mm from the body radius"
+    );
+    assert!(deepest_excess < 0.03, "over-cut {deepest_excess} mm");
+    assert!(
+        lowest_top > -0.1,
+        "diamond tops cut down by {lowest_top} mm"
+    );
+
+    // 4. diamonds: in every 12 degree window around the body there is a top and a bottom
+    let i = row(-7.5);
+    for w in 0..30 {
+        let cells: Vec<f64> = (0..g.na / 30)
+            .map(|d| stock.at(i, w * g.na / 30 + d))
+            .collect();
+        let (lo, hi) = cells
+            .iter()
+            .fold((f64::INFINITY, 0.0f64), |(l, h), &v| (l.min(v), h.max(v)));
+        assert!(
+            hi - lo > 0.5 * knurl_depth(-7.5),
+            "window {w}: relief {} mm",
+            hi - lo
+        );
+    }
+
+    // 5. front chamfer by the V-bit flank: a true 45 deg through (0, 7.2)
+    let mut chamfer_worst = 0.0f64;
+    let mut x = -0.6;
+    while x <= -0.05 {
+        let i = row(x);
+        let top = (0..g.na).map(|j| stock.at(i, j)).fold(0.0, f64::max);
+        chamfer_worst = chamfer_worst.max((top - (7.2 - g.x(i))).abs());
+        x += 0.05;
+    }
+    eprintln!("chamfer: worst |surface - (7.2 - x)| = {chamfer_worst:.3} mm over x = -0.6..0");
+    assert!(chamfer_worst < 0.05, "{chamfer_worst}");
+}

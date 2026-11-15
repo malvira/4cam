@@ -260,8 +260,15 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
             .and_then(|d| fourcam::cutter_for(t, d.shape).ok())
     };
     let mut bad = false;
-    for (tp, (name, st, dev)) in tps.iter().zip(&res.programs) {
+    for ((tp, prog), (name, st, dev)) in tps.iter().zip(&job.programs).zip(&res.programs) {
         sim::simulate(&mut stock, tp, &cutters, (dx * 2.0).min(0.1));
+        // knurls and chamfers cut below the turned profile by design
+        let shapes_part = prog.operations.iter().any(|o| {
+            matches!(
+                o,
+                fourcam::job::Operation::HelicalKnurl(_) | fourcam::job::Operation::FlankChamfer(_)
+            )
+        });
         let png = out.join(format!("{name}_stock.png"));
         let title = format!("{name} - simulated stock (grey: part)");
         std::fs::write(
@@ -289,8 +296,13 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
                 "  (not simulated: its tools have no full shape, e.g. a V-bit without a diameter)"
             );
         }
+        if shapes_part && dev.gouge_cells > 0 {
+            println!(
+                "  (knurl/chamfer: cuts below the turned profile on purpose, so these are not counted as gouges)"
+            );
+        }
         println!("  preview: {}", png.display());
-        bad |= !st.rapid_hits.is_empty() || dev.gouge_cells > 0;
+        bad |= !st.rapid_hits.is_empty() || (dev.gouge_cells > 0 && !shapes_part);
     }
     Ok(if bad {
         ExitCode::FAILURE

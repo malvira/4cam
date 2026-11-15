@@ -28,7 +28,8 @@
       "number": 2,
       "description": "90 deg V-bit, tip must be on the axis centreline (Y0)",
       "kind": "vbit",
-      "angle": 90.0
+      "angle": 90.0,
+      "diameter": 3.175
     }
   ],
   "spindle_rpm": 12000,
