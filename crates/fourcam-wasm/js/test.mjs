@@ -55,4 +55,14 @@ assert.equal(sim.stocks[0].rapid_hits, 0);
 assert.equal(sim.stocks[0].gouge_cells, 0);
 assert.equal(sim.stocks[0].r.length, sim.grid.nx * sim.grid.na);
 console.log(`simulate knob: ${Date.now() - t} ms, max left ${sim.stocks[0].max_left.toFixed(3)} mm`);
+// profiles: built-in list, Fusion tool library import, machine limits
+const reg = cam.profileList();
+assert.deepEqual(reg.machines.map((m) => m.id), ["makera-z1-4axis", "makera-carvera-4axis", "makera-carvera-air-4axis", "linuxcnc-4axis"]);
+const imp = cam.importProfile(readFileSync(join(root, "tests", "fixtures", "fusion-tool-library.json")), "Fixture Tools.json");
+assert.equal(imp.kind, "tools");
+assert.equal(imp.profile.tools.length, 3);
+const lim = cam.planAndPost(job, "carvera-air");
+assert.equal(lim.machine_id, "makera-carvera-air-4axis");
+assert.ok(lim.limits.some((i) => i.message.includes("F5209")), JSON.stringify(lim.limits));
+console.log(`profiles: ${reg.machines.length} machines, ${reg.libraries[0].tools.length} starter tools, limits ${lim.limits.length}`);
 console.log("wasm OK");

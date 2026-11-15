@@ -6,6 +6,7 @@
 
 pub mod api {
     use fourcam::job::Job;
+    use fourcam::profiles::{self, MachineProfile, ToolLibrary};
     use fourcam::{
         gouge_check, limits_for, plan_with_mesh, post, render, sim, simulate_job, verify_gcode,
         Machine, Mesh, Toolpath,
@@ -33,15 +34,61 @@ pub mod api {
         }
     }
 
-    fn parse_machine(text: &str) -> Result<Machine, String> {
+    /// Machine from a built-in id/alias, a 4cam machine profile, an older 4cam machine file,
+    /// or a Fusion 360 machine definition (JSON). Empty: the job's `machine`, else the Z1.
+    fn parse_machine(text: &str, job: Option<&Job>) -> Result<MachineProfile, String> {
         let t = text.trim();
-        if t.is_empty() {
-            return Ok(Machine::makera_z1());
-        }
-        if let Some(m) = Machine::builtin(t) {
+        let t = if t.is_empty() {
+            job.and_then(|j| j.machine.as_deref())
+                .unwrap_or("makera-z1-4axis")
+        } else {
+            t
+        };
+        if let Some(m) = profiles::builtin_machine(t) {
             return Ok(m);
         }
-        Machine::from_json(t).map_err(|e| format!("machine: {e}"))
+        if !t.starts_with('{') {
+            return Err(format!("unknown machine {t:?}"));
+        }
+        match profiles::import(t.as_bytes(), "machine.json")?.item {
+            profiles::Imported::Machine(m) => Ok(m),
+            profiles::Imported::Tools(_) => Err("that is a tool library, not a machine".into()),
+        }
+    }
+
+    /// Built-in libraries plus `opts.libraries` (4cam tool library objects).
+    fn libraries(opts: &Value) -> Result<Vec<ToolLibrary>, String> {
+        let mut libs = profiles::builtin_libraries();
+        for l in opts["libraries"].as_array().into_iter().flatten() {
+            let lib = ToolLibrary::from_json(&l.to_string())?;
+            libs.retain(|x| x.id != lib.id);
+            libs.push(lib);
+        }
+        Ok(libs)
+    }
+
+    /// Built-in machine profiles and tool libraries.
+    pub fn profile_list() -> Value {
+        json!({
+            "machines": profiles::builtin_machines(),
+            "libraries": profiles::builtin_libraries(),
+        })
+    }
+
+    /// Convert a profile file (4cam JSON, Fusion .tools/.json/.mch/.f3d, older machine file)
+    /// into 4cam JSON: `{kind: "machine"|"tools", profile, notes}`.
+    pub fn import_profile(bytes: &[u8], name: &str) -> Value {
+        match profiles::import(bytes, name) {
+            Ok(imp) => match imp.item {
+                profiles::Imported::Machine(m) => {
+                    json!({"kind": "machine", "profile": m, "notes": imp.notes})
+                }
+                profiles::Imported::Tools(l) => {
+                    json!({"kind": "tools", "profile": l, "notes": imp.notes})
+                }
+            },
+            Err(e) => err(e),
+        }
     }
 
     /// Mesh bytes (STL or 3MF), placed on the axis as the job's `part.mesh` says.
@@ -88,14 +135,21 @@ pub mod api {
 
     /// Plan, post, verify and gouge-check a job. `opts`: `{"max_points": n}` (default 200000).
     pub fn plan_and_post(job_json: &str, machine_text: &str, mesh: &[u8], opts: &str) -> Value {
-        let job = match Job::from_json(job_json) {
-            Ok(j) => j,
-            Err(e) => return err(format!("job: {e}")),
+        let opts_v: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts_v) {
+            Ok(l) => l,
+            Err(e) => return err(e),
         };
-        let machine = match parse_machine(machine_text) {
+        let job = match profiles::job_from_json(job_json, &libs) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let profile = match parse_machine(machine_text, Some(&job)) {
             Ok(m) => m,
             Err(e) => return err(e),
         };
+        let machine = profile.post.clone();
         let mesh = match parse_mesh(&job, mesh) {
             Ok(m) => m,
             Err(e) => return err(e),
@@ -118,6 +172,7 @@ pub mod api {
             Err(e) => return err(e),
         };
         let gouges = gouge_check(&job, &tps, mesh.as_ref()).unwrap_or_default();
+        let limits = profiles::check_limits(&job, &tps, &profile);
         let programs: Vec<Value> = tps
             .iter()
             .map(|tp| {
@@ -143,6 +198,9 @@ pub mod api {
             .collect();
         json!({
             "machine": machine.name,
+            "machine_id": profile.id,
+            "limits": limits,
+            "tools": job.tools,
             "stock": job.stock,
             "profile": job.part.profile,
             "mesh_bounds": mesh.as_ref().and_then(|m| m.bounds()),
@@ -153,9 +211,9 @@ pub mod api {
     /// Simulate all programs in order. `opts`: `{"dx": mm, "na": cells}` (default 0.1, 360).
     /// Returns the grid, the part map and the stock map after each program (radii, f32).
     pub fn simulate(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
-        let job = match Job::from_json(job_json) {
+        let job = match profiles::job_from_json(job_json, &profiles::builtin_libraries()) {
             Ok(j) => j,
-            Err(e) => return err(format!("job: {e}")),
+            Err(e) => return err(e),
         };
         let mesh = match parse_mesh(&job, mesh) {
             Ok(m) => m,
@@ -206,9 +264,9 @@ pub mod api {
     /// Oriented mesh triangles (flattened xyz, f32) for display, thinned to about
     /// `max_triangles` (`opts`, default 200000).
     pub fn mesh_triangles(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
-        let job = match Job::from_json(job_json) {
+        let job = match profiles::job_from_json(job_json, &profiles::builtin_libraries()) {
             Ok(j) => j,
-            Err(e) => return err(format!("job: {e}")),
+            Err(e) => return err(e),
         };
         let m = match parse_mesh(&job, mesh) {
             Ok(Some(m)) => m,
@@ -247,6 +305,8 @@ pub mod api {
                 plan_and_post(&s(a), &m, c, &s(b))
             }
             "simulate" => simulate(&s(a), &s(b), c),
+            "profile_list" => profile_list(),
+            "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&s(a), &s(b), c),
             other => err(format!("unknown function {other:?}")),
         }
@@ -353,6 +413,46 @@ mod tests {
         assert!(v["error"].as_str().unwrap().contains("T7"));
         assert!(api::call("nope", &[], &[], &[]).get("error").is_some());
         assert_eq!(api::call("version", &[], &[], &[])["name"], "4cam");
+    }
+
+    #[test]
+    fn profiles_import_limits_and_library_tools() {
+        let l = api::profile_list();
+        assert_eq!(l["machines"].as_array().unwrap().len(), 4);
+        assert_eq!(l["libraries"][0]["id"], "makera-starter");
+        let fixture = include_bytes!("../../../tests/fixtures/fusion-tool-library.json");
+        let imp = api::import_profile(fixture, "My Tools.json");
+        assert_eq!(imp["kind"], "tools", "{imp}");
+        assert_eq!(imp["profile"]["tools"].as_array().unwrap().len(), 3);
+        assert!(api::import_profile(b"nope", "x.json")
+            .get("error")
+            .is_some());
+        // the knob on the Z1: limit warning for the 4000 mm/min cap
+        let v = api::plan_and_post(api::EXAMPLE_JOB, "makera-z1-4axis", &[], "");
+        assert_eq!(v["machine_id"], "makera-z1-4axis");
+        let lim = v["limits"].as_array().unwrap();
+        assert!(
+            lim.iter()
+                .any(|i| i["message"].as_str().unwrap().contains("F5209")),
+            "{lim:?}"
+        );
+        // a job using an imported library tool, on the Carvera (alias)
+        let mut job: serde_json::Value = serde_json::from_str(api::EXAMPLE_JOB).unwrap();
+        job["tools"][0] = serde_json::json!({"number": 1, "library": "my-tools", "tool": "fixture-flat-3.175-12mm"});
+        let opts = serde_json::json!({"libraries": [imp["profile"]]}).to_string();
+        let v = api::plan_and_post(&job.to_string(), "carvera", &[], &opts);
+        assert!(v.get("error").is_none(), "{v}");
+        assert_eq!(v["machine_id"], "makera-carvera-4axis");
+        assert!(v["programs"][0]["gcode"]
+            .as_str()
+            .unwrap()
+            .contains("(T1 Fixture Flat 3.175*12mm)"));
+        // machine given as a profile object
+        let z1 = serde_json::to_string(&api::profile_list()["machines"][0]).unwrap();
+        assert_eq!(
+            api::plan_and_post(api::EXAMPLE_JOB, &z1, &[], "")["machine_id"],
+            "makera-z1-4axis"
+        );
     }
 
     #[test]

@@ -51,10 +51,15 @@ export async function load(source) {
     version: () => call("version"),
     exampleJob: () => call("example_job"),
     machine: (name) => call("machine", name || ""),
-    // machine: built-in name ("makera-z1", "linuxcnc") or a machine object / JSON text
+    // machine: built-in id/alias ("makera-z1-4axis", "carvera", ...) or a machine profile
+    // object; opts.libraries: extra tool libraries for {"library", "tool"} references
     planAndPost: (job, machine, meshBytes, opts = {}) =>
       call("plan_and_post_opts", job, { ...opts, machine: machine ?? null }, meshBytes),
     simulate: (job, opts, meshBytes) => call("simulate", job, opts || {}, meshBytes),
+    // built-in machine profiles and tool libraries
+    profileList: () => call("profile_list"),
+    // convert a profile file (4cam JSON, Fusion .tools/.json/.mch/.f3d) -> {kind, profile, notes}
+    importProfile: (bytes, name) => call("import_profile", bytes, name || "profile.json"),
     meshTriangles: (job, opts, meshBytes) => call("mesh_triangles", job, opts || {}, meshBytes),
   };
 }
