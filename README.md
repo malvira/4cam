@@ -86,7 +86,6 @@ The other commands:
   - It skips tools without a full shape (a V-bit with no `diameter`).
 - `4cam run` also gouge-checks each turning, roughing and finishing program against the part.
 - `4cam toolpath job.json` prints the machine-neutral toolpath as JSON.
-- `4cam revolve job.json part.stl [--segments 720]` writes the job's profile out as an STL.
 - `4cam mesh-info part.3mf` prints the triangle count, the bounding box and the largest
   radius about X.
 
@@ -252,7 +251,10 @@ The tests cover:
   git-ignored cache of vendor files).
 - `docs/`: the profile formats, Makera sources and the roadmap.
 - `examples/`: example jobs and their outputs.
-- `reference/`: the original scripts the engine was ported from.
+- `tests/fixtures/`: test fixtures. These are the knob's original Python part and G-code
+  generators, and a synthetic Fusion-format tool library. `crates/fourcam-fixtures`
+  regenerates `examples/knob/knob.stl`. Part generation is a fixture concern, not an engine
+  feature.
 
 ## License
 

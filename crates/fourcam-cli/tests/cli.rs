@@ -94,24 +94,23 @@ fn verify_flags_a_bad_file() {
 }
 
 #[test]
-fn revolve_and_mesh_info() {
-    let out = out_dir("mesh");
-    let stl = out.join("knob.stl");
+fn mesh_info() {
     let o = bin()
-        .args(["revolve", "examples/knob/knob.job.json"])
-        .arg(&stl)
-        .args(["--segments", "90"])
+        .args(["mesh-info", "examples/knob/knob.stl"])
         .output()
         .unwrap();
-    assert!(o.status.success());
-    let o = bin().arg("mesh-info").arg(&stl).output().unwrap();
     let stdout = String::from_utf8_lossy(&o.stdout);
-    assert!(stdout.contains("1260 triangles"), "{stdout}");
+    assert!(stdout.contains("10080 triangles"), "{stdout}");
     assert!(
         stdout.contains("largest radius about X: 10.000"),
         "{stdout}"
     );
-    std::fs::remove_dir_all(&out).ok();
+    // part generation is a fixture tool, not a 4cam command
+    let o = bin()
+        .args(["revolve", "examples/knob/knob.job.json", "x.stl"])
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
 }
 
 #[test]

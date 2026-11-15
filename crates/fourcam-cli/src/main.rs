@@ -39,8 +39,6 @@ USAGE:
       Defaults: --plunge 60, --safe = highest Z reached by a G0 move.
   4cam toolpath <job.json>
       Print the machine-neutral toolpath IR as JSON.
-  4cam revolve <job.json> <out.stl> [--segments <n>]
-      Revolve the job's part.profile into a closed binary STL (default 720 facets).
   4cam simulate <job.json> [--out <dir>] [--dx <mm>] [--na <cells>]
       Simulate material removal of all programs in order on a radial heightmap
       (default 0.05 mm x 720 cells around), compare with the part, and write a
@@ -291,7 +289,6 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         }
         "verify" => cmd_verify(&parse(rest, &["plunge", "safe"])?),
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
-        "revolve" => cmd_revolve(&parse(rest, &["segments"])?),
         "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
         "ops" => cmd_ops(rest),
         "faces" => cmd_faces(&parse(rest, &["model", "crease"])?),
@@ -549,32 +546,6 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
     } else {
         ExitCode::SUCCESS
     })
-}
-
-fn cmd_revolve(o: &Opts) -> Result<ExitCode, String> {
-    let [job_path, out] = o.positional.as_slice() else {
-        return Err(format!(
-            "expected <job.json> <out.stl>
-
-{USAGE}"
-        ));
-    };
-    let job = load_job(job_path)?;
-    let profile = job
-        .part
-        .profile
-        .as_ref()
-        .ok_or("the job has no part.profile")?;
-    let segments = match o.flag("segments") {
-        Some(v) => v
-            .parse()
-            .map_err(|_| format!("--segments: not a count: {v}"))?,
-        None => fourcam::PROFILE_SEGMENTS,
-    };
-    let mesh = Mesh::revolve(profile, segments);
-    std::fs::write(out, mesh.to_stl()).map_err(|e| format!("{out}: {e}"))?;
-    println!("{out}: {} triangles", mesh.triangles.len());
-    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_mesh_info(o: &Opts) -> Result<ExitCode, String> {

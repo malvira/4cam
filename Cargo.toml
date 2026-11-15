@@ -5,9 +5,10 @@ members = [
     "crates/fourcam-cli",
     "crates/fourcam-wasm",
     "crates/fourcam-py",
+    "crates/fourcam-fixtures",
 ]
 # the Python extension needs a Python toolchain; build it with scripts/build-python
-default-members = ["crates/fourcam-core", "crates/fourcam-cli", "crates/fourcam-wasm"]
+default-members = ["crates/fourcam-core", "crates/fourcam-cli", "crates/fourcam-wasm", "crates/fourcam-fixtures"]
 
 [workspace.package]
 version = "0.1.0"

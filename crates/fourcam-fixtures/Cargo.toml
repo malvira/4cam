@@ -1,0 +1,15 @@
+[package]
+name = "fourcam-fixtures"
+description = "Test-fixture generators for 4cam (parts used by examples and tests; not part of the engine)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "fourcam-fixtures"
+path = "src/main.rs"
+
+[dependencies]
+fourcam-core = { path = "../fourcam-core" }

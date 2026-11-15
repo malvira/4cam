@@ -82,6 +82,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fourcam-fixtures"
+version = "0.1.0"
+dependencies = [
+ "fourcam-core",
+]
+
+[[package]]
 name = "fourcam-py"
 version = "0.1.0"
 dependencies = [
