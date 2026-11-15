@@ -476,7 +476,6 @@ pub(crate) fn parse_3mf_model(xml: &str) -> Result<Mesh, MeshError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     fn knob_profile() -> Profile {
         Profile {

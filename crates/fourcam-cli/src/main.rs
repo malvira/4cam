@@ -5,6 +5,8 @@ use fourcam::{
     verify_gcode, FeedMode, Job, Limits, Machine, Mesh,
 };
 use std::io::Write;
+
+mod profiles_cmd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -12,9 +14,14 @@ const USAGE: &str = "\
 4cam - 4th-axis rotary CAM engine
 
 USAGE:
-  4cam run <job.json> [--machine <name|machine.json>] [--out <dir>]
-      Plan the job, write one .nc file and one .png preview per program, and
-      verify each program. Built-in machines: makera-z1 (default), linuxcnc.
+  4cam run <job.json> [--machine <id|file|url>] [--out <dir>]
+      Plan the job, write one .nc file and one .png preview per program, verify
+      each program and check it against the machine's limits. The machine is
+      --machine, else the job's \"machine\", else makera-z1-4axis. Built in:
+      makera-z1-4axis, makera-carvera-4axis, makera-carvera-air-4axis,
+      linuxcnc-4axis (see `4cam profiles list`).
+  4cam profiles list|show|import|export|dir ...
+      Machine profiles and tool libraries (`4cam profiles help`).
   4cam verify <file.nc> [--plunge <mm/min>] [--safe <radius>]
       Check G-code for over-fast Z descents and low X/A rapids.
       Defaults: --plunge 60, --safe = highest Z reached by a G0 move.
@@ -87,8 +94,11 @@ fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
 
+/// Read a job, resolving tool references against the built-in and imported libraries.
 fn load_job(path: &str) -> Result<Job, String> {
-    Job::from_json(&read(path)?).map_err(|e| format!("{path}: {e}"))
+    let reg = profiles_cmd::Registry::load();
+    fourcam::profiles::job_from_json(&read(path)?, &reg.libraries())
+        .map_err(|e| format!("{path}: {e}"))
 }
 
 fn run(args: &[String]) -> Result<ExitCode, String> {
@@ -98,6 +108,14 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     };
     match cmd.as_str() {
         "run" => cmd_run(&parse(rest, &["machine", "out"])?),
+        "profiles" => {
+            if rest.first().is_some_and(|a| a == "help" || a == "--help") {
+                print!("{}", profiles_cmd::USAGE);
+                return Ok(ExitCode::SUCCESS);
+            }
+            profiles_cmd::cmd(rest)?;
+            Ok(ExitCode::SUCCESS)
+        }
         "verify" => cmd_verify(&parse(rest, &["plunge", "safe"])?),
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
         "revolve" => cmd_revolve(&parse(rest, &["segments"])?),
@@ -114,18 +132,27 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
 fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
     let job_path = o.one_input()?;
     let job = load_job(job_path)?;
-    let machine = match o.flag("machine") {
-        Some(p) => match Machine::builtin(p) {
-            Some(m) => m,
-            None => Machine::from_json(&read(p)?).map_err(|e| format!("{p}: {e}"))?,
-        },
-        None => Machine::makera_z1(),
-    };
+    let reg = profiles_cmd::Registry::load();
+    let wanted = o
+        .flag("machine")
+        .map(str::to_string)
+        .or_else(|| job.machine.clone())
+        .unwrap_or_else(|| "makera-z1-4axis".into());
+    let profile = profiles_cmd::resolve_machine(&reg, &wanted)?;
+    println!("machine: {} ({})", profile.id, profile.name);
+    let machine: Machine = profile.post.clone();
     let out = PathBuf::from(o.flag("out").unwrap_or("."));
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     let (tps, mesh) = plan_job_with_mesh(&job, job_path)?;
     let gouges = gouge_check(&job, &tps, mesh.as_ref()).map_err(|e| e.to_string())?;
     let mut bad = 0;
+    for i in fourcam::profiles::check_limits(&job, &tps, &profile) {
+        let at = i.program.map(|p| format!("{p}: ")).unwrap_or_default();
+        println!("{}: {at}{}", i.severity, i.message);
+        if i.severity == "error" {
+            bad += 1;
+        }
+    }
     for tp in &tps {
         let text = post(tp, &machine);
         let path = out.join(format!("{}.nc", tp.name));

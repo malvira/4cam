@@ -12,3 +12,5 @@ path = "src/main.rs"
 
 [dependencies]
 fourcam-core = { path = "../fourcam-core" }
+serde_json = "1"
+ureq = "3"

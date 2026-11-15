@@ -133,3 +133,122 @@ fn bad_job_is_reported() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("T5"));
     std::fs::remove_dir_all(&out).ok();
 }
+
+fn profiles_env(name: &str) -> (PathBuf, Command) {
+    let dir = out_dir(name);
+    let mut c = bin();
+    c.env("FOURCAM_PROFILES", &dir);
+    (dir, c)
+}
+
+#[test]
+fn profiles_list_import_show_export() {
+    let (dir, mut c) = profiles_env("profiles");
+    let o = c.args(["profiles", "list"]).output().unwrap();
+    let s = String::from_utf8_lossy(&o.stdout);
+    for id in [
+        "makera-z1-4axis",
+        "makera-carvera-4axis",
+        "makera-carvera-air-4axis",
+        "linuxcnc-4axis",
+        "makera-starter",
+    ] {
+        assert!(s.contains(id), "{s}");
+    }
+    // a Fusion 360 tool library (synthetic file in Fusion's format)
+    let (_, mut c) = profiles_env("profiles");
+    c.env("FOURCAM_PROFILES", &dir);
+    let o = c
+        .args([
+            "profiles",
+            "import",
+            "tests/fixtures/fusion-tool-library.json",
+            "--id",
+            "fixture-tools",
+        ])
+        .output()
+        .unwrap();
+    let s = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        o.status.success(),
+        "{s}{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        s.contains("imported tool library fixture-tools (3 tools)"),
+        "{s}"
+    );
+    assert!(dir.join("fixture-tools.tools.json").exists());
+    let mut c = bin();
+    c.env("FOURCAM_PROFILES", &dir);
+    let s = String::from_utf8_lossy(
+        &c.args(["profiles", "show", "fixture-tools"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .to_string();
+    assert!(s.contains("\"angle\": 90.0"), "{s}");
+    let mut c = bin();
+    c.env("FOURCAM_PROFILES", &dir);
+    let exported = dir.join("z1.json");
+    let o = c
+        .args(["profiles", "export", "makera-z1"])
+        .arg("--out")
+        .arg(&exported)
+        .output()
+        .unwrap();
+    assert!(o.status.success());
+    let text = std::fs::read_to_string(&exported).unwrap();
+    assert!(fourcam::profiles::MachineProfile::from_json(&text).is_ok());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn run_checks_machine_limits_and_uses_library_tools() {
+    let (dir, mut c) = profiles_env("limits");
+    // knob job on the Z1: the cut G-code asks for F5209 against a 4000 mm/min cap (warning)
+    let o = c
+        .args(["run", "examples/knob/knob.job.json", "--out"])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    let s = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "{s}");
+    assert!(s.contains("machine: makera-z1-4axis"), "{s}");
+    assert!(s.contains("feeds reach F5209"), "{s}");
+    // tools from the built-in library, machine named in the job, a spindle the Air can't do
+    let job = std::fs::read_to_string(root().join("examples/knob/knob.job.json")).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&job).unwrap();
+    v["machine"] = "makera-carvera-air-4axis".into();
+    v["spindle_rpm"] = 15000.into();
+    v["tools"] = serde_json::json!([
+        {"number": 1, "library": "makera-starter", "tool": "spiral-o-metal-3.175x12"},
+        {"number": 2, "library": "makera-starter", "tool": "vbit-90-3.175"}
+    ]);
+    let f = dir.join("air.job.json");
+    std::fs::write(&f, v.to_string()).unwrap();
+    let mut c = bin();
+    c.env("FOURCAM_PROFILES", &dir);
+    let o = c
+        .arg("run")
+        .arg(&f)
+        .arg("--out")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    let s = String::from_utf8_lossy(&o.stdout);
+    assert!(!o.status.success(), "15000 rpm must fail on the Air: {s}");
+    assert!(s.contains("machine: makera-carvera-air-4axis"), "{s}");
+    assert!(
+        s.contains("error: spindle 15000 rpm is outside 0..13000 rpm"),
+        "{s}"
+    );
+    let nc = std::fs::read_to_string(dir.join("knob_1_profile.nc")).unwrap();
+    assert!(
+        nc.contains("(T1 Spiral O Metal 3.175 x 12 mm (single flute))"),
+        "{}",
+        &nc[..300]
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -1,0 +1,75 @@
+{
+ "version": 36,
+ "data": [
+  {
+   "type": "flat end mill",
+   "description": "Fixture Flat 3.175*12mm",
+   "unit": "millimeters",
+   "geometry": {
+    "DC": 3.175,
+    "LCF": 12,
+    "OAL": 38,
+    "NOF": 1,
+    "SFDM": 3.175
+   },
+   "post-process": {
+    "number": 1
+   },
+   "start-values": {
+    "presets": [
+     {
+      "name": "Aluminum",
+      "n": 12000.0,
+      "v_f": 500.0,
+      "v_f_plunge": 200.0
+     }
+    ]
+   }
+  },
+  {
+   "type": "ball end mill",
+   "description": "Fixture Ball 3.175*10mm",
+   "unit": "millimeters",
+   "geometry": {
+    "DC": 3.175,
+    "LCF": 10
+   },
+   "post-process": {
+    "number": 3
+   },
+   "start-values": {
+    "presets": [
+     {
+      "name": "Aluminum",
+      "n": 12000.0,
+      "v_f": 500.0,
+      "v_f_plunge": 300.0
+     }
+    ]
+   }
+  },
+  {
+   "type": "chamfer mill",
+   "description": "Fixture V 90 deg 3.175mm",
+   "unit": "millimeters",
+   "geometry": {
+    "DC": 3.175,
+    "TA": 45,
+    "LCF": 2
+   },
+   "post-process": {
+    "number": 2
+   },
+   "start-values": {
+    "presets": [
+     {
+      "name": "Aluminum",
+      "n": 12000.0,
+      "v_f": 200.0,
+      "v_f_plunge": 60.0
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -6,6 +6,9 @@
 //! axis of rotation) so later 3-axis and 5-axis machines fit the same format; today's
 //! strategies use one rotary axis about X.
 
+// `!(x > 0.0)` on purpose: it also rejects NaN.
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::collapsible_match)]
+
 use crate::job::{Job, Tool, ToolShape};
 use crate::machine::{FeedMode, Machine};
 use crate::toolpath::{Move, Toolpath};
@@ -808,6 +811,7 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
 
 /// Something read by [`import`].
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Imported {
     Machine(MachineProfile),
     Tools(ToolLibrary),
@@ -848,6 +852,8 @@ pub fn import(bytes: &[u8], name: &str) -> Result<Import, String> {
         .split('?')
         .next()
         .unwrap_or(name);
+    let base = percent_decode(base);
+    let base = base.as_str();
     let stem = base.rsplit_once('.').map_or(base, |(s, _)| s);
     if crate::archive::is_zip(bytes) {
         let es = crate::archive::entries(bytes)?;
@@ -926,6 +932,25 @@ pub fn import(bytes: &[u8], name: &str) -> Result<Import, String> {
     Err(format!(
         "{base}: not a 4cam profile, a Fusion 360 tool library or a Fusion 360 machine"
     ))
+}
+
+/// `%20` -> space etc. (file names taken from URLs).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() && s.is_char_boundary(i + 3) {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn default_rotary_kinematics() -> Kinematics {
@@ -1428,7 +1453,11 @@ mod tests {
     #[test]
     fn fusion_tool_library_imports() {
         let text = fusion_library().to_string();
-        let imp = import(text.as_bytes(), "Makera Metal Tools.tools").unwrap();
+        let imp = import(
+            text.as_bytes(),
+            "https://x.test/Tool%20Files/Makera%20Metal%20Tools.tools",
+        )
+        .unwrap();
         let Imported::Tools(lib) = imp.item else {
             panic!()
         };
