@@ -300,6 +300,30 @@ impl Project {
         Ok(())
     }
 
+    /// Check every operation against the operation registry (parameters, ranges, tool shapes
+    /// for inline tools). Problems are prefixed with the setup and operation id.
+    pub fn check_operations(&self) -> Vec<String> {
+        let inline: Vec<Tool> = self
+            .tools
+            .iter()
+            .filter_map(|t| match t {
+                ToolEntry::Inline(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut out = Vec::new();
+        for s in &self.setups {
+            for o in &s.operations {
+                let v = serde_json::to_value(&o.op).unwrap_or(Value::Null);
+                let has_inline = inline.iter().any(|t| t.number == o.op.tool());
+                for e in crate::ops::check(&v, has_inline.then_some(inline.as_slice())) {
+                    out.push(format!("{} / {}: {e}", s.id, o.id));
+                }
+            }
+        }
+        out
+    }
+
     pub fn setup(&self, id: &str) -> Option<&Setup> {
         self.setups.iter().find(|s| s.id == id)
     }

@@ -65,4 +65,14 @@ const lim = cam.planAndPost(job, "carvera-air");
 assert.equal(lim.machine_id, "makera-carvera-air-4axis");
 assert.ok(lim.limits.some((i) => i.message.includes("F5209")), JSON.stringify(lim.limits));
 console.log(`profiles: ${reg.machines.length} machines, ${reg.libraries[0].tools.length} starter tools, limits ${lim.limits.length}`);
+// operation registry and 0.2 projects
+const types = cam.opTypes();
+assert.deepEqual(types.map((t) => t.kind).sort(), ["flank_chamfer", "helical_knurl", "rotary_finish", "rotary_rough", "rotary_turning"]);
+const chk = cam.checkProject(JSON.parse(readFileSync(join(root, "examples", "knob", "knob.job.json"), "utf8")));
+assert.equal(chk.upgraded, true);
+assert.deepEqual(chk.problems, []);
+const proj = JSON.parse(readFileSync(join(root, "examples", "knob", "knob.project.json"), "utf8"));
+const pr = cam.planAndPost(proj, "makera-z1");
+assert.deepEqual(pr.programs.map((p) => p.lines), [21787, 15146]);
+console.log(`registry: ${types.length} operation types; 0.2 project plans like the 0.1 job`);
 console.log("wasm OK");

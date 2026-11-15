@@ -58,6 +58,9 @@ export async function load(source) {
     simulate: (job, opts, meshBytes) => call("simulate", job, opts || {}, meshBytes),
     // built-in machine profiles and tool libraries
     profileList: () => call("profile_list"),
+    // operation registry, and a 0.1/0.2 document upgraded + checked against it
+    opTypes: () => call("op_types"),
+    checkProject: (doc) => call("check_project", doc),
     // convert a profile file (4cam JSON, Fusion .tools/.json/.mch/.f3d) -> {kind, profile, notes}
     importProfile: (bytes, name) => call("import_profile", bytes, name || "profile.json"),
     meshTriangles: (job, opts, meshBytes) => call("mesh_triangles", job, opts || {}, meshBytes),

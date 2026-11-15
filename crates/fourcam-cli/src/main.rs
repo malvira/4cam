@@ -23,6 +23,9 @@ USAGE:
   4cam upgrade <job.json> [--out <project.json>]
       Convert a 0.1 job to a 0.2 project (models, tools, setups, operations).
       run/simulate/toolpath accept either version.
+  4cam ops list | show <type> | check <job-or-project.json>
+      The operation registry: types, parameters (units, defaults, limits),
+      accepted tools and geometry; check validates a file's operations.
   4cam profiles list|show|import|export|dir ...
       Machine profiles and tool libraries (`4cam profiles help`).
   4cam verify <file.nc> [--plunge <mm/min>] [--safe <radius>]
@@ -116,6 +119,55 @@ fn load_job(path: &str) -> Result<Job, String> {
     Ok(jobs.swap_remove(0).1)
 }
 
+fn cmd_ops(args: &[String]) -> Result<ExitCode, String> {
+    match args.first().map(String::as_str) {
+        None | Some("list") => {
+            for t in fourcam::ops::registry() {
+                println!(
+                    "{:<16} {:<10} {} (tools: {}; geometry: {})",
+                    t.kind,
+                    t.group,
+                    t.title,
+                    t.tool_shapes.join("/"),
+                    t.geometry.join("/")
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("show") => {
+            let kind = args.get(1).ok_or("ops show <type>")?;
+            let t = fourcam::ops::find(kind).ok_or(format!("unknown operation type {kind:?}"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&t).map_err(|e| e.to_string())?
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("check") => {
+            let path = args.get(1).ok_or("ops check <job-or-project.json>")?;
+            let (p, _) = fourcam::project::Project::from_json_any(&read(path)?)
+                .map_err(|e| format!("{path}: {e}"))?;
+            let errs = p.check_operations();
+            for e in &errs {
+                println!("{e}");
+            }
+            println!(
+                "{path}: {} operation(s) checked, {} problem(s)",
+                p.setups.iter().map(|s| s.operations.len()).sum::<usize>(),
+                errs.len()
+            );
+            Ok(if errs.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
+        Some(other) => Err(format!(
+            "unknown ops command {other:?} (list, show <type>, check <file>)"
+        )),
+    }
+}
+
 fn cmd_upgrade(o: &Opts) -> Result<ExitCode, String> {
     let path = o.one_input()?;
     let (p, upgraded) = fourcam::project::Project::from_json_any(&read(path)?)
@@ -164,6 +216,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
         "revolve" => cmd_revolve(&parse(rest, &["segments"])?),
         "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
+        "ops" => cmd_ops(rest),
         "mesh-info" => cmd_mesh_info(&parse(rest, &[])?),
         "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na"])?),
         "help" | "-h" | "--help" => {

@@ -455,6 +455,13 @@ pub mod api {
             }
             "simulate" => simulate(&s(a), &s(b), c),
             "profile_list" => profile_list(),
+            "op_types" => serde_json::to_value(fourcam::ops::registry()).unwrap_or(Value::Null),
+            "check_project" => match fourcam::project::Project::from_json_any(&s(a)) {
+                Ok((p, upgraded)) => {
+                    json!({"project": p, "upgraded": upgraded, "problems": p.check_operations()})
+                }
+                Err(e) => err(e),
+            },
             "sim_open" => sim_open(&s(a), &s(b), c),
             "sim_seek" => sim_seek(s(a).trim().parse().unwrap_or(0)),
             "import_profile" => import_profile(a, &s(b)),

@@ -74,7 +74,7 @@ goldens are still byte-identical.
    - `examples/knob/*.project.json`.
 
    A setup is planned by lowering it to a 0.1 job, so the goldens stay identical.
-2. Operation registry, exposed through the CLI and WASM.
+2. **Operation registry. Done:** `crates/fourcam-core/src/ops.rs` describes each type (parameters with units, defaults and limits; tool shapes; geometry; machine needs; whether it shapes the part on purpose). `4cam ops list|show|check`, WASM `opTypes`/`checkProject`. A test keeps the specs in step with the engine.
 3. Setups: rotary first, with stock carried between setups.
 4. Geometry selection.
 5. The knurl wizard on the general API.

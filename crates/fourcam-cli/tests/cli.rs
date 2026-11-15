@@ -252,3 +252,45 @@ fn run_checks_machine_limits_and_uses_library_tools() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn ops_registry_and_upgrade() {
+    let o = bin().args(["ops", "list"]).output().unwrap();
+    let s = String::from_utf8_lossy(&o.stdout);
+    for k in [
+        "rotary_turning",
+        "rotary_rough",
+        "rotary_finish",
+        "helical_knurl",
+        "flank_chamfer",
+    ] {
+        assert!(s.contains(k), "{s}");
+    }
+    let o = bin()
+        .args(["ops", "show", "helical_knurl"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["tool_shapes"], serde_json::json!(["vbit"]));
+    let o = bin()
+        .args(["ops", "check", "examples/knob/knob.project.json"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("3 operation(s) checked, 0 problem(s)"));
+    let dir = out_dir("upgrade");
+    let f = dir.join("p.json");
+    let o = bin()
+        .args(["upgrade", "examples/knob/knob.job.json", "--out"])
+        .arg(&f)
+        .output()
+        .unwrap();
+    assert!(o.status.success());
+    let p: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
+    assert_eq!(p["schema_version"], "0.2");
+    assert_eq!(
+        p["setups"][0]["outputs"][1]["operations"],
+        serde_json::json!(["op2", "op3"])
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

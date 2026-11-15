@@ -10,6 +10,7 @@ pub mod job;
 pub mod machine;
 pub mod mesh;
 pub mod numeric;
+pub mod ops;
 pub mod post;
 pub mod profiles;
 pub mod project;
