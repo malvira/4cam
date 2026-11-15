@@ -1,6 +1,7 @@
 // 4cam web UI: job editor -> engine (WebAssembly, in a worker) -> G-code, checks, previews.
 
 import { cylinder, heightmapSolid, revolveProfile } from "./meshes.js";
+import { setupMachining } from "./machining.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -482,6 +483,7 @@ async function updateView() {
   groups.part.visible = $("showPart").checked && !(groups.sim.children.length && groups.sim.visible);
   groups.stock.visible = $("showStock").checked && !(groups.sim.children.length && groups.sim.visible);
   v.rapLines.visible = $("showRapids").checked;
+  if (state.machining?.open) for (const k of ["part", "stock", "sim", "path"]) groups[k].visible = false;
 
   // scrubber
   const k = +$("scrub").value;
@@ -844,6 +846,9 @@ $("importUrlBtn").addEventListener("click", async () => {
   }
 });
 $("job").addEventListener("change", renderTools);
+
+// ---------------------------------------------------------------- machining simulation
+window.__4cam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries });
 
 // ---------------------------------------------------------------- view hooks (used by the e2e test)
 /** Camera presets: "iso", "front" (looking down the axis from +X), "back" (from -X). `show`

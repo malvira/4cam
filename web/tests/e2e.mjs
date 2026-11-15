@@ -211,6 +211,61 @@ try {
   check("knob: part, stock and simulated stock render closed (end faces filled)",
     kv.length === 6 && kv.every((v) => v.filled), kv.map((v) => `${v.layer}/${v.end}:${v.filled ? "filled" : "OPEN " + v.px}`).join(" "));
 
+  // 4b. solid machining simulation: playback, scrubbing, per-operation colours
+  await js("document.getElementById('simOpen').click(); true");
+  await waitFor(() => js("document.body.dataset.machining === 'open'"), "the machining simulation", 60000);
+  const M = "window.__4cam.machining.state";
+  const nseg = await js(`${M}.session.segments`);
+  const ops = await js(`${M}.session.ops.map(o => o.kind).join(',')`);
+  check("machining simulation opens with the job's operations", nseg > 30000 && ops === "rotary_turning,helical_knurl,flank_chamfer", `${nseg} moves; ${ops}`);
+  await js("window.__4cam.setView('iso', {})");
+  await sleep(300);
+  await shot("08_machining_start");
+  const seekTo = async (n) => {
+    await js(`const s = document.getElementById('simScrub'); s.value = ${n}; s.dispatchEvent(new Event('input')); true`);
+    await waitFor(() => js(`${M}.pos === ${n} && !${M}.busy`), `seeking to ${n}`, 60000);
+  };
+  const cutCells = (tag) => js(`${M}.op.reduce((n, t) => n + (t === ${tag}), 0)`);
+  const midRough = Math.round(nseg * 0.15);
+  await seekTo(midRough);
+  const rough1 = await cutCells(1);
+  const minR = await js(`Math.min(...${M}.r)`);
+  check("seeking cuts the stock (mid-roughing)", rough1 > 1000 && minR < 12.5, `${rough1} cells cut by roughing, min radius ${minR.toFixed(2)}`);
+  await js("window.__4cam.setView('iso', {})");
+  await sleep(300);
+  await shot("09_machining_mid_roughing");
+  // play advances
+  await js("document.getElementById('simSpeed').value = '3000'; document.getElementById('simPlay').click(); true");
+  await sleep(1500);
+  await js("document.getElementById('simPlay').click(); true");
+  await waitFor(() => js(`!${M}.busy`), "playback to settle", 10000);
+  const played = await js(`${M}.pos`);
+  check("Play advances the simulation", played > midRough + 100, `${midRough} -> ${played}`);
+  // scrubbing back recomputes
+  await seekTo(500);
+  const back = await cutCells(1);
+  check("scrubbing back recomputes the stock", back < rough1, `roughing cells ${rough1} at ${midRough}, ${back} at 500`);
+  // after the knurl
+  await seekTo(nseg);
+  const k2 = await cutCells(2), k3 = await cutCells(3);
+  check("after the knurl, knurl and chamfer cells carry their operations", k2 > 10000 && k3 > 100, `knurl ${k2} cells, chamfer ${k3}`);
+  const closed = String(await js(`const { checkClosed } = await import('./meshes.js'); const g0 = ${M}.stockMesh.geometry; const c0 = checkClosed({ positions: g0.attributes.position.array, indices: g0.index.array }); c0.closed + ' ' + c0.badEdges + ' ' + c0.volume.toFixed(0)`));
+  check("the simulated solid stays watertight", closed.startsWith("true"), closed);
+  await js("window.__4cam.setView('iso', {})");
+  await sleep(300);
+  await shot("10_machining_after_knurl");
+  // operation colour
+  const colorAt = `(() => { const s = ${M}; const i = s.op.indexOf(2); return Array.from(s.stockMesh.geometry.attributes.color.array.slice(3 * i, 3 * i + 3)).map(c => c.toFixed(2)).join(','); })()`;
+  const before = await js(colorAt);
+  await js("const c = document.querySelector('#opLegend input[data-tag=\"2\"]'); c.value = '#ff0000'; c.dispatchEvent(new Event('input', { bubbles: true })); true");
+  const after = await js(colorAt);
+  const saved = await js("localStorage.getItem('4cam.opColors')");
+  check("changing an operation's colour recolours its cuts (and is saved)", before !== after && after === "1.00,0.00,0.00" && /#ff0000/.test(saved), `${before} -> ${after}`);
+  await js("window.__4cam.setView('iso', {})");
+  await sleep(300);
+  await shot("11_machining_recoloured");
+  await js("document.getElementById('simClose').click(); true");
+
   // 5. LinuxCNC machine (G93)
   await js("document.getElementById('machine').value = 'linuxcnc-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
   await waitDone("LinuxCNC generation", 60000);

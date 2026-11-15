@@ -64,6 +64,10 @@ table.tools button { padding: 1px 6px; font-size: 11px; }
 #codeWrap { flex: 2; display: flex; flex-direction: column; min-width: 0; }
 #gcode { flex: 1; resize: none; white-space: pre; overflow: auto; }
 .scrub input { flex: 1; }
+.oplegend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0; }
+.oprow { display: inline-flex; align-items: center; gap: 6px; }
+.oprow input[type=color] { width: 28px; height: 20px; padding: 0; border: 1px solid var(--line); background: none; }
+.swatch { display: inline-block; width: 26px; height: 18px; border: 1px solid var(--line); border-radius: 3px; }
 @media (max-width: 900px) {
   html, body { height: auto; }
   body { display: block; }

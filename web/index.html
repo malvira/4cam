@@ -106,6 +106,29 @@
           <label><input id="showPart" type="checkbox" checked> part</label>
           <label><input id="showSim" type="checkbox" checked> simulated stock</label>
         </div>
+        <div class="row small">
+          <button id="simOpen" type="button">Machining simulation</button>
+        </div>
+        <div id="simControls" class="hidden">
+          <div class="row scrub">
+            <button id="simPlay" type="button">Play</button>
+            <button id="simStep" type="button">Step</button>
+            <label for="simSpeed" class="small">speed</label>
+            <select id="simSpeed" aria-label="Playback speed (moves per second)">
+              <option value="30">30 moves/s</option>
+              <option value="300" selected>300 moves/s</option>
+              <option value="3000">3000 moves/s</option>
+              <option value="30000">30000 moves/s</option>
+            </select>
+            <label class="small"><input id="simGhost" type="checkbox"> removed material</label>
+            <button id="simClose" type="button">Close</button>
+          </div>
+          <div class="row scrub">
+            <input id="simScrub" type="range" min="0" max="0" value="0" aria-label="Simulation position">
+          </div>
+          <div id="simLabel" class="small"></div>
+          <div id="opLegend" class="oplegend small" aria-label="Operation colours"></div>
+        </div>
         <canvas id="side" width="900" height="220" aria-label="Side view: X against radius"></canvas>
       </div>
       <div id="codeWrap">
