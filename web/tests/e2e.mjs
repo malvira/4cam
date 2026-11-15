@@ -304,6 +304,84 @@ try {
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await sleep(500);
 
+  // 5d. project tree (document model 0.2)
+  await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+  await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 3"), "the project tree", 15000);
+  const outs = await js("[...document.querySelectorAll('#tree .tree-out')].map(o => o.dataset.out + ':' + o.querySelectorAll('.tree-op').length).join(' ')");
+  check("tree shows the knob as one setup, two files, three operations", outs === "knob_1_profile:1 knob_2_knurl:2", outs);
+  const gen = async () => {
+    await js("document.getElementById('generate').click(); true");
+    await waitDone("generation", 120000);
+    return js("({ lines: window.__4cam.state.result.programs.map(p => p.lines), knurl: (window.__4cam.state.result.programs.find(p => p.name === 'knob_2_knurl') || {}).gcode || '' })");
+  };
+  const treeAct = (op, act) => js(`document.querySelector('#tree .tree-op[data-op="${op}"] [data-act="${act}"]').click(); true`);
+  const settle = () => waitFor(() => js("!!window.__4cam.state.tree.doc"), "tree", 5000).then(() => sleep(400));
+  await treeAct("op3", "enable");
+  await settle();
+  const off = await gen();
+  const schema = await js("JSON.parse(document.getElementById('job').value).schema_version");
+  check("turning an operation off drops it from the G-code (document saved as 0.2)", schema === "0.2" && off.lines[1] < 15146 && !off.knurl.includes("front chamfer"), `knurl file ${off.lines[1]} lines; schema ${schema}`);
+  await treeAct("op3", "enable");
+  await settle();
+  await treeAct("op3", "up");
+  await settle();
+  const swapped = await gen();
+  const ci = swapped.knurl.indexOf("front chamfer"), ki = swapped.knurl.indexOf("knurl family");
+  check("reordering operations reorders the G-code", ci > 0 && ki > ci, `chamfer at ${ci}, knurl at ${ki}`);
+  await treeAct("op3", "down");
+  await settle();
+  // add an operation from the registry's form
+  await js("document.getElementById('treeAddType').value = 'flank_chamfer'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true");
+  await waitFor(() => js("!!document.getElementById('opForm')"), "the operation form", 10000);
+  await js("document.getElementById('opForm').requestSubmit(); true");
+  const probs = await waitFor(() => js("document.getElementById('opErrors')?.textContent || ''"), "the missing-field message", 10000);
+  await js("const f = document.getElementById('opForm'); f.elements.edge.value = '0, 7.2'; f.elements.tip_offset.value = '0.8'; f.elements.passes.value = '0'; f.elements.feed.value = '200'; f.elements.plunge_feed.value = '60'; f.requestSubmit(); true");
+  await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 4"), "the new operation", 10000);
+  await settle();
+  const probsAfter = await js("document.querySelector('#tree .error')?.textContent || ''");
+  const added = await gen();
+  check("adding an operation: the form shows what's missing, then it plans", /missing field `edge`/.test(probs) && probsAfter === "" && added.lines[1] > 15146, `before: ${probs.slice(0, 40)}...; knurl file ${added.lines[1]} lines`);
+  // delete everything, then the knurl wizard rebuilds the program
+  for (const op of ["op4", "op3", "op2", "op1"]) {
+    await treeAct(op, "delete");
+    await settle();
+  }
+  const empty = await js("document.querySelectorAll('#tree .tree-op').length");
+  await js("document.getElementById('treeWizard').click(); true");
+  await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 3"), "the wizard", 15000);
+  const wiz = await gen();
+  await js("document.querySelectorAll('#tabs button')[0].click(); true");
+  const g1 = await js("window.__4cam.state.result.programs[0].gcode");
+  check("knurl wizard rebuilds the knob in the tree; G-code is the cut G-code", empty === 0 && g1 === golden("knob_1_profile") && wiz.knurl === golden("knob_2_knurl"), `${empty} ops after deleting, ${wiz.lines.join(" / ")} lines`);
+  // operation colour from the tree reaches the machining simulation
+  await js("const c = document.querySelector('#tree .tree-op[data-op=\"op1\"] [data-act=\"color\"]'); c.value = '#00ff00'; c.dispatchEvent(new Event('change', { bubbles: true })); true");
+  await settle();
+  await js("document.getElementById('simOpen').click(); true");
+  await waitFor(() => js("document.body.dataset.machining === 'open'"), "the machining simulation", 60000);
+  const legend = await js("document.querySelector('#opLegend input[data-tag=\"1\"]').value");
+  check("operation colours set in the tree colour the machining simulation", legend === "#00ff00", legend);
+  await js("document.getElementById('simClose').click(); true");
+  // face picking on the mesh job: finish only the taper
+  await js("document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
+  await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('knob.stl') && document.querySelectorAll('#tree .tree-op').length === 3"), "the mesh project", 15000);
+  await gen();
+  await js("document.querySelector('#tree .tree-op[data-op=\"op2\"] [data-act=\"select\"]').click(); true");
+  await js("document.getElementById('pickFaces').click(); true");
+  await waitFor(() => js("!!window.__4cam.state.tree.pickMesh"), "pick mode", 15000);
+  await js("window.__4cam.setView('iso', {})");
+  const picked = await js(`(() => { const v = window.__4cam.state.three; const p = new v.THREE.Vector3(-7.5, 0, -9.0).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
+  const region = String(await js(`const pr = await window.__4cam.tree.pickAt(${picked[0]}, ${picked[1]}); pr ? pr.shape + ' ' + pr.x.map(x => x.toFixed(1)).join('..') : 'none'`));
+  await shot("13_pick_faces");
+  await js("document.getElementById('pickFaces').click(); true");
+  await settle();
+  const fin = await gen();
+  const along = await js("window.__4cam.state.result.programs.find(p => p.name === 'knob_4_finish_along').gcode");
+  const xs = along.split("\n").filter((l) => l.startsWith("G1 X")).map((l) => parseFloat(l.split(" ")[1].slice(1)));
+  const minX = Math.min(...xs);
+  check("picking the taper face limits the finish to it", /^cone -15\.0\.\.-0\.8/.test(region) && minX >= -16.588, `picked ${region}; finish min X ${minX}`);
+  await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+  await sleep(800);
+
   // 6. quick settings edit the JSON
   await js("const i = document.getElementById('q_stock_radius'); i.value = 13; i.dispatchEvent(new Event('change')); true");
   const r = await js("JSON.parse(document.getElementById('job').value).stock.radius");

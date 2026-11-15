@@ -73,7 +73,53 @@ pub mod api {
         if jobs.is_empty() {
             return Err("the project has no setups".into());
         }
-        Ok(jobs.swap_remove(0).1)
+        let k = match SETUP.with(|s| s.borrow().clone()) {
+            Some(id) => jobs
+                .iter()
+                .position(|(sid, _)| *sid == id)
+                .ok_or(format!("no setup {id:?}"))?,
+            None => 0,
+        };
+        Ok(jobs.swap_remove(k).1)
+    }
+
+    thread_local! {
+        /// Setup chosen by the current call's `opts.setup` (None = the first).
+        static SETUP: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn with_setup<T>(opts: &Value, f: impl FnOnce() -> T) -> T {
+        let id = opts["setup"].as_str().map(str::to_string);
+        SETUP.with(|s| *s.borrow_mut() = id);
+        let out = f();
+        SETUP.with(|s| *s.borrow_mut() = None);
+        out
+    }
+
+    /// For a 0.2 project: (project operation ids in planning order, their colours).
+    fn op_ids_and_colors(doc: &str) -> Option<(Vec<String>, Vec<Option<String>>)> {
+        let v: Value = serde_json::from_str(doc).ok()?;
+        if v["schema_version"] != "0.2" {
+            return None;
+        }
+        let (p, _) = fourcam::project::Project::from_json_any(doc).ok()?;
+        let want = SETUP.with(|s| s.borrow().clone());
+        let setup = match want {
+            Some(id) => p.setup(&id)?,
+            None => p.setups.first()?,
+        };
+        let ids = p.planned_op_ids(setup);
+        let colors = ids
+            .iter()
+            .map(|id| {
+                setup
+                    .operations
+                    .iter()
+                    .find(|o| &o.id == id)
+                    .and_then(|o| o.color.clone())
+            })
+            .collect();
+        Some((ids, colors))
     }
 
     /// Built-in libraries plus `opts.libraries` (4cam tool library objects).
@@ -161,7 +207,7 @@ pub mod api {
             Ok(l) => l,
             Err(e) => return err(e),
         };
-        let job = match job_any_mesh(job_json, &libs, mesh) {
+        let job = match with_setup(&opts_v, || job_any_mesh(job_json, &libs, mesh)) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -353,7 +399,7 @@ pub mod api {
             Ok(l) => l,
             Err(e) => return err(e),
         };
-        let job = match job_any_mesh(job_json, &libs, mesh) {
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -418,6 +464,7 @@ pub mod api {
             "program_starts": first_seg_of_program,
             "path": f32s(&path),
             "ops": ops,
+            "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| json!({"ids": ids, "colors": colors})),
             "tools": job.tools,
         });
         SESSION.with(|s| *s.borrow_mut() = Some(Session { pb }));

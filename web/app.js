@@ -3,6 +3,7 @@
 import { cylinder, heightmapSolid, revolveProfile } from "./meshes.js";
 import { setupMachining } from "./machining.js";
 import { splitter } from "./splitters.js";
+import { setupTree } from "./tree.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -147,6 +148,7 @@ async function loadExample(name) {
   if (jm) renderMachines(jm);
   renderQuick();
   renderTools();
+  await window.__4cam.tree?.refresh();
 }
 
 function setMesh(bytes, name) {
@@ -186,7 +188,8 @@ async function generate() {
   $("generate").disabled = $("simulate").disabled = true;
   setStatus("Generating...", "busy");
   try {
-    const { result, ms } = await engine("planAndPost", job, machineArg(), state.mesh, { max_points: 150000, libraries: libraries() });
+    const setupId = state.tree?.setup;
+    const { result, ms } = await engine("planAndPost", job, machineArg(), state.mesh, { max_points: 150000, libraries: libraries(), setup: job.schema_version === "0.2" ? setupId : undefined });
     state.result = result;
     state.sim = null;
     state.job = job;
@@ -857,6 +860,10 @@ window.__4cam.splitters = {
 };
 // the 2D side view redraws at its new size (the 3D view has its own ResizeObserver)
 new ResizeObserver(() => drawSide()).observe($("side"));
+
+// ---------------------------------------------------------------- project tree (0.2)
+window.__4cam.tree = setupTree({ engine, $, state, readJob, writeJob, showError, getThree, onChange: () => { renderQuick(); renderTools(); } });
+$("job").addEventListener("change", () => window.__4cam.tree.refresh());
 
 // ---------------------------------------------------------------- machining simulation
 window.__4cam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries });

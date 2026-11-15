@@ -42,12 +42,14 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     box.innerHTML = "";
     if (!m.session) return;
     const saved = savedColors();
+    const proj = m.session.project_ops;
     m.session.ops.forEach((o, i) => {
-      const hex = saved[opKey(o)] || PALETTE[i % PALETTE.length];
+      if (proj) o.project_id = proj.ids[i];
+      const hex = (proj && proj.colors[i]) || saved[opKey(o)] || PALETTE[i % PALETTE.length];
       m.colors[o.tag] = hexToRgb(hex);
       const row = document.createElement("label");
       row.className = "oprow";
-      row.innerHTML = `<input type="color" value="${hex}" data-tag="${o.tag}" aria-label="Colour for ${o.program} ${o.kind}"> <span>${o.program}: ${o.kind.replace(/_/g, " ")}</span>`;
+      row.innerHTML = `<input type="color" value="${hex}" data-tag="${o.tag}" aria-label="Colour for ${o.program} ${o.kind}"> <span>${o.program}: ${o.kind.replace(/_/g, " ")}${o.project_id ? ` (${o.project_id})` : ""}</span>`;
       box.appendChild(row);
     });
     const un = document.createElement("div");
@@ -222,7 +224,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
     setStatus("Opening machining simulation...", "busy");
     try {
-      const { result } = await engine("simOpen", job, { dx: 0.1, na: 240, libraries: libraries() }, state.mesh);
+      const setup = job.schema_version === "0.2" ? state.tree?.setup : undefined;
+      const { result } = await engine("simOpen", job, { dx: 0.1, na: 240, libraries: libraries(), setup }, state.mesh);
       result.path = f32(result.path);
       m.session = result;
       const n = result.grid.nx * result.grid.na;
