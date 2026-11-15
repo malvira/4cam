@@ -18,7 +18,7 @@ program.
   - `rotary_rough`: radial step-down roughing from a mesh.
   - A radial-heightmap stock model that simulates material removal.
   - Gouge checks against the part.
-  - Python and WebAssembly packages (in progress).
+  - Python and WebAssembly packages.
 
 ## Operations
 
@@ -83,6 +83,50 @@ The other commands:
 Built-in machines are `makera-z1` (the default) and `linuxcnc`. To use another machine,
 pass `--machine path/to/machine.json` (see `machines/`).
 
+## Python and WebAssembly
+
+Both packages expose the same JSON API:
+
+- `plan_and_post(job, machine, mesh)` returns each program's G-code, verifier issues, gouge
+  check and a tool-tip polyline.
+- `simulate(job, ...)` returns the stock heightmap after each program.
+- There are also `example_job`, `machine` and `version`.
+
+Python: build the wheel with the standard library only, then install it:
+
+```bash
+python scripts/build_wheel.py
+```
+
+```bash
+pip install target/wheels/fourcam-0.1.0-cp39-abi3-win_amd64.whl
+```
+
+The wheel name depends on your platform. To use it:
+
+```python
+import fourcam
+res = fourcam.plan_and_post(fourcam.example_job(), machine="linuxcnc")
+print(res["programs"][0]["gcode"][:200])
+```
+
+WebAssembly: `scripts/build-wasm.sh` (or `.ps1`) writes `web/pkg/fourcam.wasm` and
+`fourcam.js`. The module has plain exports, so wasm-bindgen is not needed. `fourcam.js`
+wraps them for browsers and Node:
+
+```js
+import { load } from "./pkg/fourcam.js";
+const cam = await load(new URL("./pkg/fourcam.wasm", import.meta.url));
+const res = cam.planAndPost(cam.exampleJob(), "makera-z1");
+```
+
+`scripts/check.sh` runs everything:
+
+- `cargo fmt` and `cargo clippy`;
+- the Rust tests;
+- the WebAssembly package under Node, checked against the golden G-code;
+- the Python wheel, installed in a fresh venv and tested.
+
 ## Examples
 
 `examples/knob/` has the jobs, the revolved `knob.stl` and, in `output/`, the G-code and
@@ -125,6 +169,9 @@ The tests cover:
   I/O, the drop-cutter, the strategies, the toolpath IR, the post-processor, the verifier
   and the PNG previews.
 - `crates/fourcam-cli`: the `4cam` binary.
+- `crates/fourcam-wasm`: the WebAssembly build and its JSON API (`js/fourcam.js` wraps it).
+- `crates/fourcam-py`: the Python bindings (pyo3, abi3, Python 3.9 or later).
+- `scripts/`: the build and check scripts.
 - `machines/`: machine profiles.
 - `examples/`: example jobs and their outputs.
 - `reference/`: the original scripts the engine was ported from.

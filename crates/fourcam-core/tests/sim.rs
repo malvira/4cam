@@ -71,8 +71,8 @@ fn min_left(res: &fourcam::JobSim, x_lo: f64, x_hi: f64) -> f64 {
             continue;
         }
         for j in 0..g.na {
-            if res.part.at(i, j) > 0.0 {
-                m = m.min(res.stock.at(i, j) - res.part.at(i, j));
+            if res.part.hi.at(i, j) > 0.0 {
+                m = m.min(res.stock.at(i, j) - res.part.hi.at(i, j));
             }
         }
     }

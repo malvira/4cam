@@ -1,6 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/fourcam-core", "crates/fourcam-cli"]
+members = [
+    "crates/fourcam-core",
+    "crates/fourcam-cli",
+    "crates/fourcam-wasm",
+    "crates/fourcam-py",
+]
+# the Python extension needs a Python toolchain; build it with scripts/build-python
+default-members = ["crates/fourcam-core", "crates/fourcam-cli", "crates/fourcam-wasm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,3 +18,9 @@ repository = "https://github.com/malvira/4cam"
 # Geometry-heavy tests (drop-cutter, simulation) are far too slow unoptimised.
 [profile.test]
 opt-level = 3
+
+[profile.release-wasm]
+inherits = "release"
+opt-level = 3
+lto = true
+codegen-units = 1

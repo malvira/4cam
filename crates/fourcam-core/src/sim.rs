@@ -72,9 +72,14 @@ impl RadialMap {
 
     /// Finished part from a revolved profile (0 outside the profile's X range).
     pub fn from_profile(grid: Grid, geom: &RevolvedProfile) -> RadialMap {
+        RadialMap::from_profile_at(grid, geom, 0.0)
+    }
+
+    /// Like [`RadialMap::from_profile`], sampled `offset` mm from each cell centre.
+    pub fn from_profile_at(grid: Grid, geom: &RevolvedProfile, offset: f64) -> RadialMap {
         let mut m = RadialMap::filled(grid, 0.0);
         for i in 0..grid.nx {
-            let x = grid.x(i);
+            let x = grid.x(i) + offset;
             let r = if x < geom.x_min() || x > geom.x_max() {
                 0.0
             } else {
@@ -89,6 +94,11 @@ impl RadialMap {
 
     /// Finished part from a mesh: outermost hit of each cell's radial ray (0 where none).
     pub fn from_mesh(grid: Grid, mesh: &Mesh) -> RadialMap {
+        RadialMap::from_mesh_at(grid, mesh, 0.0)
+    }
+
+    /// Like [`RadialMap::from_mesh`], with rays `offset` mm from each cell centre.
+    pub fn from_mesh_at(grid: Grid, mesh: &Mesh, offset: f64) -> RadialMap {
         let mut m = RadialMap::filled(grid, 0.0);
         let dphi = TAU / grid.na as f64;
         for t in &mesh.triangles {
@@ -117,7 +127,7 @@ impl RadialMap {
             };
             let n = crate::mesh::cross(crate::mesh::sub(t[1], t[0]), crate::mesh::sub(t[2], t[0]));
             for i in i0..=i1 {
-                let x = grid.x(i);
+                let x = grid.x(i) + offset;
                 for &j in &cols {
                     let (s, c) = grid.phi(j).sin_cos();
                     // ray p = (x, ρc, ρs), ρ >= 0: n·(p - t0) = 0
@@ -138,6 +148,70 @@ impl RadialMap {
             }
         }
         m
+    }
+}
+
+/// The part over each cell: at the centre, and the lowest and highest radius across the
+/// cell's X extent (cells that straddle a wall see both sides).
+#[derive(Debug, Clone)]
+pub struct Part {
+    pub center: RadialMap,
+    pub lo: RadialMap,
+    pub hi: RadialMap,
+}
+
+impl Part {
+    fn from_samples(maps: Vec<RadialMap>) -> Part {
+        let mut lo = maps[0].clone();
+        let mut hi = maps[0].clone();
+        for m in &maps[1..] {
+            for k in 0..lo.r.len() {
+                lo.r[k] = lo.r[k].min(m.r[k]);
+                hi.r[k] = hi.r[k].max(m.r[k]);
+            }
+        }
+        Part {
+            center: maps[0].clone(),
+            lo,
+            hi,
+        }
+    }
+
+    pub fn from_profile(grid: Grid, geom: &RevolvedProfile, points: &[[f64; 2]]) -> Part {
+        let e = 0.4999 * grid.dx;
+        let mut maps: Vec<RadialMap> = [0.0, -e, e]
+            .iter()
+            .map(|&o| RadialMap::from_profile_at(grid, geom, o))
+            .collect();
+        // profile corners inside a cell count too
+        let mut extra = maps[0].clone();
+        let mut any = false;
+        for i in 0..grid.nx {
+            let xc = grid.x(i);
+            for p in points {
+                if (p[0] - xc).abs() <= e {
+                    any = true;
+                    for j in 0..grid.na {
+                        let k = i * grid.na + j;
+                        extra.r[k] = extra.r[k].min(p[1] as f32);
+                    }
+                }
+            }
+        }
+        if any {
+            maps.push(extra);
+        }
+        Part::from_samples(maps)
+    }
+
+    pub fn from_mesh(grid: Grid, mesh: &Mesh) -> Part {
+        let e = 0.4999 * grid.dx;
+        Part::from_samples(
+            [0.0, -e, e]
+                .iter()
+                .map(|&o| RadialMap::from_mesh_at(grid, mesh, o))
+                .collect(),
+        )
     }
 }
 
@@ -265,7 +339,9 @@ fn stamp(stock: &mut RadialMap, c: &Cutter, x: f64, r: f64, a_deg: f64) -> usize
     let mut changed = 0;
     for i in i0..=i1 {
         let u = g.x(i) - x;
-        if u.abs() > rad {
+        // touching the tool's edge is not cutting (cells exactly at a wall)
+        let lim = rad * (1.0 - 1e-9);
+        if u.abs() >= lim {
             continue;
         }
         for jj in j0..=j1 {
@@ -281,7 +357,7 @@ fn stamp(stock: &mut RadialMap, c: &Cutter, x: f64, r: f64, a_deg: f64) -> usize
             let mut inside = false;
             for _ in 0..8 {
                 let d = (u * u + (rho * s) * (rho * s)).sqrt();
-                if d > rad {
+                if d >= lim {
                     inside = false;
                     break;
                 }
@@ -326,9 +402,10 @@ pub struct Deviation {
 }
 
 /// Compare `stock` with `part` over cells whose x lies in `[x_lo, x_hi]` and where the part
-/// exists.
-pub fn deviation(stock: &RadialMap, part: &RadialMap, x_lo: f64, x_hi: f64, tol: f64) -> Deviation {
-    assert_eq!(stock.grid, part.grid);
+/// exists. Material left is measured from the highest part radius in each cell, gouges from
+/// the lowest, so a cell that straddles a wall counts as neither.
+pub fn deviation(stock: &RadialMap, part: &Part, x_lo: f64, x_hi: f64, tol: f64) -> Deviation {
+    assert_eq!(stock.grid, part.center.grid);
     let g = stock.grid;
     let mut d = Deviation {
         cells: 0,
@@ -345,19 +422,21 @@ pub fn deviation(stock: &RadialMap, part: &RadialMap, x_lo: f64, x_hi: f64, tol:
             continue;
         }
         for j in 0..g.na {
-            let p = part.at(i, j);
-            if p <= 0.0 {
+            let (hi, lo) = (part.hi.at(i, j), part.lo.at(i, j));
+            if hi <= 0.0 {
                 continue;
             }
-            let diff = stock.at(i, j) - p;
+            let s = stock.at(i, j);
+            let left = s - hi;
             d.cells += 1;
-            sum += diff.max(0.0);
-            d.max_left = d.max_left.max(diff);
-            if -diff > d.max_gouge {
-                d.max_gouge = -diff;
+            sum += left.max(0.0);
+            d.max_left = d.max_left.max(left);
+            let gouge = lo - s;
+            if gouge > d.max_gouge {
+                d.max_gouge = gouge;
                 d.gouge_at = Some((x, g.phi(j).to_degrees()));
             }
-            if -diff > tol {
+            if gouge > tol {
                 d.gouge_cells += 1;
             }
         }
@@ -528,6 +607,36 @@ mod tests {
         for j in 0..g.na {
             assert!((s.at(i0, j) - 9.0).abs() < 1e-3, "j={j}: {}", s.at(i0, j));
         }
+    }
+
+    #[test]
+    fn deviation_finds_a_real_gouge_but_not_a_wall_sliver() {
+        let p = cyl_profile(); // r 4 for x in [-10, -5), r 6 for [-5, 0]
+        let geom = RevolvedProfile::new(&p, 9.0);
+        let g = Grid::new(-12.0, 2.0, 0.2, 90);
+        let part = Part::from_profile(g, &geom, &p.points);
+        let mut s = RadialMap::filled(g, 9.0);
+        // cut to the part everywhere, then dig 1 mm into the r=6 section at A0
+        for k in 0..s.r.len() {
+            s.r[k] = part.center.r[k];
+        }
+        let c = Cutter::Flat { radius: 0.5 };
+        stamp(&mut s, &c, -2.0, 5.0, 0.0);
+        let d = deviation(&s, &part, -10.0, 0.0, 0.02);
+        assert!((d.max_gouge - 1.0).abs() < 1e-3, "{d:?}");
+        assert!(d.gouge_cells > 0);
+        let (x, phi) = d.gouge_at.unwrap();
+        assert!(
+            (x + 2.0).abs() < 0.6 && (phi - 90.0).abs() < 10.0,
+            "{x} {phi}"
+        );
+        // a cell straddling the step at x = -5 holds both radii: no gouge, no leftover
+        let mut s2 = RadialMap::filled(g, 9.0);
+        for k in 0..s2.r.len() {
+            s2.r[k] = part.lo.r[k];
+        }
+        let d2 = deviation(&s2, &part, -10.0, 0.0, 0.02);
+        assert_eq!(d2.gouge_cells, 0, "{d2:?}");
     }
 
     #[test]

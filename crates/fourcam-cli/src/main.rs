@@ -266,7 +266,7 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
         let title = format!("{name} - simulated stock (grey: part)");
         std::fs::write(
             &png,
-            sim::stock_png(&title, &stock, &res.part, job.stock.radius),
+            sim::stock_png(&title, &stock, &res.part.center, job.stock.radius),
         )
         .map_err(|e| format!("{}: {e}", png.display()))?;
         println!(

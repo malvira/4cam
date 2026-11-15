@@ -445,7 +445,7 @@ pub fn gouge_check(
 #[derive(Debug, Clone)]
 pub struct JobSim {
     pub stock: sim::RadialMap,
-    pub part: sim::RadialMap,
+    pub part: sim::Part,
     /// Stock after each program, with its statistics.
     pub programs: Vec<(String, sim::SimStats, sim::Deviation)>,
 }
@@ -461,24 +461,20 @@ pub fn simulate_job(
     na: usize,
     tol: f64,
 ) -> Result<JobSim, Error> {
-    let (x_lo, x_hi, part_fn): (f64, f64, Box<dyn Fn(sim::Grid) -> sim::RadialMap>) =
+    let (x_lo, x_hi, part_fn): (f64, f64, Box<dyn Fn(sim::Grid) -> sim::Part>) =
         match (mesh, &job.part.profile) {
             (Some(m), _) => {
                 let (lo, hi) = m
                     .bounds()
                     .ok_or_else(|| Error::Invalid("empty mesh".into()))?;
-                (
-                    lo[0],
-                    hi[0],
-                    Box::new(move |g| sim::RadialMap::from_mesh(g, m)),
-                )
+                (lo[0], hi[0], Box::new(move |g| sim::Part::from_mesh(g, m)))
             }
             (None, Some(p)) => {
                 let geom = RevolvedProfile::new(p, job.stock.radius);
                 (
                     geom.x_min(),
                     geom.x_max(),
-                    Box::new(move |g| sim::RadialMap::from_profile(g, &geom)),
+                    Box::new(move |g| sim::Part::from_profile(g, &geom, &p.points)),
                 )
             }
             (None, None) => return Err(Error::Invalid("nothing to compare: no part".into())),

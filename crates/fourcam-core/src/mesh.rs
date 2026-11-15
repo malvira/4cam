@@ -81,7 +81,7 @@ impl Mesh {
         self.triangles
             .iter()
             .flatten()
-            .map(|p| p[1].hypot(p[2]))
+            .map(|p| (p[1] * p[1] + p[2] * p[2]).sqrt())
             .fold(0.0, f64::max)
     }
 
@@ -344,22 +344,83 @@ struct Object {
 }
 
 fn read_3mf(data: &[u8]) -> Result<Mesh, MeshError> {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(data))
-        .map_err(|e| bad(format!("3MF zip: {e}")))?;
-    let name = (0..zip.len())
-        .filter_map(|i| {
-            zip.name_for_index(i)
-                .and_then(|n| n.ok())
-                .map(|n| n.to_string())
-        })
-        .find(|n| n.to_ascii_lowercase().ends_with(".model"))
+    let entries = zip_entries(data)?;
+    let (name, _) = entries
+        .iter()
+        .find(|(n, _)| n.to_ascii_lowercase().ends_with(".model"))
         .ok_or_else(|| bad("3MF has no .model part"))?;
-    let mut xml = String::new();
-    zip.by_name(&name)
-        .map_err(|e| bad(format!("3MF {name}: {e}")))?
-        .read_to_string(&mut xml)
-        .map_err(|e| bad(format!("3MF {name}: {e}")))?;
+    let bytes = zip_read(data, name, &entries)?;
+    let xml = String::from_utf8(bytes).map_err(|_| bad(format!("3MF {name}: not UTF-8")))?;
     parse_3mf_model(&xml)
+}
+
+fn le16(d: &[u8], o: usize) -> Result<usize, MeshError> {
+    d.get(o..o + 2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+        .ok_or_else(|| bad("truncated zip"))
+}
+
+fn le32(d: &[u8], o: usize) -> Result<usize, MeshError> {
+    d.get(o..o + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+        .ok_or_else(|| bad("truncated zip"))
+}
+
+/// Central directory of a zip archive: (name, offset of its central record).
+fn zip_entries(d: &[u8]) -> Result<Vec<(String, usize)>, MeshError> {
+    // end of central directory: last "PK" within the final 64 KiB + 22 bytes
+    let lo = d.len().saturating_sub(65_557);
+    let eocd = (lo..d.len().saturating_sub(21))
+        .rev()
+        .find(|&i| d[i..i + 4] == *b"PK")
+        .ok_or_else(|| bad("not a zip archive (no end of central directory)"))?;
+    let count = le16(d, eocd + 10)?;
+    let mut at = le32(d, eocd + 16)?;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if d.get(at..at + 4) != Some(b"PK".as_slice()) {
+            return Err(bad("corrupt zip central directory"));
+        }
+        let (n, e, c) = (le16(d, at + 28)?, le16(d, at + 30)?, le16(d, at + 32)?);
+        let name = d
+            .get(at + 46..at + 46 + n)
+            .ok_or_else(|| bad("truncated zip"))?;
+        out.push((String::from_utf8_lossy(name).into_owned(), at));
+        at += 46 + n + e + c;
+    }
+    Ok(out)
+}
+
+/// Contents of one entry (stored or deflated).
+fn zip_read(d: &[u8], name: &str, entries: &[(String, usize)]) -> Result<Vec<u8>, MeshError> {
+    let &(_, cen) = entries
+        .iter()
+        .find(|(n, _)| n == name)
+        .ok_or_else(|| bad(format!("zip has no {name}")))?;
+    let method = le16(d, cen + 10)?;
+    let csize = le32(d, cen + 20)?;
+    let usize_ = le32(d, cen + 24)?;
+    let local = le32(d, cen + 42)?;
+    if d.get(local..local + 4) != Some(b"PK".as_slice()) {
+        return Err(bad("corrupt zip local header"));
+    }
+    let start = local + 30 + le16(d, local + 26)? + le16(d, local + 28)?;
+    let raw = d
+        .get(start..start + csize)
+        .ok_or_else(|| bad("truncated zip entry"))?;
+    match method {
+        0 => Ok(raw.to_vec()),
+        8 => {
+            let mut out = Vec::with_capacity(usize_);
+            flate2::read::DeflateDecoder::new(raw)
+                .read_to_end(&mut out)
+                .map_err(|e| bad(format!("zip {name}: {e}")))?;
+            Ok(out)
+        }
+        m => Err(bad(format!(
+            "zip {name}: unsupported compression method {m}"
+        ))),
+    }
 }
 
 fn num(t: &Tag, key: &str) -> Result<f64, MeshError> {
@@ -577,23 +638,77 @@ mod tests {
  </resources>
  <build><item objectid="2" transform="1 0 0 0 1 0 0 0 1 2 0 0"/></build>
 </model>"#;
-        let mut buf = Vec::new();
-        {
-            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let opts = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-            w.start_file("[Content_Types].xml", opts).unwrap();
-            w.write_all(b"<Types/>").unwrap();
-            w.start_file("3D/3dmodel.model", opts).unwrap();
-            w.write_all(model.as_bytes()).unwrap();
-            w.finish().unwrap();
-        }
+        let buf = test_zip(&[
+            ("[Content_Types].xml", b"<Types/>".as_slice(), false),
+            ("3D/3dmodel.model", model.as_bytes(), true),
+        ]);
         let m = Mesh::from_bytes(&buf).unwrap();
         // translate z+5 then x+2, then cm -> mm
         assert_eq!(
             m.triangles,
             vec![[[20.0, 0.0, 50.0], [30.0, 0.0, 50.0], [20.0, 10.0, 50.0]]]
         );
+    }
+
+    /// Minimal zip writer for tests (stored or deflated entries, CRC left 0).
+    fn test_zip(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut central = Vec::new();
+        for (name, data, deflate) in files {
+            let body = if *deflate {
+                let mut e =
+                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+                e.write_all(data).unwrap();
+                e.finish().unwrap()
+            } else {
+                data.to_vec()
+            };
+            let method: u16 = if *deflate { 8 } else { 0 };
+            let offset = out.len() as u32;
+            let mut h = b"PK".to_vec();
+            h.extend_from_slice(&[20, 0, 0, 0]);
+            h.extend_from_slice(&method.to_le_bytes());
+            h.extend_from_slice(&[0; 8]); // time, date, crc
+            h.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            h.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            h.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            h.extend_from_slice(&[0, 0]);
+            h.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(&h);
+            out.extend_from_slice(&body);
+            let mut c = b"PK".to_vec();
+            c.extend_from_slice(&[20, 0, 20, 0, 0, 0]);
+            c.extend_from_slice(&method.to_le_bytes());
+            c.extend_from_slice(&[0; 8]);
+            c.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            c.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            c.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            c.extend_from_slice(&[0; 12]);
+            c.extend_from_slice(&offset.to_le_bytes());
+            c.extend_from_slice(name.as_bytes());
+            central.extend_from_slice(&c);
+        }
+        let cd_off = out.len() as u32;
+        out.extend_from_slice(&central);
+        let mut e = b"PK".to_vec();
+        e.extend_from_slice(&[0; 4]);
+        e.extend_from_slice(&(files.len() as u16).to_le_bytes());
+        e.extend_from_slice(&(files.len() as u16).to_le_bytes());
+        e.extend_from_slice(&(central.len() as u32).to_le_bytes());
+        e.extend_from_slice(&cd_off.to_le_bytes());
+        e.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(&e);
+        out
+    }
+
+    #[test]
+    fn zip_errors() {
+        assert!(Mesh::from_bytes(b"PK truncated").is_err());
+        let z = test_zip(&[("a.txt", b"hello".as_slice(), false)]);
+        assert!(Mesh::from_bytes(&z)
+            .unwrap_err()
+            .to_string()
+            .contains("no .model"));
     }
 
     #[test]

@@ -84,6 +84,13 @@ pub struct DropCutter {
     bins: Vec<Vec<u32>>,
 }
 
+/// `sqrt(x² + y²)`. Not `f64::hypot`: on wasm32 that is a software routine built on emulated
+/// fused multiply-add and was most of the drop-cutter's run time.
+#[inline]
+fn len2(x: f64, y: f64) -> f64 {
+    (x * x + y * y).sqrt()
+}
+
 /// Distance from the origin to a 2D triangle (0 if inside).
 fn origin_distance_2d(p: [[f64; 2]; 3]) -> f64 {
     let cross = |a: [f64; 2], b: [f64; 2]| a[0] * b[1] - a[1] * b[0];
@@ -101,7 +108,7 @@ fn origin_distance_2d(p: [[f64; 2]; 3]) -> f64 {
             } else {
                 0.0
             };
-            (a[0] + t * ab[0]).hypot(a[1] + t * ab[1])
+            len2(a[0] + t * ab[0], a[1] + t * ab[1])
         })
         .fold(f64::INFINITY, f64::min)
 }
@@ -259,7 +266,7 @@ fn drop_triangle_above(cutter: &Cutter, t: &Triangle, floor: f64) -> f64 {
     if nlen > 0.0 && n[2].abs() > 1e-12 * nlen {
         let g = [-n[0] / n[2], -n[1] / n[2]];
         let plane = |p: [f64; 2]| t[0][2] + g[0] * (p[0] - t[0][0]) + g[1] * (p[1] - t[0][1]);
-        let slope = g[0].hypot(g[1]);
+        let slope = len2(g[0], g[1]);
         let dir = if slope > 0.0 {
             [g[0] / slope, g[1] / slope]
         } else {
@@ -295,7 +302,7 @@ fn segment_distance_2d(a: [f64; 3], b: [f64; 3]) -> f64 {
     } else {
         0.0
     };
-    (a[0] + t * e[0]).hypot(a[1] + t * e[1])
+    len2(a[0] + t * e[0], a[1] + t * e[1])
 }
 
 fn inside_2d(t: &Triangle, p: [f64; 2]) -> bool {
@@ -337,7 +344,7 @@ fn drop_edge(cutter: &Cutter, a: [f64; 3], b: [f64; 3]) -> f64 {
         let x = a[0] + t * e[0];
         let y = a[1] + t * e[1];
         let z = a[2] + t * (b[2] - a[2]);
-        z - cutter.height(x.hypot(y).min(r))
+        z - cutter.height(len2(x, y).min(r))
     };
     let mut best = f(t0).max(f(t1));
     if matches!(cutter, Cutter::Flat { .. }) {
