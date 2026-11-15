@@ -14,6 +14,14 @@ program.
 - **Milestone 1** (rotary finishing): STL (binary and ASCII) and 3MF import, a radial
   drop-cutter for flat, ball and V-bit tools with a spatial index, the `rotary_finish`
   strategy, and a LinuxCNC profile that uses G93 inverse-time feeds.
+- **Profiles:**
+  - machine profiles for the Makera Z1, Carvera and Carvera Air (each with 4th axis) and a
+    generic LinuxCNC machine;
+  - a Makera starter tool library;
+  - importers for Makera's Fusion 360 tool libraries and machine definitions;
+  - checks of each job against the machine's limits.
+
+  See [docs/profiles.md](docs/profiles.md) and [docs/roadmap.md](docs/roadmap.md).
 - **Milestone 3** (web frontend): a static web app that runs the engine in the browser
   (WebAssembly in a Web Worker). It is tested end to end in headless Chrome/Edge.
 - **Milestone 2** (roughing and simulation):
@@ -82,8 +90,28 @@ The other commands:
 - `4cam mesh-info part.3mf` prints the triangle count, the bounding box and the largest
   radius about X.
 
-Built-in machines are `makera-z1` (the default) and `linuxcnc`. To use another machine,
-pass `--machine path/to/machine.json` (see `machines/`).
+Built-in machines are `makera-z1-4axis` (the default), `makera-carvera-4axis`,
+`makera-carvera-air-4axis` and `linuxcnc-4axis`. The short names `makera-z1`, `carvera`,
+`carvera-air` and `linuxcnc` work too.
+
+The machine comes from `--machine`, else the job's `"machine"`, else the Z1. `--machine`
+also takes a profile file or a URL. `run` checks the job against the machine's limits.
+
+Profiles and tool libraries:
+
+- `4cam profiles list` shows the built-in and imported profiles and libraries.
+- `4cam profiles show <id>` prints a profile.
+- `4cam profiles import <file-or-url>` reads 4cam JSON, Fusion 360 `.tools`/`.json` tool
+  libraries, or `.mch`/`.f3d` machines. It saves the result to the user profile folder.
+- `4cam profiles export <id> --out file.json` writes a profile out.
+
+Jobs can use library tools:
+
+```json
+{"number": 1, "library": "makera-starter", "tool": "spiral-o-metal-3.175x12"}
+```
+
+See [docs/profiles.md](docs/profiles.md).
 
 ## Web app
 
@@ -102,7 +130,8 @@ browser.
 
 - **Left panel:**
   - an example picker;
-  - the machine (Makera Z1, LinuxCNC, or custom JSON);
+  - the machine (built-in Makera Z1, Carvera, Carvera Air, LinuxCNC, imported profiles, or custom JSON), with a summary of its limits;
+  - a tool library panel: view, add, edit and remove tools, import a file or URL (Fusion 360 `.tools`/`.json`/`.mch`/`.f3d` or 4cam JSON), export JSON, and "use as T#" to put a tool in the job (kept in browser storage);
   - a part mesh upload (STL or 3MF);
   - quick settings that write into the job JSON (stock, tool sizes, feeds, steps);
   - the job JSON editor.
@@ -219,7 +248,9 @@ The tests cover:
 - `crates/fourcam-py`: the Python bindings (pyo3, abi3, Python 3.9 or later).
 - `web/`: the browser app (`index.html`, `app.js`, `worker.js`) and its end-to-end test.
 - `scripts/`: the build and check scripts.
-- `machines/`: machine profiles.
+- `profiles/`: built-in machine profiles and tool libraries (`profiles/_downloads/` is a
+  git-ignored cache of vendor files).
+- `docs/`: the profile formats, Makera sources and the roadmap.
 - `examples/`: example jobs and their outputs.
 - `reference/`: the original scripts the engine was ported from.
 
