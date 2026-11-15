@@ -474,7 +474,8 @@ impl Playback {
                 dirty = Some(dirty.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
             }
             self.pos += 1;
-            if self.pos % self.every == 0 && !self.checkpoints.iter().any(|(at, _)| *at == self.pos)
+            if self.pos.is_multiple_of(self.every)
+                && !self.checkpoints.iter().any(|(at, _)| *at == self.pos)
             {
                 self.checkpoints.push((self.pos, self.stock.clone()));
                 self.checkpoints.sort_by_key(|(at, _)| *at);
@@ -762,7 +763,7 @@ mod tests {
         // tool at A0 sits over part angle 90 deg
         let (n, rows) = stamp(&mut s, &c, 0.0, 8.0, 0.0, 7);
         assert!(rows.is_some());
-        assert!(s.op.iter().any(|&t| t == 7));
+        assert!(s.op.contains(&7));
         assert!(n > 0);
         let j90 = g.na / 4;
         let i0 = ((0.0 - g.x0) / g.dx) as usize;
