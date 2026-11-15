@@ -2,6 +2,7 @@
 
 import { cylinder, heightmapSolid, revolveProfile } from "./meshes.js";
 import { setupMachining } from "./machining.js";
+import { splitter } from "./splitters.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -846,6 +847,16 @@ $("importUrlBtn").addEventListener("click", async () => {
   }
 });
 $("job").addEventListener("change", renderTools);
+
+// ---------------------------------------------------------------- resizable panes
+window.__4cam.splitters = {
+  left: splitter({ bar: $("splitLeft"), target: $("left"), axis: "x", min: 300, max: () => window.innerWidth - 520, id: "left" }),
+  code: splitter({ bar: $("splitCode"), target: $("codeWrap"), axis: "x", after: true, min: 200, max: () => $("views").clientWidth - 288, id: "code" }),
+  side: splitter({ bar: $("split3d"), target: $("side"), axis: "y", after: true, min: 80, max: () => Math.max(80, $("viewWrap").clientHeight - 260), id: "side" }),
+  tools: splitter({ bar: $("splitTools"), target: $("toolTableWrap"), axis: "y", min: 80, max: 900, id: "tools" }),
+};
+// the 2D side view redraws at its new size (the 3D view has its own ResizeObserver)
+new ResizeObserver(() => drawSide()).observe($("side"));
 
 // ---------------------------------------------------------------- machining simulation
 window.__4cam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries });

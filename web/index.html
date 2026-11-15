@@ -46,7 +46,8 @@
         <select id="library" aria-label="Tool library"></select>
         <button id="exportLibrary" type="button">Export</button>
       </div>
-      <table id="toolTable" class="tools small"></table>
+      <div id="toolTableWrap" class="tablewrap"><table id="toolTable" class="tools small"></table></div>
+      <div id="splitTools" class="splitter h" aria-label="Resize the tool list"></div>
       <div class="row">
         <button id="addTool" type="button">Add tool</button>
       </div>
@@ -88,12 +89,14 @@
     </div>
     <div id="error" class="error hidden" role="alert"></div>
   </section>
+  <div id="splitLeft" class="splitter v" aria-label="Resize the settings panel"></div>
   <section id="right">
     <div id="tabs" role="tablist"></div>
     <div id="summary"></div>
     <div id="views">
       <div id="viewWrap">
         <div id="view3d" aria-label="3D preview"></div>
+        <div id="split3d" class="splitter h" aria-label="Resize the 3D view and the side view"></div>
         <div id="viewNote" class="muted small"></div>
         <div class="row scrub">
           <label for="scrub">Moves</label>
@@ -131,6 +134,7 @@
         </div>
         <canvas id="side" width="900" height="220" aria-label="Side view: X against radius"></canvas>
       </div>
+      <div id="splitCode" class="splitter v" aria-label="Resize the 3D view and the G-code"></div>
       <div id="codeWrap">
         <div class="row">
           <button id="download" type="button" disabled>Download .nc</button>

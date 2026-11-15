@@ -341,6 +341,64 @@ try {
   check("mesh job: part, stock and simulated stock render closed (end faces filled)",
     mv.length === 6 && mv.every((v) => v.filled), mv.map((v) => `${v.layer}/${v.end}:${v.filled ? "filled" : "OPEN " + v.px}`).join(" "));
 
+  // 8b. resizable panes: drag the bars, keyboard, reset, persistence, minimum sizes
+  const rect = (id) => js(`(() => { const r = document.getElementById('${id}').getBoundingClientRect(); return [r.x, r.y, r.width, r.height].map(Math.round).join(','); })()`).then((t) => String(t).split(",").map(Number));
+  async function drag(id, dx, dy) {
+    const [x, y, w, h] = await rect(id);
+    const cx = x + w / 2, cy = y + h / 2;
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: cx, y: cy, button: "left", buttons: 1, clickCount: 1 });
+    for (let k = 1; k <= 5; k++) await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx + (dx * k) / 5, y: cy + (dy * k) / 5, button: "left", buttons: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: cx + dx, y: cy + dy, button: "left", buttons: 0, clickCount: 1 });
+    await sleep(400); // ResizeObservers
+  }
+  const L0 = (await rect("left"))[2], R0 = (await rect("right"))[2];
+  await drag("splitLeft", 120, 0);
+  const L1 = (await rect("left"))[2], R1 = (await rect("right"))[2];
+  check("dragging the left bar resizes both panes", Math.abs(L1 - L0 - 120) <= 3 && Math.abs(R0 - R1 - 120) <= 3, `left ${L0}->${L1}, right ${R0}->${R1}`);
+  const c0 = await js("window.__4cam.state.three.renderer.domElement.clientWidth");
+  const code0 = (await rect("codeWrap"))[2];
+  await drag("splitCode", 100, 0);
+  const code1 = (await rect("codeWrap"))[2];
+  const c1 = await js("window.__4cam.state.three.renderer.domElement.clientWidth");
+  const v3 = (await rect("view3d"))[2];
+  check("dragging the G-code bar resizes the 3D canvas with it", Math.abs(code0 - code1 - 100) <= 3 && Math.abs(c1 - c0 - 100) <= 3 && Math.abs(c1 - v3) <= 2, `G-code ${code0}->${code1}, canvas ${c0}->${c1} (view ${v3})`);
+  const s0 = (await rect("side"))[3];
+  await drag("split3d", 0, -100);
+  const s1 = (await rect("side"))[3];
+  const sideBuf = await js("document.getElementById('side').height / (window.devicePixelRatio || 1)");
+  check("dragging the 3D/side bar grows the side view, and its canvas follows", Math.abs(s1 - s0 - 100) <= 3 && Math.abs(sideBuf - s1) <= 2, `side ${s0}->${s1}, canvas ${sideBuf}`);
+  await js("document.getElementById('libraryPanel').open = true; true");
+  const tw0 = (await rect("toolTableWrap"))[3];
+  await drag("splitTools", 0, 80);
+  const tw1 = (await rect("toolTableWrap"))[3];
+  check("dragging the tool list bar resizes the tool list", Math.abs(tw1 - tw0 - 80) <= 3, `${tw0}->${tw1}`);
+  await js("document.getElementById('splitLeft').focus(); true");
+  await S("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
+  await S("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
+  await sleep(100);
+  const L2 = (await rect("left"))[2];
+  check("arrow keys move a focused bar", L2 === L1 + 10, `${L1}->${L2}`);
+  await S("Page.reload");
+  await waitFor(async () => (await state()) === "ready", "reload", 30000);
+  await sleep(500);
+  const sizes = [(await rect("left"))[2], (await rect("codeWrap"))[2], (await rect("side"))[3]];
+  check("pane sizes survive a reload", sizes[0] === L2 && Math.abs(sizes[1] - code1) <= 3 && sizes[2] === s1, `left ${sizes[0]}, G-code ${sizes[1]}, side ${sizes[2]}`);
+  await drag("splitLeft", -2000, 0);
+  await drag("split3d", 0, 2000);
+  const mins = [(await rect("left"))[2], (await rect("side"))[3], (await rect("view3d"))[3]];
+  check("minimum sizes hold", mins[0] === 300 && mins[1] === 80 && mins[2] >= 250, `left ${mins[0]}, side ${mins[1]}, 3D ${mins[2]}`);
+  await shot("12_resized_panes");
+  for (const id of ["splitLeft", "splitCode", "split3d", "splitTools"]) {
+    const [x, y, w, h] = await rect(id);
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: x + w / 2, y: y + h / 2, button: "left", buttons: 1, clickCount: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: x + w / 2, y: y + h / 2, button: "left", buttons: 0, clickCount: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: x + w / 2, y: y + h / 2, button: "left", buttons: 1, clickCount: 2 });
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: x + w / 2, y: y + h / 2, button: "left", buttons: 0, clickCount: 2 });
+  }
+  await sleep(300);
+  const reset = [(await rect("left"))[2], (await rect("side"))[3]];
+  check("double-click resets bars to the default layout", reset[0] === L0 && reset[1] === s0, `left ${reset[0]} (default ${L0}), side ${reset[1]} (default ${s0})`);
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

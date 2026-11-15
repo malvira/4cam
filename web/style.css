@@ -56,12 +56,25 @@ table.tools button { padding: 1px 6px; font-size: 11px; }
 #summary .issues.ok { background: var(--ok-bg); color: var(--ok); }
 #summary .issues.bad { background: var(--bad-bg); color: var(--bad); }
 #summary ul { margin: 4px 0 0 18px; padding: 0; max-height: 120px; overflow: auto; }
-#views { flex: 1; display: flex; gap: 10px; min-height: 0; }
+#views { flex: 1; display: flex; gap: 0; min-height: 0; }
+.splitter { flex: none; background: transparent; position: relative; touch-action: none; outline: none; }
+.splitter::after { content: ""; position: absolute; background: var(--line); border-radius: 2px; transition: background 0.1s; }
+.splitter.v { width: 8px; cursor: col-resize; }
+.splitter.v::after { left: 3px; width: 2px; top: 0; bottom: 0; }
+.splitter.h { height: 8px; cursor: row-resize; }
+.splitter.h::after { top: 3px; height: 2px; left: 0; right: 0; }
+.splitter:hover::after, .splitter:focus-visible::after { background: var(--accent); }
+.splitter.active::after { background: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+body.resizing { user-select: none; }
+body.resizing-x, body.resizing-x * { cursor: col-resize !important; }
+body.resizing-y, body.resizing-y * { cursor: row-resize !important; }
+.tablewrap { height: 240px; overflow: auto; min-height: 80px; }
 #viewWrap { flex: 3; display: flex; flex-direction: column; min-width: 0; }
 #view3d { flex: 1; min-height: 260px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); position: relative; overflow: hidden; }
 #view3d canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block; }
-#side { width: 100%; height: 180px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
-#codeWrap { flex: 2; display: flex; flex-direction: column; min-width: 0; }
+#side { width: 100%; height: 180px; min-height: 80px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+#codeWrap { flex: 2; display: flex; flex-direction: column; min-width: 200px; }
+#viewWrap { min-width: 280px; }
 #gcode { flex: 1; resize: none; white-space: pre; overflow: auto; }
 .scrub input { flex: 1; }
 .oplegend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0; }
@@ -77,4 +90,6 @@ table.tools button { padding: 1px 6px; font-size: 11px; }
   #views { display: block; }
   #view3d { height: 320px; flex: none; }
   #gcode { height: 320px; width: 100%; }
+  .splitter { display: none; }
+  .tablewrap { height: auto; max-height: 300px; }
 }
