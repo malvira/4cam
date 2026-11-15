@@ -31,18 +31,49 @@
     </div>
     <div class="row">
       <label for="machine">Machine</label>
-      <select id="machine">
-        <option value="makera-z1">Makera Z1</option>
-        <option value="linuxcnc">LinuxCNC (G93)</option>
-        <option value="custom">Custom JSON...</option>
-      </select>
+      <select id="machine"></select>
     </div>
+    <div id="machineInfo" class="muted small"></div>
     <textarea id="machineJson" class="code hidden" rows="8" spellcheck="false" aria-label="Machine JSON"></textarea>
     <div class="row">
       <label for="mesh">Part mesh</label>
       <input id="mesh" type="file" accept=".stl,.3mf">
     </div>
     <div id="meshInfo" class="muted small"></div>
+    <details id="libraryPanel">
+      <summary>Tool library</summary>
+      <div class="row">
+        <select id="library" aria-label="Tool library"></select>
+        <button id="exportLibrary" type="button">Export</button>
+      </div>
+      <table id="toolTable" class="tools small"></table>
+      <div class="row">
+        <button id="addTool" type="button">Add tool</button>
+      </div>
+      <form id="toolForm" class="toolform hidden">
+        <label>Name <input id="tfName" required></label>
+        <label>Kind <select id="tfKind">
+          <option value="flat">flat</option><option value="ball">ball</option>
+          <option value="bull">bull nose</option><option value="vbit">V-bit</option>
+          <option value="drill">drill</option></select></label>
+        <label>Diameter <input id="tfDiameter" type="number" step="any" required></label>
+        <label>Angle (V) <input id="tfAngle" type="number" step="any"></label>
+        <label>Corner r <input id="tfCorner" type="number" step="any"></label>
+        <label>Flute length <input id="tfFlute" type="number" step="any"></label>
+        <label>Number <input id="tfNumber" type="number" step="1"></label>
+        <div class="row"><button id="tfSave" type="submit" class="primary">Save tool</button>
+          <button id="tfCancel" type="button">Cancel</button></div>
+      </form>
+      <div class="row small">
+        <label for="importFile">Import</label>
+        <input id="importFile" type="file" accept=".json,.tools,.mch,.f3d">
+      </div>
+      <div class="row small">
+        <input id="importUrl" type="url" placeholder="https://... (.tools, .json, .mch, .f3d)" aria-label="Import URL">
+        <button id="importUrlBtn" type="button">Import URL</button>
+      </div>
+      <div id="importInfo" class="muted small"></div>
+    </details>
     <details open>
       <summary>Quick settings</summary>
       <div id="quick" class="quick"></div>

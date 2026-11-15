@@ -139,7 +139,10 @@ async function loadExample(name) {
     writeJob(job);
     setMesh(stl ? new Uint8Array(stl) : null, stl ? "knob.stl (example)" : "");
   }
+  const jm = readJob().machine;
+  if (jm) renderMachines(jm);
   renderQuick();
+  renderTools();
 }
 
 function setMesh(bytes, name) {
@@ -148,10 +151,18 @@ function setMesh(bytes, name) {
   $("meshInfo").textContent = bytes ? `${name}: ${(bytes.length / 1024).toFixed(0)} KiB` : "No mesh loaded";
 }
 
+/** The machine for the engine: a built-in id, an imported profile object, or custom JSON. */
 function machineArg() {
   const v = $("machine").value;
-  if (v !== "custom") return v;
-  return $("machineJson").value;
+  if (v === "custom") return $("machineJson").value;
+  if (v.startsWith("user:")) return userMachines().find((m) => `user:${m.id}` === v) || null;
+  return v;
+}
+
+function currentMachine() {
+  const v = $("machine").value;
+  if (v.startsWith("user:")) return userMachines().find((m) => `user:${m.id}` === v);
+  return state.registry.machines.find((m) => m.id === v);
 }
 
 // ---------------------------------------------------------------- generate
@@ -171,7 +182,7 @@ async function generate() {
   $("generate").disabled = $("simulate").disabled = true;
   setStatus("Generating...", "busy");
   try {
-    const { result, ms } = await engine("planAndPost", job, machineArg(), state.mesh, { max_points: 150000 });
+    const { result, ms } = await engine("planAndPost", job, machineArg(), state.mesh, { max_points: 150000, libraries: libraries() });
     state.result = result;
     state.sim = null;
     state.job = job;
@@ -238,6 +249,7 @@ function selectTab(i) {
         ? `${p.issues.length} verifier issue(s):<ul>${p.issues.slice(0, 200).map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`
         : "Verifier: 0 issues (no fast plunges, no low rapids)"
     }</div>
+    ${limitsHtml(p.name, esc)}
     ${g && g.moves_checked ? `<div class="small">Gouge check: ${g.moves_checked.toLocaleString("en")} cut moves, deepest ${g.max_depth.toFixed(4)} mm into the part</div>` : ""}
     ${sim && !sim.samples ? `<div class="small muted">Not simulated: its tool has no full shape (a V-bit needs a diameter). The stock shown is from the programs before it.</div>` : ""}
     ${sim ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock</div>` : ""}`;
@@ -523,13 +535,15 @@ $("generate").addEventListener("click", generate);
 $("simulate").addEventListener("click", simulate);
 $("download").addEventListener("click", download);
 $("job").addEventListener("change", renderQuick);
-$("machine").addEventListener("change", async () => {
+$("machine").addEventListener("change", () => {
   const custom = $("machine").value === "custom";
   $("machineJson").classList.toggle("hidden", !custom);
   if (custom && !$("machineJson").value) {
-    const { result } = await engine("machine", "makera-z1");
-    $("machineJson").value = JSON.stringify(result, null, 2);
+    const z1 = state.registry.machines.find((m) => m.id === "makera-z1-4axis");
+    $("machineJson").value = JSON.stringify(z1, null, 2);
   }
+  store("4cam.machineSel", $("machine").value);
+  renderMachineInfo();
 });
 $("mesh").addEventListener("change", async () => {
   const f = $("mesh").files[0];
@@ -547,6 +561,10 @@ window.addEventListener("resize", drawSide);
   try {
     const { result } = await engine("version");
     $("version").textContent = `v${result.version}`;
+    state.registry = (await engine("profileList")).result;
+    initLibraries();
+    renderMachines(load("4cam.machineSel", "makera-z1-4axis"));
+    renderLibraries();
     await loadExample("knob");
     setMesh(null, "");
     $("generate").disabled = $("simulate").disabled = false;
@@ -556,3 +574,281 @@ window.addEventListener("resize", drawSide);
     showError(`${e.message}\nBuild it first: scripts/build-wasm.sh (or .ps1)`);
   }
 })();
+
+// ---------------------------------------------------------------- machines and tool libraries
+function load(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    return v == null ? fallback : JSON.parse(v);
+  } catch {
+    return fallback;
+  }
+}
+function store(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
+const userMachines = () => load("4cam.machines", []);
+const libraries = () => load("4cam.libraries", []);
+
+/** First run: "My tools" starts as a copy of the Makera starter library. */
+function initLibraries() {
+  if (libraries().length) return;
+  const starter = state.registry.libraries.find((l) => l.id === "makera-starter");
+  store("4cam.libraries", [{ ...structuredClone(starter), id: "my-tools", name: "My tools (from Makera starter)" }]);
+}
+
+function renderMachines(selected) {
+  const sel = $("machine");
+  sel.innerHTML = "";
+  const opt = (value, text) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    sel.appendChild(o);
+  };
+  for (const m of state.registry.machines) opt(m.id, m.name);
+  for (const m of userMachines()) opt(`user:${m.id}`, `${m.name} (imported)`);
+  opt("custom", "Custom JSON...");
+  const alias = { "makera-z1": "makera-z1-4axis", z1: "makera-z1-4axis", carvera: "makera-carvera-4axis", "carvera-air": "makera-carvera-air-4axis", linuxcnc: "linuxcnc-4axis" };
+  const want = alias[selected] || selected;
+  const values = [...sel.options].map((o) => o.value);
+  sel.value = values.includes(want) ? want : values.includes(`user:${want}`) ? `user:${want}` : "makera-z1-4axis";
+  $("machineJson").classList.toggle("hidden", sel.value !== "custom");
+  renderMachineInfo();
+}
+
+function renderMachineInfo() {
+  const m = currentMachine();
+  if (!m) {
+    $("machineInfo").textContent = "";
+    return;
+  }
+  const tr = (l) => {
+    const a = m.kinematics.linear.find((x) => x.letter === l);
+    return a && a.min != null && a.max != null ? `${l} ${a.max - a.min} mm` : null;
+  };
+  const parts = [
+    [tr("X"), tr("Y"), tr("Z")].filter(Boolean).join(", "),
+    m.spindle ? `spindle ${m.spindle.min_rpm}-${m.spindle.max_rpm} rpm` : "",
+    m.max_feed ? `feed cap ${m.max_feed} mm/min` : "",
+    m.rotary_envelope ? `4th axis ${m.rotary_envelope.max_diameter} x ${m.rotary_envelope.max_length} mm` : "",
+    m.tool_changer ? (m.tool_changer.kind === "atc" ? `ATC ${m.tool_changer.slots ?? ""} slots` : "manual tool change") : "",
+    `feeds: ${m.post.feed_mode.replace(/_/g, " ")}`,
+  ].filter(Boolean);
+  $("machineInfo").textContent = parts.join(" · ");
+}
+
+function limitsHtml(program, esc) {
+  const lim = (state.result.limits || []).filter((i) => !i.program || i.program === program);
+  if (!lim.length) return `<div class="small" id="limits">Machine limits: OK for ${esc(state.result.machine)}</div>`;
+  const bad = lim.some((i) => i.severity === "error");
+  return `<div id="limits" class="limits ${bad ? "bad" : ""}">Machine limits (${esc(state.result.machine)}):<ul>${lim
+    .map((i) => `<li>${i.severity}: ${esc(i.message)}</li>`)
+    .join("")}</ul></div>`;
+}
+
+let editing = null; // index of the tool being edited, or -1 for a new one
+
+function currentLibrary() {
+  const libs = libraries();
+  return libs.find((l) => l.id === $("library").value) || libs[0];
+}
+
+function saveLibrary(lib) {
+  store("4cam.libraries", libraries().map((l) => (l.id === lib.id ? lib : l)));
+}
+
+function renderLibraries(selected) {
+  const sel = $("library");
+  const keep = selected || sel.value || load("4cam.libSel", "my-tools");
+  sel.innerHTML = "";
+  for (const l of libraries()) {
+    const o = document.createElement("option");
+    o.value = l.id;
+    o.textContent = `${l.name} (${l.tools.length})`;
+    sel.appendChild(o);
+  }
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  renderTools();
+}
+
+const shapeText = (s) =>
+  s.kind === "vbit" ? `V ${s.angle}° Ø${s.diameter}` : s.kind === "bull" ? `bull Ø${s.diameter} r${s.corner_radius}` : `${s.kind} Ø${s.diameter}`;
+
+function renderTools() {
+  const lib = currentLibrary();
+  const tbl = $("toolTable");
+  tbl.innerHTML = "<tr><th>Tool</th><th>Shape</th><th>#</th><th></th></tr>";
+  if (!lib) return;
+  let jobTools = [];
+  try {
+    jobTools = (readJob().tools || []).map((t) => t.number);
+  } catch {}
+  lib.tools.forEach((t, i) => {
+    const tr = document.createElement("tr");
+    tr.dataset.tool = t.id;
+    const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const use = `<select data-use="${i}" aria-label="Use ${esc(t.name)} as"><option value="">use as...</option>${jobTools
+      .map((n) => `<option value="${n}">T${n}</option>`)
+      .join("")}<option value="new">new T</option></select>`;
+    tr.innerHTML = `<td>${esc(t.name)}</td><td>${esc(shapeText(t.shape))}</td><td>${t.number ?? ""}</td>
+      <td>${use} <button type="button" data-edit="${i}">Edit</button> <button type="button" data-del="${i}" aria-label="Remove ${esc(t.name)}">✕</button></td>`;
+    tbl.appendChild(tr);
+  });
+}
+
+/** Library tool -> job tool (the shapes the strategies use). */
+function toJobTool(t, number) {
+  const s = t.shape;
+  const base = { number, description: t.name };
+  if (t.flute_length) base.flute_length = t.flute_length;
+  if (s.kind === "flat" || s.kind === "bull") return { ...base, kind: "flat", diameter: s.diameter };
+  if (s.kind === "ball") return { ...base, kind: "ball", diameter: s.diameter };
+  if (s.kind === "vbit") return { ...base, kind: "vbit", angle: s.angle, diameter: s.diameter };
+  throw new Error(`${t.name}: ${s.kind} tools are not used by the strategies yet`);
+}
+
+function useTool(i, target) {
+  showError("");
+  const t = currentLibrary().tools[i];
+  try {
+    const job = readJob();
+    job.tools = job.tools || [];
+    const number = target === "new" ? Math.max(0, ...job.tools.map((x) => x.number)) + 1 : +target;
+    const jt = toJobTool(t, number);
+    const k = job.tools.findIndex((x) => x.number === number);
+    if (k >= 0) job.tools[k] = jt;
+    else job.tools.push(jt);
+    writeJob(job);
+    renderQuick();
+    renderTools();
+    $("importInfo").textContent = `T${number} is now ${t.name}`;
+  } catch (e) {
+    showError(e.message);
+  }
+}
+
+function openForm(i) {
+  editing = i;
+  const t = i >= 0 ? currentLibrary().tools[i] : { name: "", shape: { kind: "flat", diameter: 3.175 } };
+  $("tfName").value = t.name;
+  $("tfKind").value = ["flat", "ball", "bull", "vbit", "drill"].includes(t.shape.kind) ? t.shape.kind : "ball";
+  $("tfDiameter").value = t.shape.diameter;
+  $("tfAngle").value = t.shape.angle ?? "";
+  $("tfCorner").value = t.shape.corner_radius ?? "";
+  $("tfFlute").value = t.flute_length ?? "";
+  $("tfNumber").value = t.number ?? "";
+  $("toolForm").classList.remove("hidden");
+  $("tfName").focus();
+}
+
+function saveForm(ev) {
+  ev.preventDefault();
+  showError("");
+  const lib = currentLibrary();
+  const num = (id) => ($(id).value === "" ? undefined : +$(id).value);
+  const kind = $("tfKind").value;
+  const shape = { kind, diameter: num("tfDiameter") };
+  if (kind === "vbit") shape.angle = num("tfAngle") ?? 90;
+  if (kind === "bull") shape.corner_radius = num("tfCorner") ?? 0;
+  if (kind === "drill") shape.point_angle = 118;
+  if (!(shape.diameter > 0)) return showError("Diameter must be > 0");
+  if (kind === "vbit" && !(shape.angle > 0 && shape.angle < 180)) return showError("V-bit angle must be between 0 and 180");
+  const old = editing >= 0 ? lib.tools[editing] : {};
+  const name = $("tfName").value.trim() || "tool";
+  const tool = { ...old, id: old.id || `${name.toLowerCase().replace(/[^a-z0-9.]+/g, "-")}-${Date.now() % 100000}`, name, shape };
+  const flute = num("tfFlute");
+  const number = num("tfNumber");
+  if (flute) tool.flute_length = flute;
+  else delete tool.flute_length;
+  if (number) tool.number = number;
+  else delete tool.number;
+  if (editing >= 0) lib.tools[editing] = tool;
+  else lib.tools.push(tool);
+  saveLibrary(lib);
+  $("toolForm").classList.add("hidden");
+  renderLibraries(lib.id);
+}
+
+async function importBytes(bytes, name) {
+  showError("");
+  const { result } = await engine("importProfile", bytes, name);
+  const n = result.notes || [];
+  const notes = n.length ? ` (${n.length} note${n.length > 1 ? "s" : ""}: ${n.slice(0, 3).join("; ")})` : "";
+  if (result.kind === "tools") {
+    const libs = libraries().filter((l) => l.id !== result.profile.id);
+    libs.push(result.profile);
+    store("4cam.libraries", libs);
+    renderLibraries(result.profile.id);
+    store("4cam.libSel", result.profile.id);
+    $("importInfo").textContent = `Imported tool library "${result.profile.name}": ${result.profile.tools.length} tools${notes}`;
+  } else {
+    const ms = userMachines().filter((m) => m.id !== result.profile.id);
+    ms.push(result.profile);
+    store("4cam.machines", ms);
+    renderMachines(result.profile.id);
+    store("4cam.machineSel", $("machine").value);
+    $("importInfo").textContent = `Imported machine "${result.profile.name}"${notes}`;
+  }
+}
+
+function downloadJson(obj, file) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2) + "\n"], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = file;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+$("library").addEventListener("change", () => {
+  store("4cam.libSel", $("library").value);
+  renderTools();
+});
+$("toolTable").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  if (b.dataset.edit) openForm(+b.dataset.edit);
+  if (b.dataset.del) {
+    const lib = currentLibrary();
+    lib.tools.splice(+b.dataset.del, 1);
+    saveLibrary(lib);
+    renderLibraries(lib.id);
+  }
+});
+$("toolTable").addEventListener("change", (ev) => {
+  const s = ev.target.closest("select[data-use]");
+  if (s && s.value) useTool(+s.dataset.use, s.value);
+});
+$("addTool").addEventListener("click", () => openForm(-1));
+$("toolForm").addEventListener("submit", saveForm);
+$("tfCancel").addEventListener("click", () => $("toolForm").classList.add("hidden"));
+$("exportLibrary").addEventListener("click", () => {
+  const l = currentLibrary();
+  if (l) downloadJson(l, `${l.id}.tools.json`);
+});
+$("importFile").addEventListener("change", async () => {
+  const f = $("importFile").files[0];
+  if (!f) return;
+  try {
+    await importBytes(new Uint8Array(await f.arrayBuffer()), f.name);
+  } catch (e) {
+    showError(e.message);
+  }
+});
+$("importUrlBtn").addEventListener("click", async () => {
+  const url = $("importUrl").value.trim();
+  if (!url) return;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+    await importBytes(new Uint8Array(await r.arrayBuffer()), decodeURIComponent(url.split("/").pop().split("?")[0]));
+  } catch (e) {
+    showError(`Import failed: ${e.message}`);
+  }
+});
+$("job").addEventListener("change", renderTools);

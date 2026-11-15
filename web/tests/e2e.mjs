@@ -178,10 +178,42 @@ try {
   await shot("03_knob_simulated");
 
   // 5. LinuxCNC machine (G93)
-  await js("document.getElementById('machine').value = 'linuxcnc'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
+  await js("document.getElementById('machine').value = 'linuxcnc-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
   await waitDone("LinuxCNC generation", 60000);
   const g93 = await js("document.getElementById('gcode').value.includes('\\nG93 ')");
   check("LinuxCNC post uses G93 inverse time", g93);
+
+  // 5b. machine profiles: the Carvera, with its limits checked
+  await js("document.getElementById('machine').value = 'makera-carvera-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
+  await waitDone("Carvera generation", 60000);
+  const info = await js("document.getElementById('machineInfo').textContent");
+  check("Carvera profile shows its limits", /X 360 mm/.test(info) && /ATC 6 slots/.test(info), info);
+  const lim = await js("document.getElementById('limits').innerText");
+  check("limit check flags the feed cap (F5209 > 4000 mm/min)", /Carvera/.test(lim) && /F5209/.test(lim), lim.split("\n")[1] || lim);
+
+  // 5c. tool library: import a Fusion 360 library by URL, edit a tool, use it as T1
+  await js("document.getElementById('libraryPanel').open = true; document.getElementById('importUrl').value = new URL('../tests/fixtures/fusion-tool-library.json', location).href; document.getElementById('importUrlBtn').click(); true");
+  const imported = await waitFor(() => js("document.getElementById('importInfo').textContent"), "the library import", 10000);
+  check("Fusion tool library imports from a URL", /3 tools/.test(imported) && (await js("document.getElementById('library').value")) === "fusion-tool-library", imported);
+  await js("document.querySelector('#toolTable button[data-edit=\"0\"]').click(); document.getElementById('tfName').value = 'Edited Flat 3.0'; document.getElementById('tfDiameter').value = '3.0'; document.getElementById('tfSave').click(); true");
+  const row = await js("document.querySelector('#toolTable tr[data-tool]').innerText");
+  check("editing a tool updates the library", /Edited Flat 3\.0/.test(row) && /Ø3\b/.test(row), row.replace(/\s+/g, " "));
+  await js("const s = document.querySelector('#toolTable select[data-use=\"0\"]'); s.value = '1'; s.dispatchEvent(new Event('change', { bubbles: true })); true");
+  const t1 = await js("JSON.parse(document.getElementById('job').value).tools.find(t => t.number === 1)");
+  check("library tool becomes the job's T1", t1.description === "Edited Flat 3.0" && t1.diameter === 3 && t1.kind === "flat", JSON.stringify(t1));
+  await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
+  await waitDone("generation with the library tool", 60000);
+  await js("document.querySelectorAll('#tabs button')[0].click()");
+  const head = await js("document.getElementById('gcode').value.split('\\n').slice(0, 3).join(' | ')");
+  const issues0 = await js("document.querySelector('#summary .issues').textContent");
+  check("generates with the edited tool", head.includes("(T1 Edited Flat 3.0)") && issues0.includes("0 issues"), head);
+  await shot("07_tool_library");
+  await S("Page.reload");
+  await waitFor(async () => (await state()) === "ready", "reload", 30000);
+  const kept = await js("[...document.getElementById('library').options].map(o => o.value).join(',') + ' / ' + JSON.stringify(JSON.parse(localStorage.getItem('4cam.libraries')).find(l => l.id === 'fusion-tool-library').tools[0].name)");
+  check("tool libraries persist across reloads", /fusion-tool-library/.test(kept) && /Edited Flat 3\.0/.test(kept), kept);
+  await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+  await sleep(500);
 
   // 6. quick settings edit the JSON
   await js("const i = document.getElementById('q_stock_radius'); i.value = 13; i.dispatchEvent(new Event('change')); true");
@@ -194,7 +226,7 @@ try {
   check("invalid JSON shows an error", /not valid/.test(err), err.slice(0, 60));
 
   // 8. mesh example: rough + two finishes against knob.stl
-  await js("document.getElementById('machine').value = 'makera-z1'; document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
+  await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
   await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('knob.stl')"), "the example mesh", 15000);
   await js("document.getElementById('generate').click()");
   await waitDone("mesh job generation", 240000);
