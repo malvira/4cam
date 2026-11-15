@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4cam</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <strong>4cam</strong> <span class="muted">4th-axis rotary CAM</span>
+  <span id="version" class="muted"></span>
+  <span class="spacer"></span>
+  <span id="status" role="status">Loading engine...</span>
+</header>
+<main>
+  <section id="left">
+    <div class="row">
+      <label for="example">Example</label>
+      <select id="example">
+        <option value="knob">Knob: profile + knurl (Makera Z1 goldens)</option>
+        <option value="knob_finish">Knob: mesh rough + finish (needs knob.stl)</option>
+      </select>
+      <button id="loadExample" type="button">Load</button>
+    </div>
+    <div class="row">
+      <label for="machine">Machine</label>
+      <select id="machine">
+        <option value="makera-z1">Makera Z1</option>
+        <option value="linuxcnc">LinuxCNC (G93)</option>
+        <option value="custom">Custom JSON...</option>
+      </select>
+    </div>
+    <textarea id="machineJson" class="code hidden" rows="8" spellcheck="false" aria-label="Machine JSON"></textarea>
+    <div class="row">
+      <label for="mesh">Part mesh</label>
+      <input id="mesh" type="file" accept=".stl,.3mf">
+    </div>
+    <div id="meshInfo" class="muted small"></div>
+    <details open>
+      <summary>Quick settings</summary>
+      <div id="quick" class="quick"></div>
+    </details>
+    <details open>
+      <summary>Job JSON</summary>
+      <textarea id="job" class="code" rows="18" spellcheck="false" aria-label="Job JSON"></textarea>
+    </details>
+    <div class="row">
+      <button id="generate" type="button" class="primary" disabled>Generate</button>
+      <button id="simulate" type="button" disabled>Simulate stock</button>
+    </div>
+    <div id="error" class="error hidden" role="alert"></div>
+  </section>
+  <section id="right">
+    <div id="tabs" role="tablist"></div>
+    <div id="summary"></div>
+    <div id="views">
+      <div id="viewWrap">
+        <div id="view3d" aria-label="3D preview"></div>
+        <div id="viewNote" class="muted small"></div>
+        <div class="row scrub">
+          <label for="scrub">Moves</label>
+          <input id="scrub" type="range" min="0" max="0" value="0" disabled>
+          <span id="scrubLabel" class="small"></span>
+        </div>
+        <div class="row small">
+          <label><input id="showRapids" type="checkbox" checked> rapids</label>
+          <label><input id="showStock" type="checkbox" checked> stock</label>
+          <label><input id="showPart" type="checkbox" checked> part</label>
+          <label><input id="showSim" type="checkbox" checked> simulated stock</label>
+        </div>
+        <canvas id="side" width="900" height="220" aria-label="Side view: X against radius"></canvas>
+      </div>
+      <div id="codeWrap">
+        <div class="row">
+          <button id="download" type="button" disabled>Download .nc</button>
+          <span id="codeInfo" class="small muted"></span>
+        </div>
+        <textarea id="gcode" class="code" readonly spellcheck="false" aria-label="G-code"></textarea>
+      </div>
+    </div>
+  </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

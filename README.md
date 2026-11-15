@@ -14,6 +14,8 @@ program.
 - **Milestone 1** (rotary finishing): STL (binary and ASCII) and 3MF import, a radial
   drop-cutter for flat, ball and V-bit tools with a spatial index, the `rotary_finish`
   strategy, and a LinuxCNC profile that uses G93 inverse-time feeds.
+- **Milestone 3** (web frontend): a static web app that runs the engine in the browser
+  (WebAssembly in a Web Worker). It is tested end to end in headless Chrome/Edge.
 - **Milestone 2** (roughing and simulation):
   - `rotary_rough`: radial step-down roughing from a mesh.
   - A radial-heightmap stock model that simulates material removal.
@@ -82,6 +84,50 @@ The other commands:
 
 Built-in machines are `makera-z1` (the default) and `linuxcnc`. To use another machine,
 pass `--machine path/to/machine.json` (see `machines/`).
+
+## Web app
+
+Build the engine and serve the repository. Either command does both:
+
+```bash
+sh web/serve.sh
+```
+
+```powershell
+powershell -File web/serve.ps1
+```
+
+Then open <http://localhost:8000/web/>. Nothing is uploaded: the engine runs in your
+browser.
+
+- **Left panel:**
+  - an example picker;
+  - the machine (Makera Z1, LinuxCNC, or custom JSON);
+  - a part mesh upload (STL or 3MF);
+  - quick settings that write into the job JSON (stock, tool sizes, feeds, steps);
+  - the job JSON editor.
+- **Generate:** shows one tab per program with:
+  - the line count, verifier issues and gouge check;
+  - the G-code, with **Download .nc**;
+  - a 3D view (three.js, loaded from jsDelivr), with the toolpath wrapped around the part
+    (cuts blue, rapids red), the stock and the part, and a move scrubber;
+  - a 2D side view.
+- **Simulate stock:** runs the material-removal simulation and shows the stock surface,
+  coloured by the material left on the part.
+
+`node web/tests/e2e.mjs` drives the page in an installed Chrome or Edge in headless mode,
+over the DevTools protocol, with no npm packages. It checks:
+
+- the knob programs match the golden G-code byte for byte, with 0 issues;
+- the 3D view renders and the scrubber works;
+- **Download .nc** saves the right file;
+- the simulation shows no gouges;
+- the LinuxCNC post uses G93;
+- quick settings and error messages work;
+- the mesh rough/finish job;
+- the phone layout.
+
+The test saves screenshots to `web/tests/screenshots/`.
 
 ## Python and WebAssembly
 
@@ -171,6 +217,7 @@ The tests cover:
 - `crates/fourcam-cli`: the `4cam` binary.
 - `crates/fourcam-wasm`: the WebAssembly build and its JSON API (`js/fourcam.js` wraps it).
 - `crates/fourcam-py`: the Python bindings (pyo3, abi3, Python 3.9 or later).
+- `web/`: the browser app (`index.html`, `app.js`, `worker.js`) and its end-to-end test.
 - `scripts/`: the build and check scripts.
 - `machines/`: machine profiles.
 - `examples/`: example jobs and their outputs.

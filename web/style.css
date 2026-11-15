@@ -1,0 +1,67 @@
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #6b7280; --line: #d9dde3;
+  --accent: #2563eb; --bad: #b91c1c; --bad-bg: #fde8e8; --ok: #047857; --ok-bg: #e3f6ee;
+  --code-bg: #fbfbfc;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c; --panel: #1c2027; --ink: #e5e7eb; --muted: #9aa3af; --line: #2e343d;
+    --accent: #60a5fa; --bad: #fca5a5; --bad-bg: #3b1d1d; --ok: #6ee7b7; --ok-bg: #12302a;
+    --code-bg: #171a20;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; display: flex; flex-direction: column; }
+header { display: flex; gap: 10px; align-items: baseline; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.spacer { flex: 1; }
+main { flex: 1; display: flex; min-height: 0; }
+#left { width: 400px; min-width: 300px; padding: 10px 12px; overflow: auto; background: var(--panel); border-right: 1px solid var(--line); }
+#right { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 8px 12px; }
+.row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+.row > label:first-child { width: 80px; color: var(--muted); }
+select, input[type=number], input[type=file] { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
+select { flex: 1; min-width: 0; }
+button { font: inherit; padding: 5px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: inherit; cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+.code { width: 100%; font: 12px/1.35 ui-monospace, Consolas, monospace; background: var(--code-bg); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 6px; resize: vertical; }
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.error { color: var(--bad); background: var(--bad-bg); padding: 8px; border-radius: 4px; white-space: pre-wrap; }
+details { margin: 8px 0; }
+summary { cursor: pointer; color: var(--muted); }
+.quick { display: grid; grid-template-columns: 1fr 90px; gap: 4px 8px; align-items: center; margin-top: 6px; }
+.quick label { font-size: 12px; color: var(--muted); }
+.quick input { width: 90px; }
+.quick .group { grid-column: 1 / -1; font-weight: 600; font-size: 12px; margin-top: 6px; }
+#tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+#tabs button { border-bottom: none; border-radius: 4px 4px 0 0; }
+#tabs button[aria-selected=true] { background: var(--panel); border-color: var(--accent); font-weight: 600; }
+#tabs .badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; }
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.bad { background: var(--bad-bg); color: var(--bad); }
+#summary { padding: 6px 0; }
+#summary .issues { margin: 4px 0; padding: 6px 10px; border-radius: 4px; }
+#summary .issues.ok { background: var(--ok-bg); color: var(--ok); }
+#summary .issues.bad { background: var(--bad-bg); color: var(--bad); }
+#summary ul { margin: 4px 0 0 18px; padding: 0; max-height: 120px; overflow: auto; }
+#views { flex: 1; display: flex; gap: 10px; min-height: 0; }
+#viewWrap { flex: 3; display: flex; flex-direction: column; min-width: 0; }
+#view3d { flex: 1; min-height: 260px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); position: relative; overflow: hidden; }
+#view3d canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block; }
+#side { width: 100%; height: 180px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+#codeWrap { flex: 2; display: flex; flex-direction: column; min-width: 0; }
+#gcode { flex: 1; resize: none; white-space: pre; overflow: auto; }
+.scrub input { flex: 1; }
+@media (max-width: 900px) {
+  html, body { height: auto; }
+  body { display: block; }
+  main { display: block; }
+  #left { width: auto; min-width: 0; overflow: visible; border-right: none; border-bottom: 1px solid var(--line); }
+  #right { display: block; padding: 8px; }
+  #views { display: block; }
+  #view3d { height: 320px; flex: none; }
+  #gcode { height: 320px; width: 100%; }
+}
