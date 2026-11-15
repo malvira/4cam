@@ -48,6 +48,7 @@ pub fn post(tp: &Toolpath, machine: &Machine) -> String {
     for mv in &tp.moves {
         match mv {
             Move::Comment { text } => out.push(format!("({text})")),
+            Move::Operation { .. } => {}
             Move::ToolChange { tool, rpm } => {
                 out.push(fill(&machine.tool_change, *tool, *rpm, &safe));
                 out.push(fill(&machine.spindle_on, *tool, *rpm, &safe));

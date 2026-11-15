@@ -280,3 +280,93 @@ fn knurl_program_cuts_the_designed_diamonds() {
     eprintln!("chamfer: worst |surface - (7.2 - x)| = {chamfer_worst:.3} mm over x = -0.6..0");
     assert!(chamfer_worst < 0.05, "{chamfer_worst}");
 }
+
+#[test]
+fn playback_matches_batch_and_tags_operations() {
+    // the cut knob G-code on a coarse grid, both programs on one bar
+    let job = job("knob.job.json");
+    let tps = plan(&job).unwrap();
+    let grid = simulate_job(&job, &tps[..1], None, 0.1, 180, 0.02)
+        .unwrap()
+        .stock
+        .grid;
+    let cutters = |t: u32| {
+        job.tool(t)
+            .and_then(|d| fourcam::cutter_for(t, d.shape).ok())
+    };
+    let step = 0.2;
+
+    // batch: whole programs
+    let mut batch = sim::RadialMap::filled(grid, job.stock.radius);
+    for tp in &tps {
+        sim::simulate(&mut batch, tp, &cutters, step);
+    }
+
+    // playback: forwards, back to the middle (restores a snapshot), then to the end
+    let mut pb = sim::Playback::new(
+        sim::RadialMap::filled(grid, job.stock.radius),
+        &tps,
+        &cutters,
+        step,
+    );
+    let n = pb.len();
+    assert!(n > 30_000, "{n} segments");
+    let mid = n / 2;
+    pb.seek(mid);
+    let at_mid = pb.stock.clone();
+    let dirty = pb.seek(n).unwrap();
+    assert!(dirty.0 <= dirty.1);
+    assert_eq!(
+        pb.stock.r, batch.r,
+        "playback to the end differs from the batch simulation"
+    );
+    assert_eq!(pb.stock.op, batch.op);
+    let back = pb.seek(mid);
+    assert_eq!(
+        back,
+        Some((0, grid.nx - 1)),
+        "jumping back redraws everything"
+    );
+    assert_eq!(
+        pb.stock.r, at_mid.r,
+        "jumping back to the middle differs from going forward"
+    );
+    assert_eq!(pb.stock.op, at_mid.op);
+    pb.seek(n);
+    assert_eq!(pb.stock.r, batch.r);
+
+    // operation ids: 0 = rotary_turning, 1 = helical_knurl, 2 = flank_chamfer (tags = id + 1)
+    let ops: Vec<(u32, String)> = tps
+        .iter()
+        .flat_map(|tp| tp.moves.iter())
+        .filter_map(|m| match m {
+            fourcam::Move::Operation { id, kind } => Some((*id, kind.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ops,
+        vec![
+            (0, "rotary_turning".into()),
+            (1, "helical_knurl".into()),
+            (2, "flank_chamfer".into())
+        ]
+    );
+    let g = batch.grid;
+    let col = |x: f64| ((x - g.x0) / g.dx) as usize;
+    let tags_at = |x: f64| -> std::collections::BTreeSet<u16> {
+        let i = col(x);
+        (0..g.na).map(|j| batch.op[i * g.na + j]).collect()
+    };
+    // boss and neck: only the turning cut them
+    assert_eq!(tags_at(-16.5), [1].into_iter().collect());
+    assert_eq!(tags_at(-20.0), [1].into_iter().collect());
+    // knurled body: the knurl cut every cell around (its V also skims the turning's
+    // finishing scallop off the diamond tops)
+    let body = tags_at(-7.5);
+    assert_eq!(body, [2].into_iter().collect(), "{body:?}");
+    // front chamfer region (tip at x=0.5): the V-bit chamfer pass
+    assert!(tags_at(0.3).contains(&3), "{:?}", tags_at(0.3));
+    // stock behind everything is untouched
+    assert_eq!(tags_at(g.x0 + 0.05), [0].into_iter().collect());
+}

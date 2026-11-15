@@ -168,7 +168,7 @@ pub fn cutter_for(number: u32, shape: ToolShape) -> Result<Cutter, Error> {
     })
 }
 
-fn plan_program(ctx: &mut Ctx, prog: &Program) -> Result<Toolpath, Error> {
+fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Toolpath, Error> {
     let job = ctx.job;
     let safe_r = job.safe_r();
     let mut b = Builder::new();
@@ -212,6 +212,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program) -> Result<Toolpath, Error> {
                 Some(cutter_for(number, shape)?)
             }
         };
+        b.operation(*next_op, op_name(op));
+        *next_op += 1;
         if current != Some(number) {
             b.tool_change(number, job.spindle_rpm);
             b.rapid_r(safe_r);
@@ -277,9 +279,10 @@ pub fn plan_with_mesh(job: &Job, mesh: Option<&Mesh>) -> Result<Vec<Toolpath>, E
         mesh,
         revolved: None,
     };
+    let mut next_op = 0;
     job.programs
         .iter()
-        .map(|p| plan_program(&mut ctx, p))
+        .map(|p| plan_program(&mut ctx, p, &mut next_op))
         .collect()
 }
 
@@ -435,7 +438,7 @@ pub fn gouge_check(
                     r = Some(nr);
                     a = na;
                 }
-                Move::Comment { .. } => {}
+                Move::Comment { .. } | Move::Operation { .. } => {}
             }
         }
         out.push(rep);

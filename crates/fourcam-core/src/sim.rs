@@ -56,6 +56,8 @@ impl Grid {
 pub struct RadialMap {
     pub grid: Grid,
     pub r: Vec<f32>,
+    /// Which operation last cut each cell: operation id + 1 (0 = never cut).
+    pub op: Vec<u16>,
 }
 
 impl RadialMap {
@@ -63,6 +65,7 @@ impl RadialMap {
         RadialMap {
             grid,
             r: vec![r as f32; grid.len()],
+            op: vec![0; grid.len()],
         }
     }
 
@@ -255,7 +258,126 @@ pub struct SimStats {
     pub rapid_hits: Vec<usize>,
 }
 
-/// Remove material along a toolpath. `cutters[tool]` gives each tool's shape; moves made
+/// One straight tool move in a job, in order: what playback steps through.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Segment {
+    /// Tip position before the move, if known: (x, r, a).
+    pub from: Option<[f64; 3]>,
+    /// Tip position after the move.
+    pub to: [f64; 3],
+    pub rapid: bool,
+    /// Tool loaded at the time.
+    pub tool: Option<u32>,
+    /// Operation id + 1 (0 before the first operation marker).
+    pub op: u16,
+    /// Index of the toolpath (program) in the job.
+    pub program: u16,
+    /// Index of the move in its toolpath.
+    pub move_index: usize,
+}
+
+/// The job's motion as a flat list of segments (each program starts from an unknown position
+/// with A at 0, as on the machine after `G92 A0` or a fresh start).
+pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
+    let mut out = Vec::new();
+    for (p, tp) in tps.iter().enumerate() {
+        let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0f64);
+        let mut tool = None;
+        let mut op = 0u16;
+        for (idx, m) in tp.moves.iter().enumerate() {
+            let (nx, nr, na, rapid) = match *m {
+                Move::ToolChange { tool: t, .. } => {
+                    tool = Some(t);
+                    continue;
+                }
+                Move::Operation { id, .. } => {
+                    op = (id + 1).min(u16::MAX as u32) as u16;
+                    continue;
+                }
+                Move::Comment { .. } => continue,
+                Move::Rapid {
+                    x: mx,
+                    r: mr,
+                    a: ma,
+                } => (mx.or(x), mr.or(r), ma.unwrap_or(a), true),
+                Move::Plunge { r: mr, .. } => (x, Some(mr), a, false),
+                Move::Cut {
+                    x: mx,
+                    r: mr,
+                    a: ma,
+                    ..
+                } => (Some(mx), Some(mr), ma, false),
+            };
+            if let (Some(x1), Some(r1)) = (nx, nr) {
+                out.push(Segment {
+                    from: x.zip(r).map(|(x0, r0)| [x0, r0, a]),
+                    to: [x1, r1, na],
+                    rapid,
+                    tool,
+                    op,
+                    program: p as u16,
+                    move_index: idx,
+                });
+            }
+            x = nx;
+            r = nr;
+            a = na;
+        }
+    }
+    out
+}
+
+/// What one segment did to the stock.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SegmentEffect {
+    pub samples: usize,
+    pub cells_cut: usize,
+    /// A rapid that removed material.
+    pub rapid_hit: bool,
+    /// Rows (x cells) touched: `(first, last)`.
+    pub rows: Option<(usize, usize)>,
+}
+
+/// Remove material along one segment, sampling at most `step` mm apart.
+pub fn apply_segment(
+    stock: &mut RadialMap,
+    seg: &Segment,
+    cutter: Option<&Cutter>,
+    step: f64,
+) -> SegmentEffect {
+    let mut e = SegmentEffect::default();
+    let (Some(c), Some([x0, r0, a0])) = (cutter, seg.from) else {
+        return e;
+    };
+    let [x1, r1, a1] = seg.to;
+    // a machine moves all axes linearly together
+    let arc = 0.5 * (r0 + r1) * (a1 - a0).to_radians().abs();
+    let len = (x1 - x0).abs().max((r1 - r0).abs()).max(arc);
+    let n = ((len / step).ceil() as usize).max(1);
+    for k in 1..=n {
+        let t = k as f64 / n as f64;
+        let (cut, rows) = stamp(
+            stock,
+            c,
+            x0 + (x1 - x0) * t,
+            r0 + (r1 - r0) * t,
+            a0 + (a1 - a0) * t,
+            seg.op,
+        );
+        e.samples += 1;
+        if let Some((lo, hi)) = rows {
+            e.rows = Some(e.rows.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+        }
+        if seg.rapid && cut > 0 {
+            e.rapid_hit = true;
+        } else {
+            e.cells_cut += cut;
+        }
+    }
+    e
+}
+
+/// Remove material along a toolpath. `cutter_for(tool)` gives each tool's shape; moves made
 /// with a tool that has no cutter (e.g. a V-bit without a diameter) are skipped.
 /// `step` is the largest spacing between evaluated tool positions (mm).
 pub fn simulate(
@@ -265,73 +387,123 @@ pub fn simulate(
     step: f64,
 ) -> SimStats {
     let mut st = SimStats::default();
-    let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0f64);
-    let mut cutter: Option<Cutter> = None;
-    for (idx, m) in tp.moves.iter().enumerate() {
-        let (nx, nr, na, rapid) = match *m {
-            Move::ToolChange { tool, .. } => {
-                cutter = cutter_for(tool);
-                continue;
-            }
-            Move::Comment { .. } => continue,
-            Move::Rapid {
-                x: mx,
-                r: mr,
-                a: ma,
-            } => (mx.or(x), mr.or(r), ma.unwrap_or(a), true),
-            Move::Plunge { r: mr, .. } => (x, Some(mr), a, false),
-            Move::Cut {
-                x: mx,
-                r: mr,
-                a: ma,
-                ..
-            } => (Some(mx), Some(mr), ma, false),
-        };
-        if let (Some(c), Some(x0), Some(r0), Some(x1), Some(r1)) = (cutter, x, r, nx, nr) {
-            // a machine moves all axes linearly together
-            let arc = 0.5 * (r0 + r1) * (na - a).to_radians().abs();
-            let len = (x1 - x0).abs().max((r1 - r0).abs()).max(arc);
-            let n = ((len / step).ceil() as usize).max(1);
-            let mut hit = false;
-            for k in 1..=n {
-                let t = k as f64 / n as f64;
-                let cut = stamp(
-                    stock,
-                    &c,
-                    x0 + (x1 - x0) * t,
-                    r0 + (r1 - r0) * t,
-                    a + (na - a) * t,
-                );
-                st.samples += 1;
-                if rapid && cut > 0 {
-                    hit = true;
-                } else {
-                    st.cells_cut += cut;
-                }
-            }
-            if hit {
-                st.rapid_hits.push(idx);
-            }
+    for seg in segments(std::slice::from_ref(tp)) {
+        let c = seg.tool.and_then(cutter_for);
+        let e = apply_segment(stock, &seg, c.as_ref(), step);
+        st.samples += e.samples;
+        st.cells_cut += e.cells_cut;
+        if e.rapid_hit {
+            st.rapid_hits.push(seg.move_index);
         }
-        x = nx;
-        r = nr;
-        a = na;
     }
     st
 }
 
+/// Step through a whole job's material removal, forwards or backwards. Stock snapshots every
+/// `every` segments make jumping back cheap.
+pub struct Playback {
+    pub segments: Vec<Segment>,
+    cutters: std::collections::HashMap<u32, Cutter>,
+    step: f64,
+    pub stock: RadialMap,
+    initial: RadialMap,
+    pos: usize,
+    every: usize,
+    checkpoints: Vec<(usize, RadialMap)>,
+}
+
+impl Playback {
+    pub fn new(
+        initial: RadialMap,
+        tps: &[Toolpath],
+        cutter_for: &dyn Fn(u32) -> Option<Cutter>,
+        step: f64,
+    ) -> Playback {
+        let segments = segments(tps);
+        let cutters = segments
+            .iter()
+            .filter_map(|s| s.tool)
+            .filter_map(|t| cutter_for(t).map(|c| (t, c)))
+            .collect();
+        Playback {
+            segments,
+            cutters,
+            step,
+            stock: initial.clone(),
+            initial,
+            pos: 0,
+            every: 1000,
+            checkpoints: Vec::new(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// Segments applied so far.
+    pub fn position(&self) -> usize {
+        self.pos
+    }
+
+    /// Show the stock after the first `n` segments. Returns the rows that may have changed.
+    pub fn seek(&mut self, n: usize) -> Option<(usize, usize)> {
+        let n = n.min(self.segments.len());
+        let mut dirty: Option<(usize, usize)> = None;
+        if n < self.pos {
+            let (at, snap) = self
+                .checkpoints
+                .iter()
+                .rev()
+                .find(|(at, _)| *at <= n)
+                .map(|(at, s)| (*at, s.clone()))
+                .unwrap_or((0, self.initial.clone()));
+            self.stock = snap;
+            self.pos = at;
+            dirty = Some((0, self.stock.grid.nx.saturating_sub(1)));
+        }
+        while self.pos < n {
+            let seg = self.segments[self.pos];
+            let c = seg.tool.and_then(|t| self.cutters.get(&t));
+            let e = apply_segment(&mut self.stock, &seg, c, self.step);
+            if let Some((lo, hi)) = e.rows {
+                dirty = Some(dirty.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+            }
+            self.pos += 1;
+            if self.pos % self.every == 0 && !self.checkpoints.iter().any(|(at, _)| *at == self.pos)
+            {
+                self.checkpoints.push((self.pos, self.stock.clone()));
+                self.checkpoints.sort_by_key(|(at, _)| *at);
+            }
+        }
+        dirty
+    }
+}
+
 /// Lower every cell inside the tool at tip position (x, r, a). Returns cells changed by more
 /// than 1 µm.
-fn stamp(stock: &mut RadialMap, c: &Cutter, x: f64, r: f64, a_deg: f64) -> usize {
+fn stamp(
+    stock: &mut RadialMap,
+    c: &Cutter,
+    x: f64,
+    r: f64,
+    a_deg: f64,
+    tag: u16,
+) -> (usize, Option<(usize, usize)>) {
     let g = stock.grid;
     let rad = c.radius();
     let phi_t = (PI / 2.0 - a_deg.to_radians()).rem_euclid(TAU);
     let i0 = (((x - rad - g.x0) / g.dx - 0.5).ceil()).max(0.0) as usize;
     let i1 = ((x + rad - g.x0) / g.dx - 0.5).floor();
-    if i1 < 0.0 {
-        return 0;
+    if i1 < 0.0 || i0 >= g.nx {
+        return (0, None);
     }
     let i1 = (i1 as usize).min(g.nx - 1);
+    let mut rows: Option<(usize, usize)> = None;
     let half = if r <= rad { PI / 2.0 } else { (rad / r).asin() };
     let dphi = TAU / g.na as f64;
     let j0 = ((phi_t - half) / dphi - 0.5).ceil() as i64;
@@ -376,12 +548,16 @@ fn stamp(stock: &mut RadialMap, c: &Cutter, x: f64, r: f64, a_deg: f64) -> usize
                     if cur - rho > 1e-3 {
                         changed += 1;
                     }
+                    if cur - rho > 1e-6 {
+                        stock.op[k] = tag;
+                        rows = Some(rows.map_or((i, i), |(a, b)| (a.min(i), b.max(i))));
+                    }
                     stock.r[k] = rho as f32;
                 }
             }
         }
     }
-    changed
+    (changed, rows)
 }
 
 /// Comparison of a simulated stock with the finished part.
@@ -584,7 +760,9 @@ mod tests {
         let mut s = RadialMap::filled(g, 10.0);
         let c = Cutter::Flat { radius: 1.0 };
         // tool at A0 sits over part angle 90 deg
-        let n = stamp(&mut s, &c, 0.0, 8.0, 0.0);
+        let (n, rows) = stamp(&mut s, &c, 0.0, 8.0, 0.0, 7);
+        assert!(rows.is_some());
+        assert!(s.op.iter().any(|&t| t == 7));
         assert!(n > 0);
         let j90 = g.na / 4;
         let i0 = ((0.0 - g.x0) / g.dx) as usize;
@@ -638,7 +816,7 @@ mod tests {
             s.r[k] = part.center.r[k];
         }
         let c = Cutter::Flat { radius: 0.5 };
-        stamp(&mut s, &c, -2.0, 5.0, 0.0);
+        stamp(&mut s, &c, -2.0, 5.0, 0.0, 1);
         let d = deviation(&s, &part, -10.0, 0.0, 0.02);
         assert!((d.max_gouge - 1.0).abs() < 1e-3, "{d:?}");
         assert!(d.gouge_cells > 0);

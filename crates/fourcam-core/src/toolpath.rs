@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 pub enum Move {
     /// Operator-visible comment.
     Comment { text: String },
+    /// Start of an operation: the moves until the next marker belong to it. `id` numbers the
+    /// job's operations in order (0, 1, ...); `kind` is the operation type. Posts ignore it.
+    Operation { id: u32, kind: String },
     /// Load a tool and start the spindle.
     ToolChange { tool: u32, rpm: u32 },
     /// Rapid; only the given axes move (machine posts r first, then x, then a).
@@ -85,6 +88,13 @@ impl Builder {
 
     pub fn comment(&mut self, text: impl Into<String>) {
         self.moves.push(Move::Comment { text: text.into() });
+    }
+
+    pub fn operation(&mut self, id: u32, kind: &str) {
+        self.moves.push(Move::Operation {
+            id,
+            kind: kind.to_string(),
+        });
     }
 
     pub fn tool_change(&mut self, tool: u32, rpm: u32) {

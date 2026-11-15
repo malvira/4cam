@@ -61,5 +61,8 @@ export async function load(source) {
     // convert a profile file (4cam JSON, Fusion .tools/.json/.mch/.f3d) -> {kind, profile, notes}
     importProfile: (bytes, name) => call("import_profile", bytes, name || "profile.json"),
     meshTriangles: (job, opts, meshBytes) => call("mesh_triangles", job, opts || {}, meshBytes),
+    // material-removal playback: open a session, then seek to any segment
+    simOpen: (job, opts, meshBytes) => call("sim_open", job, opts || {}, meshBytes),
+    simSeek: (n) => call("sim_seek", String(n)),
   };
 }

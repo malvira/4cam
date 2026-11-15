@@ -286,6 +286,146 @@ pub mod api {
         json!({ "triangles": tri, "total": m.triangles.len(), "thinned": stride > 1, "bounds": m.bounds() })
     }
 
+    // ------------------------------------------------------------ playback sessions
+
+    struct Session {
+        pb: sim::Playback,
+    }
+
+    thread_local! {
+        static SESSION: std::cell::RefCell<Option<Session>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Standard base64 of raw bytes (typed arrays travel this way: 4/3 the size of the data).
+    pub fn b64(bytes: &[u8]) -> String {
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for c in bytes.chunks(3) {
+            let n = (c[0] as u32) << 16
+                | (*c.get(1).unwrap_or(&0) as u32) << 8
+                | *c.get(2).unwrap_or(&0) as u32;
+            for k in 0..4 {
+                if k <= c.len() {
+                    out.push(T[(n >> (18 - 6 * k) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    fn f32s(v: &[f32]) -> String {
+        b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+    }
+
+    fn u16s(v: &[u16]) -> String {
+        b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+    }
+
+    /// Open a material-removal playback of the whole job. `opts`: `{"dx", "na", "libraries"}`.
+    /// Returns the grid, the part map, the operations, the tools and every segment's end point
+    /// (`path`: f32 [x, r, a, rapid, tool, op] per segment, base64).
+    pub fn sim_open(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match profiles::job_from_json(job_json, &libs) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let dx = opts["dx"].as_f64().unwrap_or(0.1).max(0.02);
+        let na = (opts["na"].as_u64().unwrap_or(240) as usize).clamp(8, 2048);
+        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+            Ok(t) => t,
+            Err(e) => return err(e),
+        };
+        // grid and part map exactly as the batch simulation builds them
+        let res = match simulate_job(&job, &[], mesh.as_ref(), dx, na, 0.02) {
+            Ok(r) => r,
+            Err(e) => return err(e),
+        };
+        let grid = res.stock.grid;
+        let cutters = |t: u32| {
+            job.tool(t)
+                .and_then(|d| fourcam::cutter_for(t, d.shape).ok())
+        };
+        let pb = sim::Playback::new(
+            sim::RadialMap::filled(grid, job.stock.radius),
+            &tps,
+            &cutters,
+            (dx * 2.0).min(0.1),
+        );
+        let mut path = Vec::with_capacity(pb.len() * 6);
+        for sg in &pb.segments {
+            path.extend_from_slice(&[
+                sg.to[0] as f32,
+                sg.to[1] as f32,
+                sg.to[2] as f32,
+                f32::from(u8::from(sg.rapid)),
+                sg.tool.unwrap_or(0) as f32,
+                sg.op as f32,
+            ]);
+        }
+        let mut ops = Vec::new();
+        for (p, tp) in tps.iter().enumerate() {
+            for m in &tp.moves {
+                if let fourcam::Move::Operation { id, kind } = m {
+                    ops.push(json!({"id": id, "tag": id + 1, "kind": kind, "program": tp.name, "program_index": p}));
+                }
+            }
+        }
+        let first_seg_of_program: Vec<usize> = (0..tps.len())
+            .map(|p| {
+                pb.segments
+                    .iter()
+                    .position(|s| s.program as usize == p)
+                    .unwrap_or(pb.len())
+            })
+            .collect();
+        let out = json!({
+            "grid": {"x0": grid.x0, "dx": grid.dx, "nx": grid.nx, "na": grid.na},
+            "stock_radius": job.stock.radius,
+            "part": f32s(&res.part.center.r),
+            "segments": pb.len(),
+            "program_starts": first_seg_of_program,
+            "path": f32s(&path),
+            "ops": ops,
+            "tools": job.tools,
+        });
+        SESSION.with(|s| *s.borrow_mut() = Some(Session { pb }));
+        out
+    }
+
+    /// Move the open playback to segment `n`; returns the rows that changed (radii and
+    /// cut-by tags, base64) so the display can update in place.
+    pub fn sim_seek(n: usize) -> Value {
+        SESSION.with(|s| {
+            let mut s = s.borrow_mut();
+            let Some(sess) = s.as_mut() else {
+                return err("no playback open (call sim_open)");
+            };
+            let rows = sess.pb.seek(n);
+            let pos = sess.pb.position();
+            match rows {
+                None => json!({"pos": pos, "rows": null}),
+                Some((i0, i1)) => {
+                    let na = sess.pb.stock.grid.na;
+                    let (a, b) = (i0 * na, (i1 + 1) * na);
+                    json!({"pos": pos, "rows": [i0, i1],
+                           "r": f32s(&sess.pb.stock.r[a..b]), "op": u16s(&sess.pb.stock.op[a..b])})
+                }
+            }
+        })
+    }
+
     /// Dispatch by name (what `fc_call` uses).
     pub fn call(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Value {
         let s = |v: &[u8]| String::from_utf8_lossy(v).into_owned();
@@ -306,6 +446,8 @@ pub mod api {
             }
             "simulate" => simulate(&s(a), &s(b), c),
             "profile_list" => profile_list(),
+            "sim_open" => sim_open(&s(a), &s(b), c),
+            "sim_seek" => sim_seek(s(a).trim().parse().unwrap_or(0)),
             "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&s(a), &s(b), c),
             other => err(format!("unknown function {other:?}")),
@@ -453,6 +595,28 @@ mod tests {
             api::plan_and_post(api::EXAMPLE_JOB, &z1, &[], "")["machine_id"],
             "makera-z1-4axis"
         );
+    }
+
+    #[test]
+    fn playback_session_seeks_and_reports_rows() {
+        assert_eq!(api::b64(b"Man"), "TWFu");
+        assert_eq!(api::b64(b"Ma"), "TWE=");
+        assert_eq!(api::b64(b"M"), "TQ==");
+        assert!(api::sim_seek(5).get("error").is_some() || api::sim_seek(5)["pos"].is_number());
+        let o = api::sim_open(api::EXAMPLE_JOB, r#"{"dx": 0.2, "na": 90}"#, &[]);
+        assert!(o.get("error").is_none(), "{o}");
+        let n = o["segments"].as_u64().unwrap() as usize;
+        assert!(n > 30_000);
+        assert_eq!(o["ops"].as_array().unwrap().len(), 3);
+        assert_eq!(o["ops"][1]["kind"], "helical_knurl");
+        assert_eq!(o["program_starts"][0], 0);
+        let s = api::sim_seek(2000);
+        assert_eq!(s["pos"], 2000);
+        assert!(s["rows"].is_array(), "{s}");
+        let s = api::sim_seek(10);
+        assert_eq!(s["rows"][0], 0, "jumping back redraws all rows");
+        let s = api::sim_seek(n + 100);
+        assert_eq!(s["pos"].as_u64().unwrap() as usize, n);
     }
 
     #[test]
