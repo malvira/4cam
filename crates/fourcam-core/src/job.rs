@@ -49,7 +49,26 @@ pub struct Stock {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Part {
-    pub profile: Profile,
+    /// Revolved profile (used by `rotary_turning`, and as the finishing surface when no mesh
+    /// is given).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Profile>,
+    /// Triangle mesh of the finished part (STL or 3MF).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<MeshSource>,
+}
+
+/// Where the part mesh comes from and how it sits on the rotary axis.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MeshSource {
+    /// Path, relative to the job file.
+    pub file: String,
+    /// Mesh axis that becomes the rotary X axis.
+    #[serde(default)]
+    pub axis: crate::mesh::Axis,
+    /// Translation applied after the axis mapping (mm).
+    #[serde(default)]
+    pub translate: [f64; 3],
 }
 
 /// Revolved profile: `[x, r]` points in ascending x. Two consecutive points with the same x
@@ -77,8 +96,15 @@ pub struct Tool {
 pub enum ToolShape {
     /// Flat endmill.
     Flat { diameter: f64 },
-    /// V-bit with the given included angle (degrees).
-    Vbit { angle: f64 },
+    /// Ball endmill.
+    Ball { diameter: f64 },
+    /// V-bit with the given included angle (degrees). `diameter` (largest cutting diameter)
+    /// is needed for mesh finishing.
+    Vbit {
+        angle: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diameter: Option<f64>,
+    },
 }
 
 /// One output file.
@@ -100,11 +126,13 @@ pub enum Operation {
     RotaryTurning(RotaryTurning),
     HelicalKnurl(HelicalKnurl),
     FlankChamfer(FlankChamfer),
+    RotaryFinish(RotaryFinish),
 }
 
 impl Operation {
     pub fn tool(&self) -> u32 {
         match self {
+            Operation::RotaryFinish(o) => o.tool,
             Operation::RotaryTurning(o) => o.tool,
             Operation::HelicalKnurl(o) => o.tool,
             Operation::FlankChamfer(o) => o.tool,
@@ -172,6 +200,57 @@ pub struct FlankChamfer {
     pub plunge_feed: f64,
 }
 
+/// Raster direction for [`RotaryFinish`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FinishPattern {
+    /// Passes along X at constant A, stepping over in A (zig-zag, linked along A).
+    Along,
+    /// One helix around the axis, advancing `stepover_mm` in X per revolution.
+    Around,
+}
+
+/// Finish the part mesh with a radial drop-cutter (flat, ball or V-bit).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RotaryFinish {
+    pub tool: u32,
+    pub pattern: FinishPattern,
+    /// Axial extent `[start, end]` of the tool tip.
+    pub x_range: [f64; 2],
+    /// Angular extent (degrees) for `along`; a full turn by default.
+    #[serde(default = "default_a_range")]
+    pub a_range: [f64; 2],
+    /// `along`: angular stepover (degrees). Alternatively give `stepover_mm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stepover_deg: Option<f64>,
+    /// `along`: stepover measured at the part's largest radius; `around`: X advance per turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stepover_mm: Option<f64>,
+    /// Sample spacing along X for `along` passes (mm).
+    #[serde(default = "default_sample_mm")]
+    pub sample_mm: f64,
+    /// Sample spacing around the axis (degrees) for `around` and for links.
+    #[serde(default = "default_sample_deg")]
+    pub sample_deg: f64,
+    /// Radial stock to leave (mm).
+    #[serde(default)]
+    pub leave: f64,
+    /// The tip never goes below this radius (mm, >= 0).
+    #[serde(default)]
+    pub min_radius: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+}
+
+fn default_a_range() -> [f64; 2] {
+    [0.0, 360.0]
+}
+fn default_sample_mm() -> f64 {
+    0.1
+}
+fn default_sample_deg() -> f64 {
+    2.0
+}
 fn default_segment_deg() -> f64 {
     6.0
 }

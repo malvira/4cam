@@ -2,10 +2,12 @@
 
 mod flank_chamfer;
 mod helical_knurl;
+mod rotary_finish;
 mod rotary_turning;
 
 pub use flank_chamfer::flank_chamfer;
 pub use helical_knurl::helical_knurl;
+pub use rotary_finish::rotary_finish;
 pub use rotary_turning::rotary_turning;
 
 use crate::toolpath::Builder;
