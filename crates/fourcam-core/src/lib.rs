@@ -20,6 +20,7 @@ pub mod sim;
 pub mod strategy;
 pub mod toolpath;
 pub mod verify;
+pub mod wizards;
 
 pub use job::Job;
 pub use machine::{FeedMode, Machine};

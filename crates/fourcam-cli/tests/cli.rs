@@ -377,3 +377,41 @@ fn faces_list_and_face_selection_in_a_project() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn knurl_wizard_rebuilds_the_knob() {
+    // strip the operations from the knob project, let the wizard add them back, run it
+    let text = std::fs::read_to_string(root().join("examples/knob/knob.project.json")).unwrap();
+    let mut p: serde_json::Value = serde_json::from_str(&text).unwrap();
+    p["setups"][0]["operations"] = serde_json::json!([]);
+    p["setups"][0]["outputs"] = serde_json::json!([]);
+    let dir = out_dir("wizard");
+    let empty = dir.join("empty.json");
+    std::fs::write(&empty, p.to_string()).unwrap();
+    let full = dir.join("full.json");
+    let o = bin()
+        .args(["wizard", "knurl"])
+        .arg(&empty)
+        .arg("--out")
+        .arg(&full)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("added operations op1, op2, op3"));
+    let o = bin()
+        .arg("run")
+        .arg(&full)
+        .arg("--out")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
+    for name in ["knob_1_profile", "knob_2_knurl"] {
+        let ours = std::fs::read(dir.join(format!("{name}.nc"))).unwrap();
+        let golden = std::fs::read_to_string(root().join(format!("tests/golden/{name}.nc")))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert_eq!(ours, golden.as_bytes(), "{name}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}

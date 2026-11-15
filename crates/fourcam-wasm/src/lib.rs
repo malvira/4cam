@@ -473,6 +473,38 @@ pub mod api {
         json!({"regions": regions, "triangles": f32s(&tri), "region_of": u16s(&idx)})
     }
 
+    /// Run the knurl wizard on a document (params JSON, mesh bytes for mesh models); returns
+    /// the updated 0.2 project and what was added.
+    pub fn wizard_knurl(doc: &str, params: &str, mesh: &[u8]) -> Value {
+        let (mut p, _) = match fourcam::project::Project::from_json_any(doc) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let w: fourcam::wizards::KnurlWizard =
+            match serde_json::from_str(if params.trim().is_empty() {
+                "{}"
+            } else {
+                params
+            }) {
+                Ok(w) => w,
+                Err(e) => return err(format!("wizard params: {e}")),
+            };
+        let parsed = (!mesh.is_empty())
+            .then(|| Mesh::from_bytes(mesh).ok())
+            .flatten();
+        let models = p.models.clone();
+        let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
+            fourcam::project::ModelKind::Mesh(src) => {
+                parsed.clone().map(|m| m.oriented(src.axis, src.translate))
+            }
+            _ => None,
+        };
+        match w.run(&mut p, &meshes) {
+            Ok(res) => json!({"project": p, "added": res}),
+            Err(e) => err(e),
+        }
+    }
+
     /// Dispatch by name (what `fc_call` uses).
     pub fn call(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Value {
         let s = |v: &[u8]| String::from_utf8_lossy(v).into_owned();
@@ -494,6 +526,7 @@ pub mod api {
             "simulate" => simulate(&s(a), &s(b), c),
             "profile_list" => profile_list(),
             "face_regions" => face_regions(&s(a), &s(b), c),
+            "wizard_knurl" => wizard_knurl(&s(a), &s(b), c),
             "op_types" => serde_json::to_value(fourcam::ops::registry()).unwrap_or(Value::Null),
             "check_project" => match fourcam::project::Project::from_json_any(&s(a)) {
                 Ok((p, upgraded)) => {

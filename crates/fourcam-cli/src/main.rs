@@ -26,6 +26,9 @@ USAGE:
   4cam faces <job-or-project.json> [--model <id>] [--crease <deg>]
       Face regions of each model (split at sharp edges) with their stable ids,
       for an operation's geometry selection (kind faces, with model and ids).
+  4cam wizard knurl <job-or-project.json> [--params <p.json>] [--out <file>]
+      Add turning, a diamond knurl on the body face and a V-bit front chamfer,
+      derived from the model's faces (defaults: the Z1 knob).
   4cam ops list | show <type> | check <job-or-project.json>
       The operation registry: types, parameters (units, defaults, limits),
       accepted tools and geometry; check validates a file's operations.
@@ -120,6 +123,44 @@ fn load_job(path: &str) -> Result<Job, String> {
         return Err(format!("{path}: no setups"));
     }
     Ok(jobs.swap_remove(0).1)
+}
+
+fn cmd_wizard_knurl(o: &Opts) -> Result<ExitCode, String> {
+    let path = o.one_input()?;
+    let (mut p, _) = fourcam::project::Project::from_json_any(&read(path)?)
+        .map_err(|e| format!("{path}: {e}"))?;
+    let w: fourcam::wizards::KnurlWizard = match o.flag("params") {
+        Some(f) => serde_json::from_str(&read(f)?).map_err(|e| format!("{f}: {e}"))?,
+        None => Default::default(),
+    };
+    let dir = Path::new(path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let models = p.models.clone();
+    let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
+        fourcam::project::ModelKind::Mesh(src) => Mesh::load(&dir.join(&src.file))
+            .ok()
+            .map(|m| m.oriented(src.axis, src.translate)),
+        _ => None,
+    };
+    let res = w.run(&mut p, &meshes)?;
+    for n in &res.notes {
+        eprintln!("note: {n}");
+    }
+    eprintln!(
+        "added operations {} and outputs {}",
+        res.operations.join(", "),
+        res.outputs.join(", ")
+    );
+    let text = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?
+        + "
+";
+    match o.flag("out") {
+        Some(out) => std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?,
+        None => print!("{text}"),
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_faces(o: &Opts) -> Result<ExitCode, String> {
@@ -254,6 +295,15 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
         "ops" => cmd_ops(rest),
         "faces" => cmd_faces(&parse(rest, &["model", "crease"])?),
+        "wizard" => {
+            let (name, more) = rest
+                .split_first()
+                .ok_or("wizard knurl <file> [--params p.json] [--out file]")?;
+            if name != "knurl" {
+                return Err(format!("unknown wizard {name:?} (available: knurl)"));
+            }
+            cmd_wizard_knurl(&parse(more, &["params", "out"])?)
+        }
         "mesh-info" => cmd_mesh_info(&parse(rest, &[])?),
         "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na"])?),
         "help" | "-h" | "--help" => {

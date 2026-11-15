@@ -75,4 +75,19 @@ const proj = JSON.parse(readFileSync(join(root, "examples", "knob", "knob.projec
 const pr = cam.planAndPost(proj, "makera-z1");
 assert.deepEqual(pr.programs.map((p) => p.lines), [21787, 15146]);
 console.log(`registry: ${types.length} operation types; 0.2 project plans like the 0.1 job`);
+// knurl wizard on an empty setup gives the knob program back
+const empty = JSON.parse(JSON.stringify(proj));
+empty.setups[0].operations = [];
+empty.setups[0].outputs = [];
+const wz = cam.wizardKnurl(empty, {});
+assert.ok(!wz.error, wz.error);
+assert.deepEqual(wz.added.operations, ["op1", "op2", "op3"]);
+const wr = cam.planAndPost(wz.project, "makera-z1");
+for (const p of wr.programs) {
+  const golden = readFileSync(join(root, "tests", "golden", `${p.name}.nc`), "utf8").replace(/\r\n/g, "\n");
+  assert.equal(p.gcode, golden, `${p.name} from the wizard differs`);
+}
+const fr = cam.faceRegions(proj, "profile");
+assert.equal(fr.regions.length, 8);
+console.log("knurl wizard reproduces the cut G-code; 8 face regions");
 console.log("wasm OK");
