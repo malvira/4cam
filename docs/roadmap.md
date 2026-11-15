@@ -30,6 +30,59 @@
 - **Operations.** These stay independent of the machine. Planning reads only the kinematic
   capabilities it needs, and the limit check reports what a given machine can't do.
 
+## General-purpose architecture (approved for prototyping, branch `arch-0.2`)
+
+**Model.**
+
+- A **Project** (schema 0.2) holds Models, tool library references and Setups. 0.1 jobs
+  upgrade automatically.
+- A **Setup** has:
+  - a machine;
+  - stock (cylinder, box or mesh);
+  - a work origin and orientation;
+  - holding (rotary chuck with or without tailstock, or a vise);
+  - fixture keep-outs.
+
+  Stock carries from one setup to the next.
+- Each Setup has an ordered list of **Operations**: type, tool reference (library and tool
+  id, with feed and speed overrides), geometry selection, parameters, colour and an enabled
+  flag.
+- **Operation types** are registered plug-ins. Each declares its parameter schema, the tool
+  shapes it accepts, the geometry kinds it accepts, the machine abilities it needs, and a
+  planner. Hosts query the registry to build their UI.
+- **Geometry selection** can be:
+  - the whole model;
+  - mesh face regions with stable ids (the mesh is split at sharp edges, and hosts may pass
+    their own face groups);
+  - axial or angular ranges;
+  - a revolved profile;
+  - curves or 2D paths;
+  - containment boundaries.
+- **Wizards** read a model and setup and emit ordinary, editable operations. Today's knob
+  pipeline becomes the "4th-axis knurl wizard".
+
+Operation ids are strings unique within the project. The simulation's per-cell
+"cut by operation" tags and the operation colours key off them, so they carry straight over.
+
+**Phases.** Each phase merges to `main` only when `scripts/check.sh` passes and the Z1 knob
+goldens are still byte-identical.
+
+1. **Document model 0.2, with upgrade from 0.1. Done:**
+   - `crates/fourcam-core/src/project.rs`;
+   - `4cam upgrade`;
+   - `run`, `simulate`, `toolpath` and the WASM API accept either version;
+   - `examples/knob/*.project.json`.
+
+   A setup is planned by lowering it to a 0.1 job, so the goldens stay identical.
+2. Operation registry, exposed through the CLI and WASM.
+3. Setups: rotary first, with stock carried between setups.
+4. Geometry selection.
+5. The knurl wizard on the general API.
+6. A frontend setup/operation tree: type, tool, geometry chosen by clicking the model,
+   reorder, enable, colour.
+7. The first 3-axis operations: a toolpath IR with XYZ plus tool direction; facing, contour,
+   pocket, drilling and 3D raster; Carvera vise setups.
+
 ## Next candidates
 
 - 3-axis strategies (drop-cutter raster and waterline) on the same mesh and tool code.

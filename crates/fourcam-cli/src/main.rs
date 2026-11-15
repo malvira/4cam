@@ -20,6 +20,9 @@ USAGE:
       --machine, else the job's \"machine\", else makera-z1-4axis. Built in:
       makera-z1-4axis, makera-carvera-4axis, makera-carvera-air-4axis,
       linuxcnc-4axis (see `4cam profiles list`).
+  4cam upgrade <job.json> [--out <project.json>]
+      Convert a 0.1 job to a 0.2 project (models, tools, setups, operations).
+      run/simulate/toolpath accept either version.
   4cam profiles list|show|import|export|dir ...
       Machine profiles and tool libraries (`4cam profiles help`).
   4cam verify <file.nc> [--plunge <mm/min>] [--safe <radius>]
@@ -94,11 +97,52 @@ fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
 
-/// Read a job, resolving tool references against the built-in and imported libraries.
+/// Read a job (0.1) or project (0.2; its setups are planned one after another as one job
+/// each), resolving tool references against the built-in and imported libraries.
 fn load_job(path: &str) -> Result<Job, String> {
     let reg = profiles_cmd::Registry::load();
-    fourcam::profiles::job_from_json(&read(path)?, &reg.libraries())
-        .map_err(|e| format!("{path}: {e}"))
+    let mut jobs = fourcam::project::jobs_from_any(&read(path)?, &reg.libraries())
+        .map_err(|e| format!("{path}: {e}"))?;
+    if jobs.len() > 1 {
+        eprintln!(
+            "note: {path} has {} setups; planning the first ({})",
+            jobs.len(),
+            jobs[0].0
+        );
+    }
+    if jobs.is_empty() {
+        return Err(format!("{path}: no setups"));
+    }
+    Ok(jobs.swap_remove(0).1)
+}
+
+fn cmd_upgrade(o: &Opts) -> Result<ExitCode, String> {
+    let path = o.one_input()?;
+    let (p, upgraded) = fourcam::project::Project::from_json_any(&read(path)?)
+        .map_err(|e| format!("{path}: {e}"))?;
+    let name = Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project")
+        .trim_end_matches(".job");
+    let mut p = p;
+    if upgraded {
+        p.name = name.to_string();
+    }
+    let text = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?
+        + "
+";
+    match o.flag("out") {
+        Some(out) => {
+            std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
+            println!(
+                "wrote {out} (schema 0.2{})",
+                if upgraded { ", upgraded from 0.1" } else { "" }
+            );
+        }
+        None => print!("{text}"),
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run(args: &[String]) -> Result<ExitCode, String> {
@@ -119,6 +163,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "verify" => cmd_verify(&parse(rest, &["plunge", "safe"])?),
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
         "revolve" => cmd_revolve(&parse(rest, &["segments"])?),
+        "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
         "mesh-info" => cmd_mesh_info(&parse(rest, &[])?),
         "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na"])?),
         "help" | "-h" | "--help" => {

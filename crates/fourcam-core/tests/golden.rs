@@ -148,3 +148,23 @@ fn job_json_round_trips() {
     let text = serde_json::to_string(&job).unwrap();
     assert_eq!(Job::from_json(&text).unwrap(), job);
 }
+
+#[test]
+fn knob_project_0_2_gives_the_same_gcode() {
+    // the upgraded 0.2 project (examples/knob/knob.project.json) plans byte-identically
+    let text = std::fs::read_to_string(root().join("examples/knob/knob.project.json")).unwrap();
+    let jobs = fourcam::project::jobs_from_any(&text, &[]).unwrap();
+    assert_eq!(jobs.len(), 1);
+    let machine = Machine::makera_z1();
+    for tp in plan(&jobs[0].1).unwrap() {
+        let golden = std::fs::read_to_string(root().join(format!("tests/golden/{}.nc", tp.name)))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert!(post(&tp, &machine) == golden, "{} differs", tp.name);
+    }
+    // and upgrading the 0.1 job again gives the same project
+    let job = std::fs::read_to_string(root().join("examples/knob/knob.job.json")).unwrap();
+    let (p, _) = fourcam::project::Project::from_json_any(&job).unwrap();
+    let (q, _) = fourcam::project::Project::from_json_any(&text).unwrap();
+    assert_eq!(p, q);
+}

@@ -56,6 +56,15 @@ pub mod api {
         }
     }
 
+    /// The job to plan from a 0.1 job or a 0.2 project (its first setup).
+    fn job_any(text: &str, libs: &[ToolLibrary]) -> Result<Job, String> {
+        let mut jobs = fourcam::project::jobs_from_any(text, libs)?;
+        if jobs.is_empty() {
+            return Err("the project has no setups".into());
+        }
+        Ok(jobs.swap_remove(0).1)
+    }
+
     /// Built-in libraries plus `opts.libraries` (4cam tool library objects).
     fn libraries(opts: &Value) -> Result<Vec<ToolLibrary>, String> {
         let mut libs = profiles::builtin_libraries();
@@ -141,7 +150,7 @@ pub mod api {
             Ok(l) => l,
             Err(e) => return err(e),
         };
-        let job = match profiles::job_from_json(job_json, &libs) {
+        let job = match job_any(job_json, &libs) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -211,7 +220,7 @@ pub mod api {
     /// Simulate all programs in order. `opts`: `{"dx": mm, "na": cells}` (default 0.1, 360).
     /// Returns the grid, the part map and the stock map after each program (radii, f32).
     pub fn simulate(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
-        let job = match profiles::job_from_json(job_json, &profiles::builtin_libraries()) {
+        let job = match job_any(job_json, &profiles::builtin_libraries()) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -264,7 +273,7 @@ pub mod api {
     /// Oriented mesh triangles (flattened xyz, f32) for display, thinned to about
     /// `max_triangles` (`opts`, default 200000).
     pub fn mesh_triangles(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
-        let job = match profiles::job_from_json(job_json, &profiles::builtin_libraries()) {
+        let job = match job_any(job_json, &profiles::builtin_libraries()) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -333,7 +342,7 @@ pub mod api {
             Ok(l) => l,
             Err(e) => return err(e),
         };
-        let job = match profiles::job_from_json(job_json, &libs) {
+        let job = match job_any(job_json, &libs) {
             Ok(j) => j,
             Err(e) => return err(e),
         };

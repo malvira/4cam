@@ -12,6 +12,7 @@ pub mod mesh;
 pub mod numeric;
 pub mod post;
 pub mod profiles;
+pub mod project;
 pub mod render;
 pub mod sim;
 pub mod strategy;
