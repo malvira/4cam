@@ -222,9 +222,23 @@ fn along_rasters_hold_a_per_pass_and_around_is_one_helix() {
         a.windows(2).all(|w| w[1] > w[0]),
         "A must keep turning one way"
     );
-    // 20.5 mm at 1 mm per turn, plus one turn at each end
+    // 20.5 mm at 1 mm per turn, one turn at each end, and one clean-up turn at the foot of
+    // each of the two walls (x = -18 and -15, approached from the -x side)
     let turns = (a.last().unwrap() - a[0]) / 360.0;
-    assert!((turns - 22.5).abs() < 0.05, "{turns}");
+    assert!((turns - 24.5).abs() < 0.05, "{turns}");
+    let feet: Vec<f64> = tps[0]
+        .moves
+        .windows(2)
+        .filter_map(|w| match (&w[0], &w[1]) {
+            (Move::Rapid { x: Some(x), .. }, Move::Plunge { .. }) => Some(*x),
+            _ => None,
+        })
+        .skip(1)
+        .collect();
+    assert_eq!(feet.len(), 2, "{feet:?}");
+    // ball tool: lowest point clears the wall corner when the tip is a radius away
+    assert!((feet[0] - (-18.0 - 1.5875)).abs() < 1e-3, "{feet:?}");
+    assert!((feet[1] - (-15.0 - 1.5875)).abs() < 1e-3, "{feet:?}");
 }
 
 #[test]

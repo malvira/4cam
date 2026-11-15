@@ -1,0 +1,561 @@
+//! Material-removal simulation on a radial heightmap: the stock's outer radius over a grid of
+//! (x, part angle). Also builds the same map for the finished part (from a mesh by radial ray
+//! casting, or from a profile) so the two can be compared.
+//!
+//! Angles here are part angles φ (the direction of a part point in the part's own Y/Z frame).
+//! A tool at rotary angle `a` sits over part angle `φ = 90° - a` (see [`crate::dropcutter`]).
+
+use crate::dropcutter::Cutter;
+use crate::geom::RevolvedProfile;
+use crate::mesh::Mesh;
+use crate::render::{ramp, Canvas, Frame};
+use crate::toolpath::{Move, Toolpath};
+use std::f64::consts::{PI, TAU};
+
+/// Grid layout shared by stock and part maps.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grid {
+    pub x0: f64,
+    pub dx: f64,
+    pub nx: usize,
+    /// Cells around the axis (cell `j` is centred on φ = (j + 0.5) * 360 / na degrees).
+    pub na: usize,
+}
+
+impl Grid {
+    pub fn new(x_min: f64, x_max: f64, dx: f64, na: usize) -> Grid {
+        let nx = (((x_max - x_min) / dx).ceil() as usize).max(1);
+        Grid {
+            x0: x_min,
+            dx,
+            nx,
+            na: na.max(8),
+        }
+    }
+
+    pub fn x(&self, i: usize) -> f64 {
+        self.x0 + (i as f64 + 0.5) * self.dx
+    }
+
+    /// Part angle of column `j`, radians.
+    pub fn phi(&self, j: usize) -> f64 {
+        (j as f64 + 0.5) * TAU / self.na as f64
+    }
+
+    pub fn len(&self) -> usize {
+        self.nx * self.na
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Radius per cell (`i * na + j`).
+#[derive(Debug, Clone)]
+pub struct RadialMap {
+    pub grid: Grid,
+    pub r: Vec<f32>,
+}
+
+impl RadialMap {
+    pub fn filled(grid: Grid, r: f64) -> RadialMap {
+        RadialMap {
+            grid,
+            r: vec![r as f32; grid.len()],
+        }
+    }
+
+    pub fn at(&self, i: usize, j: usize) -> f64 {
+        self.r[i * self.grid.na + j] as f64
+    }
+
+    /// Finished part from a revolved profile (0 outside the profile's X range).
+    pub fn from_profile(grid: Grid, geom: &RevolvedProfile) -> RadialMap {
+        let mut m = RadialMap::filled(grid, 0.0);
+        for i in 0..grid.nx {
+            let x = grid.x(i);
+            let r = if x < geom.x_min() || x > geom.x_max() {
+                0.0
+            } else {
+                geom.radius(x)
+            };
+            for j in 0..grid.na {
+                m.r[i * grid.na + j] = r as f32;
+            }
+        }
+        m
+    }
+
+    /// Finished part from a mesh: outermost hit of each cell's radial ray (0 where none).
+    pub fn from_mesh(grid: Grid, mesh: &Mesh) -> RadialMap {
+        let mut m = RadialMap::filled(grid, 0.0);
+        let dphi = TAU / grid.na as f64;
+        for t in &mesh.triangles {
+            let xs = [t[0][0], t[1][0], t[2][0]];
+            let x_lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+            let x_hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let i0 = ((x_lo - grid.x0) / grid.dx - 1.5).ceil().max(0.0) as usize;
+            let i1 = ((x_hi - grid.x0) / grid.dx + 0.5).floor();
+            if i1 < 0.0 {
+                continue;
+            }
+            let i1 = (i1 as usize).min(grid.nx.saturating_sub(1));
+            // angular columns: the projected triangle's span (all if it covers the axis)
+            let p2 = [[t[0][1], t[0][2]], [t[1][1], t[1][2]], [t[2][1], t[2][2]]];
+            let cols: Vec<usize> = match angular_cover(p2) {
+                None => (0..grid.na).collect(),
+                Some((start, len)) => {
+                    // one spare column each side: rays exactly on a seam must reach both
+                    // neighbours (the inside test decides)
+                    let j0 = ((start / dphi) - 0.5).ceil() as i64 - 1;
+                    let j1 = (((start + len) / dphi) - 0.5).floor() as i64 + 1;
+                    (j0..=j1)
+                        .map(|j| j.rem_euclid(grid.na as i64) as usize)
+                        .collect()
+                }
+            };
+            let n = crate::mesh::cross(crate::mesh::sub(t[1], t[0]), crate::mesh::sub(t[2], t[0]));
+            for i in i0..=i1 {
+                let x = grid.x(i);
+                for &j in &cols {
+                    let (s, c) = grid.phi(j).sin_cos();
+                    // ray p = (x, ρc, ρs), ρ >= 0: n·(p - t0) = 0
+                    let den = n[1] * c + n[2] * s;
+                    if den.abs() < 1e-15 {
+                        continue;
+                    }
+                    let rho = (n[0] * (t[0][0] - x) + n[1] * t[0][1] + n[2] * t[0][2]) / den;
+                    if rho < 0.0 {
+                        continue;
+                    }
+                    let p = [x, rho * c, rho * s];
+                    if inside_3d(t, &n, p) {
+                        let k = i * grid.na + j;
+                        m.r[k] = m.r[k].max(rho as f32);
+                    }
+                }
+            }
+        }
+        m
+    }
+}
+
+/// Angular arc `(start, len)` (radians) covered by a 2D triangle seen from the origin, or `None`
+/// if the triangle contains the origin.
+fn angular_cover(p: [[f64; 2]; 3]) -> Option<(f64, f64)> {
+    let cross = |a: [f64; 2], b: [f64; 2]| a[0] * b[1] - a[1] * b[0];
+    let s = [cross(p[0], p[1]), cross(p[1], p[2]), cross(p[2], p[0])];
+    if (s.iter().all(|&v| v >= 0.0) || s.iter().all(|&v| v <= 0.0)) && s.iter().any(|&v| v != 0.0) {
+        return None;
+    }
+    let mut a: Vec<f64> = p.iter().map(|q| q[1].atan2(q[0]).rem_euclid(TAU)).collect();
+    a.sort_by(|x, y| x.total_cmp(y));
+    let gaps = [a[1] - a[0], a[2] - a[1], a[0] + TAU - a[2]];
+    let (i, g) = gaps
+        .iter()
+        .enumerate()
+        .fold((0, -1.0), |b, (i, &g)| if g > b.1 { (i, g) } else { b });
+    Some((a[(i + 1) % 3], TAU - g))
+}
+
+fn inside_3d(t: &crate::mesh::Triangle, n: &[f64; 3], p: [f64; 3]) -> bool {
+    let tol = -1e-9 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    (0..3).all(|k| {
+        let (a, b) = (t[k], t[(k + 1) % 3]);
+        let e = crate::mesh::sub(b, a);
+        let w = crate::mesh::sub(p, a);
+        let c = crate::mesh::cross(e, w);
+        c[0] * n[0] + c[1] * n[1] + c[2] * n[2] >= tol
+    })
+}
+
+/// Result of simulating one toolpath.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SimStats {
+    /// Tool positions evaluated.
+    pub samples: usize,
+    /// Cells lowered by feed moves.
+    pub cells_cut: usize,
+    /// Rapid moves that would have removed material (crashes), with the move index.
+    pub rapid_hits: Vec<usize>,
+}
+
+/// Remove material along a toolpath. `cutters[tool]` gives each tool's shape; moves made
+/// with a tool that has no cutter (e.g. a V-bit without a diameter) are skipped.
+/// `step` is the largest spacing between evaluated tool positions (mm).
+pub fn simulate(
+    stock: &mut RadialMap,
+    tp: &Toolpath,
+    cutter_for: &dyn Fn(u32) -> Option<Cutter>,
+    step: f64,
+) -> SimStats {
+    let mut st = SimStats::default();
+    let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0f64);
+    let mut cutter: Option<Cutter> = None;
+    for (idx, m) in tp.moves.iter().enumerate() {
+        let (nx, nr, na, rapid) = match *m {
+            Move::ToolChange { tool, .. } => {
+                cutter = cutter_for(tool);
+                continue;
+            }
+            Move::Comment { .. } => continue,
+            Move::Rapid {
+                x: mx,
+                r: mr,
+                a: ma,
+            } => (mx.or(x), mr.or(r), ma.unwrap_or(a), true),
+            Move::Plunge { r: mr, .. } => (x, Some(mr), a, false),
+            Move::Cut {
+                x: mx,
+                r: mr,
+                a: ma,
+                ..
+            } => (Some(mx), Some(mr), ma, false),
+        };
+        if let (Some(c), Some(x0), Some(r0), Some(x1), Some(r1)) = (cutter, x, r, nx, nr) {
+            // a machine moves all axes linearly together
+            let arc = 0.5 * (r0 + r1) * (na - a).to_radians().abs();
+            let len = (x1 - x0).abs().max((r1 - r0).abs()).max(arc);
+            let n = ((len / step).ceil() as usize).max(1);
+            let mut hit = false;
+            for k in 1..=n {
+                let t = k as f64 / n as f64;
+                let cut = stamp(
+                    stock,
+                    &c,
+                    x0 + (x1 - x0) * t,
+                    r0 + (r1 - r0) * t,
+                    a + (na - a) * t,
+                );
+                st.samples += 1;
+                if rapid && cut > 0 {
+                    hit = true;
+                } else {
+                    st.cells_cut += cut;
+                }
+            }
+            if hit {
+                st.rapid_hits.push(idx);
+            }
+        }
+        x = nx;
+        r = nr;
+        a = na;
+    }
+    st
+}
+
+/// Lower every cell inside the tool at tip position (x, r, a). Returns cells changed by more
+/// than 1 µm.
+fn stamp(stock: &mut RadialMap, c: &Cutter, x: f64, r: f64, a_deg: f64) -> usize {
+    let g = stock.grid;
+    let rad = c.radius();
+    let phi_t = (PI / 2.0 - a_deg.to_radians()).rem_euclid(TAU);
+    let i0 = (((x - rad - g.x0) / g.dx - 0.5).ceil()).max(0.0) as usize;
+    let i1 = ((x + rad - g.x0) / g.dx - 0.5).floor();
+    if i1 < 0.0 {
+        return 0;
+    }
+    let i1 = (i1 as usize).min(g.nx - 1);
+    let half = if r <= rad { PI / 2.0 } else { (rad / r).asin() };
+    let dphi = TAU / g.na as f64;
+    let j0 = ((phi_t - half) / dphi - 0.5).ceil() as i64;
+    let j1 = ((phi_t + half) / dphi - 0.5).floor() as i64;
+    let mut changed = 0;
+    for i in i0..=i1 {
+        let u = g.x(i) - x;
+        if u.abs() > rad {
+            continue;
+        }
+        for jj in j0..=j1 {
+            let j = jj.rem_euclid(g.na as i64) as usize;
+            let delta = jj as f64 * dphi + 0.5 * dphi - phi_t;
+            let (s, cs) = delta.sin_cos();
+            if cs <= 1e-9 {
+                continue;
+            }
+            let s = s.abs();
+            // lowest radius on this cell's ray that is inside the tool
+            let mut rho = r / cs;
+            let mut inside = false;
+            for _ in 0..8 {
+                let d = (u * u + (rho * s) * (rho * s)).sqrt();
+                if d > rad {
+                    inside = false;
+                    break;
+                }
+                inside = true;
+                let next = (r + c.height(d)) / cs;
+                if (next - rho).abs() < 1e-7 {
+                    rho = next;
+                    break;
+                }
+                rho = next;
+            }
+            if inside {
+                let k = i * g.na + j;
+                let cur = stock.r[k] as f64;
+                if rho < cur {
+                    if cur - rho > 1e-3 {
+                        changed += 1;
+                    }
+                    stock.r[k] = rho as f32;
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// Comparison of a simulated stock with the finished part.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Deviation {
+    /// Cells compared (part present).
+    pub cells: usize,
+    /// Most material left above the part (mm).
+    pub max_left: f64,
+    /// Mean material left (mm).
+    pub mean_left: f64,
+    /// Deepest cut into the part (mm, >= 0).
+    pub max_gouge: f64,
+    /// Where the deepest gouge is: (x, part angle in degrees).
+    pub gouge_at: Option<(f64, f64)>,
+    /// Cells more than `tol` below the part.
+    pub gouge_cells: usize,
+}
+
+/// Compare `stock` with `part` over cells whose x lies in `[x_lo, x_hi]` and where the part
+/// exists.
+pub fn deviation(stock: &RadialMap, part: &RadialMap, x_lo: f64, x_hi: f64, tol: f64) -> Deviation {
+    assert_eq!(stock.grid, part.grid);
+    let g = stock.grid;
+    let mut d = Deviation {
+        cells: 0,
+        max_left: 0.0,
+        mean_left: 0.0,
+        max_gouge: 0.0,
+        gouge_at: None,
+        gouge_cells: 0,
+    };
+    let mut sum = 0.0;
+    for i in 0..g.nx {
+        let x = g.x(i);
+        if x < x_lo || x > x_hi {
+            continue;
+        }
+        for j in 0..g.na {
+            let p = part.at(i, j);
+            if p <= 0.0 {
+                continue;
+            }
+            let diff = stock.at(i, j) - p;
+            d.cells += 1;
+            sum += diff.max(0.0);
+            d.max_left = d.max_left.max(diff);
+            if -diff > d.max_gouge {
+                d.max_gouge = -diff;
+                d.gouge_at = Some((x, g.phi(j).to_degrees()));
+            }
+            if -diff > tol {
+                d.gouge_cells += 1;
+            }
+        }
+    }
+    d.mean_left = if d.cells > 0 {
+        sum / d.cells as f64
+    } else {
+        0.0
+    };
+    d
+}
+
+/// PNG of a simulated stock: side view (stock and part radius along the column at part
+/// angle 90°, i.e. under the tool at A0) and an unrolled map of material left (stock - part).
+pub fn stock_png(title: &str, stock: &RadialMap, part: &RadialMap, stock_r: f64) -> Vec<u8> {
+    let g = stock.grid;
+    let (w, h) = (1400usize, 1000usize);
+    let mut cv = Canvas::new(w, h, [255, 255, 255]);
+    cv.text(20, 12, 2, title, [40, 40, 40]);
+    let (xa, xb) = (g.x0, g.x0 + g.nx as f64 * g.dx);
+    let gx = nice(xb - xa);
+    let side = Frame {
+        px: [80.0, 50.0, w as f64 - 30.0, 470.0],
+        data: [xa, 0.0, xb, stock_r + 1.0],
+    };
+    side.axes(&mut cv, gx, nice(stock_r + 1.0), "X", "R");
+    let j90 = g.na / 4;
+    for i in 0..g.nx {
+        let x = g.x(i);
+        let (px, py) = side.map(x, part.at(i, j90));
+        let (_, p0) = side.map(x, 0.0);
+        cv.line(px, py, px, p0, [205, 205, 205], 1.0);
+    }
+    for i in 0..g.nx {
+        // envelope over all angles (light) and the A0 column (dark)
+        let x = g.x(i);
+        let max_r = (0..g.na).map(|j| stock.at(i, j)).fold(0.0, f64::max);
+        let min_r = (0..g.na)
+            .map(|j| stock.at(i, j))
+            .fold(f64::INFINITY, f64::min);
+        let (px, y0) = side.map(x, min_r);
+        let (_, y1) = side.map(x, max_r);
+        cv.line(px, y0, px, y1, [120, 160, 230], 1.0);
+        let (_, y) = side.map(x, stock.at(i, j90));
+        cv.rect(px - 1.0, y - 1.0, px + 1.0, y + 1.0, [20, 60, 170]);
+    }
+    let un = Frame {
+        px: [80.0, 540.0, w as f64 - 30.0, 950.0],
+        data: [xa, 0.0, xb, 360.0],
+    };
+    // material left: 0 (blue) .. 0.5 mm (red); grey where the part is absent; black = gouge
+    let (l, t, r, b) = (un.px[0], un.px[1], un.px[2], un.px[3]);
+    for py in t as i64..=b as i64 {
+        for px in l as i64..=r as i64 {
+            let x = xa + (px as f64 - l) / (r - l) * (xb - xa);
+            let phi = (b - py as f64) / (b - t) * 360.0;
+            let i = (((x - g.x0) / g.dx) as usize).min(g.nx - 1);
+            let j = ((phi / 360.0 * g.na as f64) as usize).min(g.na - 1);
+            let p = part.at(i, j);
+            let c = if p <= 0.0 {
+                [235, 235, 235]
+            } else {
+                let left = stock.at(i, j) - p;
+                if left < -0.01 {
+                    [0, 0, 0]
+                } else {
+                    ramp(left / 0.5)
+                }
+            };
+            cv.set(px, py, c);
+        }
+    }
+    un.axes(&mut cv, gx, 60.0, "X", "A");
+    for i in 0..200 {
+        let x = w as f64 - 260.0 + i as f64;
+        cv.line(x, 975.0, x, 990.0, ramp(i as f64 / 199.0), 1.0);
+    }
+    cv.text(w as i64 - 390, 978, 1, "LEFT 0", [60, 60, 60]);
+    cv.text(w as i64 - 54, 978, 1, "0.5MM", [60, 60, 60]);
+    cv.to_png()
+}
+
+fn nice(span: f64) -> f64 {
+    let raw = span / 10.0;
+    let p = 10f64.powf(raw.log10().floor());
+    for m in [1.0, 2.0, 5.0, 10.0] {
+        if raw <= m * p {
+            return m * p;
+        }
+    }
+    10.0 * p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::job::Profile;
+
+    fn cyl_profile() -> Profile {
+        Profile {
+            points: vec![[-10.0, 4.0], [-5.0, 4.0], [-5.0, 6.0], [0.0, 6.0]],
+            beyond_front: None,
+        }
+    }
+
+    #[test]
+    fn mesh_map_matches_profile_map() {
+        let p = cyl_profile();
+        let g = Grid::new(-12.0, 2.0, 0.1, 360);
+        let a = RadialMap::from_mesh(g, &Mesh::revolve(&p, 720));
+        let b = RadialMap::from_profile(g, &RevolvedProfile::new(&p, 9.0));
+        for i in 0..g.nx {
+            for j in 0..g.na {
+                assert!(
+                    (a.at(i, j) - b.at(i, j)).abs() < 2e-3,
+                    "x={} j={j}: {} vs {}",
+                    g.x(i),
+                    a.at(i, j),
+                    b.at(i, j)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn one_stamp_cuts_a_flat_footprint() {
+        let g = Grid::new(-5.0, 5.0, 0.05, 720);
+        let mut s = RadialMap::filled(g, 10.0);
+        let c = Cutter::Flat { radius: 1.0 };
+        // tool at A0 sits over part angle 90 deg
+        let n = stamp(&mut s, &c, 0.0, 8.0, 0.0);
+        assert!(n > 0);
+        let j90 = g.na / 4;
+        let i0 = ((0.0 - g.x0) / g.dx) as usize;
+        assert!((s.at(i0, j90) - 8.0).abs() < 1e-3);
+        // outside the footprint along X
+        let i_far = ((1.5 - g.x0) / g.dx) as usize;
+        assert_eq!(s.at(i_far, j90), 10.0);
+        // opposite side untouched
+        assert_eq!(s.at(i0, 3 * g.na / 4), 10.0);
+    }
+
+    #[test]
+    fn full_turn_turns_a_cylinder() {
+        let g = Grid::new(-3.0, 3.0, 0.05, 360);
+        let mut s = RadialMap::filled(g, 10.0);
+        let mut b = crate::toolpath::Builder::new();
+        b.tool_change(1, 1000);
+        b.rapid_r(12.0);
+        b.rapid_x(0.0);
+        b.plunge(9.0, 60.0);
+        for k in 1..=60 {
+            b.cut(0.0, 9.0, k as f64 * 6.0, 100.0, 60.0);
+        }
+        b.rapid_r(12.0);
+        let tp = Toolpath {
+            name: "t".into(),
+            title: "t".into(),
+            tool: None,
+            notes: vec![],
+            reset_a: false,
+            safe_r: 12.0,
+            moves: b.moves,
+        };
+        let st = simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1);
+        assert!(st.rapid_hits.is_empty());
+        let i0 = ((0.0 - g.x0) / g.dx) as usize;
+        for j in 0..g.na {
+            assert!((s.at(i0, j) - 9.0).abs() < 1e-3, "j={j}: {}", s.at(i0, j));
+        }
+    }
+
+    #[test]
+    fn rapid_through_stock_is_reported() {
+        let g = Grid::new(-3.0, 3.0, 0.1, 180);
+        let mut s = RadialMap::filled(g, 10.0);
+        let tp = Toolpath {
+            name: "t".into(),
+            title: "t".into(),
+            tool: None,
+            notes: vec![],
+            reset_a: false,
+            safe_r: 12.0,
+            moves: vec![
+                Move::ToolChange { tool: 1, rpm: 1 },
+                Move::Rapid {
+                    x: Some(0.0),
+                    r: Some(12.0),
+                    a: None,
+                },
+                Move::Rapid {
+                    x: None,
+                    r: Some(9.0),
+                    a: None,
+                },
+            ],
+        };
+        let st = simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1);
+        assert_eq!(st.rapid_hits, vec![2]);
+    }
+}

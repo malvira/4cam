@@ -1,21 +1,48 @@
 {
   "schema_version": "0.1",
-  "stock": { "radius": 12.5, "length": 100.0 },
+  "stock": {
+    "radius": 12.5,
+    "length": 100.0
+  },
   "clearance": 3.0,
   "part": {
     "profile": {
       "points": [
-        [-21.7, 3.0],
-        [-18.0, 3.0],
-        [-18.0, 5.0],
-        [-15.0, 5.0],
-        [-15.0, 10.0],
-        [-0.8, 8.106666666666667],
-        [0.0, 7.2]
+        [
+          -21.7,
+          3.0
+        ],
+        [
+          -18.0,
+          3.0
+        ],
+        [
+          -18.0,
+          5.0
+        ],
+        [
+          -15.0,
+          5.0
+        ],
+        [
+          -15.0,
+          10.0
+        ],
+        [
+          -0.8,
+          8.106666666666667
+        ],
+        [
+          0.0,
+          7.2
+        ]
       ],
       "beyond_front": 7.2
     },
-    "mesh": { "file": "knob.stl", "axis": "x" }
+    "mesh": {
+      "file": "knob.stl",
+      "axis": "x"
+    }
   },
   "tools": [
     {
@@ -36,15 +63,42 @@
   "spindle_rpm": 12000,
   "programs": [
     {
-      "name": "knob_3_finish_along",
+      "name": "knob_3_mesh_rough",
+      "title": "Knob mesh rough - flat, radial levels",
+      "notes": [
+        "Roughs from bar stock to the mesh, leaving 0.15 mm for finishing"
+      ],
+      "operations": [
+        {
+          "type": "rotary_rough",
+          "tool": 1,
+          "x_range": [
+            -21.0,
+            0.0
+          ],
+          "step_down": 0.5,
+          "step_x": 1.0,
+          "allowance": 0.15,
+          "feed": 300.0,
+          "plunge_feed": 60.0
+        }
+      ]
+    },
+    {
+      "name": "knob_4_finish_along",
       "title": "Knob mesh finish - ball, rasters along X",
-      "notes": ["Finishing only: run after knob_1_profile has roughed the stock"],
+      "notes": [
+        "Run after knob_3_mesh_rough"
+      ],
       "operations": [
         {
           "type": "rotary_finish",
           "tool": 3,
           "pattern": "along",
-          "x_range": [-21.0, 0.6],
+          "x_range": [
+            -21.0,
+            0.6
+          ],
           "stepover_deg": 3.0,
           "sample_mm": 0.1,
           "feed": 400.0,
@@ -53,15 +107,20 @@
       ]
     },
     {
-      "name": "knob_4_finish_around",
+      "name": "knob_5_finish_around",
       "title": "Knob mesh finish - flat, helix around X",
-      "notes": ["Finishing only: run after knob_1_profile has roughed the stock"],
+      "notes": [
+        "Run after knob_3_mesh_rough"
+      ],
       "operations": [
         {
           "type": "rotary_finish",
           "tool": 1,
           "pattern": "around",
-          "x_range": [0.5, -20.0],
+          "x_range": [
+            0.5,
+            -20.0
+          ],
           "stepover_mm": 0.4,
           "sample_deg": 3.0,
           "feed": 300.0,

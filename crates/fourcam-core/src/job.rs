@@ -127,12 +127,14 @@ pub enum Operation {
     HelicalKnurl(HelicalKnurl),
     FlankChamfer(FlankChamfer),
     RotaryFinish(RotaryFinish),
+    RotaryRough(RotaryRough),
 }
 
 impl Operation {
     pub fn tool(&self) -> u32 {
         match self {
             Operation::RotaryFinish(o) => o.tool,
+            Operation::RotaryRough(o) => o.tool,
             Operation::RotaryTurning(o) => o.tool,
             Operation::HelicalKnurl(o) => o.tool,
             Operation::FlankChamfer(o) => o.tool,
@@ -242,8 +244,46 @@ pub struct RotaryFinish {
     /// The tip never goes below this radius (mm, >= 0).
     #[serde(default)]
     pub min_radius: f64,
+    /// `around`: add a full turn at the foot of every wall, which a helix would otherwise
+    /// only touch once per turn.
+    #[serde(default = "default_true")]
+    pub clean_walls: bool,
     pub feed: f64,
     pub plunge_feed: f64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Rough the stock down to a mesh (or revolved profile) in radial levels, each a helix along X.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RotaryRough {
+    pub tool: u32,
+    /// Axial extent of the tool tip.
+    pub x_range: [f64; 2],
+    /// Radial depth per level (mm).
+    pub step_down: f64,
+    /// X advance per turn (mm).
+    pub step_x: f64,
+    /// Radial stock left on the part for finishing (mm).
+    #[serde(default)]
+    pub allowance: f64,
+    /// Points per turn are spaced this far apart (degrees).
+    #[serde(default = "default_rough_sample_deg")]
+    pub sample_deg: f64,
+    /// Largest dip of a straight move below the allowance surface (mm).
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
+    /// The tip never goes below this radius (mm, >= 0).
+    #[serde(default)]
+    pub min_radius: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+}
+
+fn default_rough_sample_deg() -> f64 {
+    6.0
 }
 
 fn default_a_range() -> [f64; 2] {

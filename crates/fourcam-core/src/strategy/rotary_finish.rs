@@ -7,14 +7,14 @@ use crate::toolpath::{Builder, Move};
 
 /// Emit a straight cut from `p0` to `p1` (`[x, r, a]`), split until the surface under the
 /// move stays within `tol` below it (checked at the quarter points).
-fn refine(
+pub(crate) fn refine(
     b: &mut Builder,
     cl: &dyn Fn(f64, f64) -> f64,
     p0: [f64; 3],
     p1: [f64; 3],
     tol: f64,
     depth: u32,
-    op: &RotaryFinish,
+    feeds: (f64, f64),
 ) {
     let at = |t: f64| {
         [
@@ -35,17 +35,53 @@ fn refine(
     if rises && depth < 14 {
         let m = at(0.5);
         let mid = [m[0], cl(m[0], m[2]), m[2]];
-        refine(b, cl, p0, mid, tol, depth + 1, op);
-        refine(b, cl, mid, p1, tol, depth + 1, op);
+        refine(b, cl, p0, mid, tol, depth + 1, feeds);
+        refine(b, cl, mid, p1, tol, depth + 1, feeds);
         return;
     }
     if rises {
         // a wall (the surface jumps within a few microns): climb, cross, then descend
         let top = top.max(p0[1]).max(p1[1]);
-        b.cut(p0[0], top, p0[2], op.feed, op.plunge_feed);
-        b.cut(p1[0], top, p1[2], op.feed, op.plunge_feed);
+        b.cut(p0[0], top, p0[2], feeds.0, feeds.1);
+        b.cut(p1[0], top, p1[2], feeds.0, feeds.1);
     }
-    b.cut(p1[0], p1[1], p1[2], op.feed, op.plunge_feed);
+    b.cut(p1[0], p1[1], p1[2], feeds.0, feeds.1);
+}
+
+/// X positions just on the low side of every jump in the tool radius (a wall), found at
+/// 12 angles and merged within 0.05 mm.
+fn wall_feet(cl: &dyn Fn(f64, f64) -> f64, lo: f64, hi: f64) -> Vec<f64> {
+    let step = 0.02;
+    let n = ((hi - lo) / step).ceil() as usize;
+    let mut feet: Vec<f64> = Vec::new();
+    for k in 0..12 {
+        let a = k as f64 * 30.0;
+        for i in 0..n {
+            let (xa, xb) = (lo + step * i as f64, (lo + step * (i + 1) as f64).min(hi));
+            let (ra, rb) = (cl(xa, a), cl(xb, a));
+            if (rb - ra).abs() < 0.1 {
+                continue;
+            }
+            // bisect the jump; keep the low side
+            let rising = rb > ra;
+            let (mut p, mut q) = (xa, xb);
+            for _ in 0..30 {
+                let m = 0.5 * (p + q);
+                let rm = cl(m, a);
+                if (rm - ra).abs() < (rm - rb).abs() {
+                    p = m;
+                } else {
+                    q = m;
+                }
+            }
+            let foot = if rising { p } else { q };
+            if !feet.iter().any(|f| (f - foot).abs() < 0.05) {
+                feet.push(foot);
+            }
+        }
+    }
+    feet.sort_by(|a, b| a.total_cmp(b));
+    feet
 }
 
 /// Plan a finishing pass. `r_max` is the part's largest radius (for `stepover_mm` in `along`).
@@ -68,7 +104,15 @@ pub fn rotary_finish(
     // feed to (x, a), subdividing where the surface rises above the straight move
     let cut = |b: &mut Builder, x: f64, a: f64| {
         let (xs, rs, as_) = (b.x.unwrap_or(x), b.r.unwrap_or(0.0), b.a);
-        refine(b, &cl, [xs, rs, as_], [x, cl(x, a), a], tol, 0, op);
+        refine(
+            b,
+            &cl,
+            [xs, rs, as_],
+            [x, cl(x, a), a],
+            tol,
+            0,
+            (op.feed, op.plunge_feed),
+        );
     };
     match op.pattern {
         FinishPattern::Along => {
@@ -152,6 +196,20 @@ pub fn rotary_finish(
                 cut(b, x1, a);
             }
             b.rapid_r(safe_r);
+            if op.clean_walls {
+                // A helix reaches the foot of a wall at only one angle per turn, leaving a
+                // strip as wide as the stepover; finish each wall foot with a full turn.
+                for xw in wall_feet(&cl, x0.min(x1), x0.max(x1)) {
+                    let a = b.a;
+                    b.rapid_r(safe_r);
+                    b.rapid_x(xw);
+                    b.plunge(cl(xw, a), op.plunge_feed);
+                    for k in 1..=n_rev {
+                        cut(b, xw, a + seg * k as f64);
+                    }
+                    b.rapid_r(safe_r);
+                }
+            }
         }
     }
     let r_min = b.moves[first..]

@@ -1,0 +1,131 @@
+//! Roughing from a mesh: radial step-down levels, each cut as a helix along X. At every point
+//! the tool sits at `max(level, drop-cutter radius + allowance)`, so it never cuts deeper than
+//! one step and never into the part.
+
+use super::rotary_finish::refine;
+use crate::dropcutter::DropCutter;
+use crate::job::RotaryRough;
+use crate::numeric::py_max;
+use crate::toolpath::{Builder, Move};
+
+fn intervals(mask: &[bool], xs: &[f64]) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, &m) in mask.iter().enumerate() {
+        match (m, start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                out.push((xs[s], xs[i - 1]));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        out.push((xs[s], xs[xs.len() - 1]));
+    }
+    out
+}
+
+/// Returns the lowest tip radius used.
+pub fn rotary_rough(
+    b: &mut Builder,
+    dc: &DropCutter,
+    stock_r: f64,
+    safe_r: f64,
+    op: &RotaryRough,
+) -> Result<f64, String> {
+    if op.step_down <= 0.0 || op.step_x <= 0.0 || op.sample_deg <= 0.0 {
+        return Err("step_down, step_x and sample_deg must be > 0".into());
+    }
+    let floor = op.min_radius.max(0.0);
+    let cl = |x: f64, a: f64| dc.radius_at(x, a, floor) + op.allowance;
+    let [x_lo, x_hi] = [
+        op.x_range[0].min(op.x_range[1]),
+        op.x_range[0].max(op.x_range[1]),
+    ];
+    let first = b.moves.len();
+    let n_rev = (360.0 / op.sample_deg).ceil() as usize;
+    let seg = 360.0 / n_rev as f64;
+
+    // lowest surface over all angles at each x: where a level has material to remove
+    let m = ((x_hi - x_lo) / 0.05).ceil().max(1.0) as usize;
+    let xs: Vec<f64> = (0..=m)
+        .map(|i| x_lo + (x_hi - x_lo) * i as f64 / m as f64)
+        .collect();
+    let need: Vec<f64> = xs
+        .iter()
+        .map(|&x| {
+            (0..n_rev)
+                .map(|k| cl(x, k as f64 * seg))
+                .fold(f64::INFINITY, f64::min)
+        })
+        .collect();
+    let z_min = need.iter().copied().fold(f64::INFINITY, f64::min);
+
+    let mut levels = Vec::new();
+    let mut level = stock_r - op.step_down;
+    while level > z_min - op.step_down + 1e-6 {
+        levels.push(py_max(level, z_min));
+        level -= op.step_down;
+    }
+
+    let tol = op.tolerance.max(1e-4);
+    let feeds = (op.feed, op.plunge_feed);
+    let mut prev = stock_r;
+    let mut direction = 1.0;
+    b.comment("--- mesh roughing ---");
+    for &level in &levels {
+        let mask: Vec<bool> = need.iter().map(|&z| z < level - 1e-6).collect();
+        for (mut xa, mut xb) in intervals(&mask, &xs) {
+            if direction < 0.0 {
+                std::mem::swap(&mut xa, &mut xb);
+            }
+            let zf = |x: f64, a: f64| py_max(level, cl(x, a));
+            let go = |b: &mut Builder, x: f64, r: f64, a: f64| {
+                let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(r), b.a];
+                refine(b, &zf, p0, [x, r, a], tol, 0, feeds);
+            };
+            let a0 = b.a;
+            // enter above the previous level (already cleared here), then ramp down over a turn
+            let zs = py_max(prev + 0.5, zf(xa, a0));
+            b.rapid_r(safe_r);
+            b.rapid_x(xa);
+            b.plunge(zs, op.plunge_feed);
+            for i in 1..=n_rev {
+                let a = a0 + direction * seg * i as f64;
+                let target = zf(xa, a);
+                let r = py_max(zs + (target - zs) * i as f64 / n_rev as f64, target);
+                go(b, xa, r, a);
+            }
+            for _ in 0..n_rev {
+                let a = b.a + direction * seg;
+                go(b, xa, zf(xa, a), a);
+            }
+            let len = (xb - xa).abs();
+            if len > 1e-9 {
+                let n = ((len / op.step_x * 360.0 / seg).ceil() as usize).max(1);
+                let da = direction * 360.0 * len / op.step_x / n as f64;
+                for i in 1..=n {
+                    let x = xa + (xb - xa) * i as f64 / n as f64;
+                    let a = b.a + da;
+                    go(b, x, zf(x, a), a);
+                }
+            }
+            for _ in 0..n_rev {
+                let a = b.a + direction * seg;
+                go(b, xb, zf(xb, a), a);
+            }
+            b.rapid_r(safe_r);
+        }
+        prev = level;
+        direction = -direction;
+    }
+    Ok(b.moves[first..]
+        .iter()
+        .filter_map(|m| match m {
+            Move::Cut { r, .. } | Move::Plunge { r, .. } => Some(*r),
+            _ => None,
+        })
+        .fold(f64::INFINITY, f64::min))
+}

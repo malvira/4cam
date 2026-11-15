@@ -1,8 +1,8 @@
 //! `4cam` command-line interface.
 
 use fourcam::{
-    limits_for, load_mesh, plan_with_mesh, post, render, verify_gcode, FeedMode, Job, Limits,
-    Machine, Mesh,
+    gouge_check, limits_for, load_mesh, plan_with_mesh, post, render, sim, simulate_job,
+    verify_gcode, FeedMode, Job, Limits, Machine, Mesh,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -22,6 +22,10 @@ USAGE:
       Print the machine-neutral toolpath IR as JSON.
   4cam revolve <job.json> <out.stl> [--segments <n>]
       Revolve the job's part.profile into a closed binary STL (default 720 facets).
+  4cam simulate <job.json> [--out <dir>] [--dx <mm>] [--na <cells>]
+      Simulate material removal of all programs in order on a radial heightmap
+      (default 0.05 mm x 720 cells around), compare with the part, and write a
+      <program>_stock.png per program. Fails on rapids through stock or gouges.
   4cam mesh-info <file.stl|file.3mf>
       Print triangle count, bounding box and largest radius about X.
 ";
@@ -98,6 +102,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
         "revolve" => cmd_revolve(&parse(rest, &["segments"])?),
         "mesh-info" => cmd_mesh_info(&parse(rest, &[])?),
+        "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na"])?),
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
@@ -118,7 +123,8 @@ fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
     };
     let out = PathBuf::from(o.flag("out").unwrap_or("."));
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let tps = plan_job(&job, job_path)?;
+    let (tps, mesh) = plan_job_with_mesh(&job, job_path)?;
+    let gouges = gouge_check(&job, &tps, mesh.as_ref()).map_err(|e| e.to_string())?;
     let mut bad = 0;
     for tp in &tps {
         let text = post(tp, &machine);
@@ -139,6 +145,19 @@ fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
             println!("  {i}");
         }
         bad += issues.len();
+        if let Some(g) = gouges.iter().find(|g| g.program == tp.name) {
+            if g.moves_checked > 0 {
+                println!(
+                    "  gouge check: {} cut moves, deepest {:.4} mm into the part",
+                    g.moves_checked, g.max_depth
+                );
+                if g.max_depth > GOUGE_TOL {
+                    let (x, a) = g.at.unwrap_or_default();
+                    println!("  GOUGE at X{x:.3} A{a:.3}");
+                    bad += 1;
+                }
+            }
+        }
     }
     Ok(if bad == 0 {
         ExitCode::SUCCESS
@@ -200,11 +219,84 @@ fn cmd_verify(o: &Opts) -> Result<ExitCode, String> {
     })
 }
 
+/// Deepest cut into the part that `run` and `simulate` accept (mm).
+const GOUGE_TOL: f64 = 0.02;
+
 /// Plan a job, loading its mesh (if any) relative to the job file.
 fn plan_job(job: &Job, job_path: &str) -> Result<Vec<fourcam::Toolpath>, String> {
+    plan_job_with_mesh(job, job_path).map(|(t, _)| t)
+}
+
+fn plan_job_with_mesh(
+    job: &Job,
+    job_path: &str,
+) -> Result<(Vec<fourcam::Toolpath>, Option<Mesh>), String> {
     let dir = Path::new(job_path).parent().unwrap_or(Path::new("."));
     let mesh = load_mesh(job, dir).map_err(|e| e.to_string())?;
-    plan_with_mesh(job, mesh.as_ref()).map_err(|e| e.to_string())
+    let tps = plan_with_mesh(job, mesh.as_ref()).map_err(|e| e.to_string())?;
+    Ok((tps, mesh))
+}
+
+fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
+    let job_path = o.one_input()?;
+    let job = load_job(job_path)?;
+    let num = |name: &str, default: f64| -> Result<f64, String> {
+        o.flag(name).map_or(Ok(default), |v| {
+            v.parse()
+                .map_err(|_| format!("--{name}: not a number: {v}"))
+        })
+    };
+    let dx = num("dx", 0.05)?;
+    let na = num("na", 720.0)? as usize;
+    let out = PathBuf::from(o.flag("out").unwrap_or("."));
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let (tps, mesh) = plan_job_with_mesh(&job, job_path)?;
+    let res =
+        simulate_job(&job, &tps, mesh.as_ref(), dx, na, GOUGE_TOL).map_err(|e| e.to_string())?;
+    // replay to render the stock after each program
+    let mut stock = sim::RadialMap::filled(res.stock.grid, job.stock.radius);
+    let cutters = |t: u32| {
+        job.tool(t)
+            .and_then(|d| fourcam::cutter_for(t, d.shape).ok())
+    };
+    let mut bad = false;
+    for (tp, (name, st, dev)) in tps.iter().zip(&res.programs) {
+        sim::simulate(&mut stock, tp, &cutters, (dx * 2.0).min(0.1));
+        let png = out.join(format!("{name}_stock.png"));
+        let title = format!("{name} - simulated stock (grey: part)");
+        std::fs::write(
+            &png,
+            sim::stock_png(&title, &stock, &res.part, job.stock.radius),
+        )
+        .map_err(|e| format!("{}: {e}", png.display()))?;
+        println!(
+            "{name}: {} tool positions, {} cells cut, {} rapid(s) through stock",
+            st.samples,
+            st.cells_cut,
+            st.rapid_hits.len()
+        );
+        println!(
+            "  material left on the part: max {:.3} mm, mean {:.3} mm; deepest gouge {:.3} mm ({} cells over {GOUGE_TOL} mm)",
+            dev.max_left, dev.mean_left, dev.max_gouge, dev.gouge_cells
+        );
+        if st.samples == 0
+            && tp
+                .moves
+                .iter()
+                .any(|m| matches!(m, fourcam::Move::Cut { .. }))
+        {
+            println!(
+                "  (not simulated: its tools have no full shape, e.g. a V-bit without a diameter)"
+            );
+        }
+        println!("  preview: {}", png.display());
+        bad |= !st.rapid_hits.is_empty() || dev.gouge_cells > 0;
+    }
+    Ok(if bad {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 fn cmd_revolve(o: &Opts) -> Result<ExitCode, String> {

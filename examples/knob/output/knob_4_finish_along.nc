@@ -3,7 +3,7 @@
 (Zero: X0 front face, Y0/Z0 rotation axis, A rotates about X)
 G21 G90 G94
 G17
-(Finishing only: run after knob_1_profile has roughed the stock)
+(Run after knob_3_mesh_rough)
 M6 T3 (tool change + tool length measurement)
 M3 S12000
 G4 P3
