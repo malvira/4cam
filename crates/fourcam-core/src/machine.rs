@@ -52,6 +52,21 @@ impl Machine {
         Machine::from_json(include_str!("../../../machines/makera-z1.json"))
             .expect("bundled makera-z1.json is valid")
     }
+
+    /// Built-in LinuxCNC profile (XYZA, G93 inverse-time feeds).
+    pub fn linuxcnc() -> Machine {
+        Machine::from_json(include_str!("../../../machines/linuxcnc.json"))
+            .expect("bundled linuxcnc.json is valid")
+    }
+
+    /// Built-in profile by name: `makera-z1` or `linuxcnc`.
+    pub fn builtin(name: &str) -> Option<Machine> {
+        match name {
+            "makera-z1" | "z1" => Some(Machine::makera_z1()),
+            "linuxcnc" => Some(Machine::linuxcnc()),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -64,5 +79,7 @@ mod tests {
         assert_eq!(m.feed_mode, FeedMode::DegreesAsLength);
         assert_eq!(m.decimals, 3);
         assert_eq!(m.preamble, vec!["G21 G90 G94", "G17"]);
+        assert_eq!(Machine::linuxcnc().feed_mode, FeedMode::InverseTime);
+        assert!(Machine::builtin("nope").is_none());
     }
 }

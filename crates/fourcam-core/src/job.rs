@@ -235,6 +235,10 @@ pub struct RotaryFinish {
     /// Radial stock to leave (mm).
     #[serde(default)]
     pub leave: f64,
+    /// Largest allowed dip of a straight move below the surface (mm); moves are split until
+    /// they stay within it.
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
     /// The tip never goes below this radius (mm, >= 0).
     #[serde(default)]
     pub min_radius: f64,
@@ -244,6 +248,9 @@ pub struct RotaryFinish {
 
 fn default_a_range() -> [f64; 2] {
     [0.0, 360.0]
+}
+fn default_tolerance() -> f64 {
+    0.005
 }
 fn default_sample_mm() -> f64 {
     0.1

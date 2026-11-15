@@ -72,7 +72,13 @@ pub fn post(tp: &Toolpath, machine: &Machine) -> String {
                 out.push(w);
             }
             Move::Plunge { r, feed } => {
-                out.push(format!("G1 Z{} F{feed:.0}", num(*r)));
+                if machine.feed_mode == FeedMode::InverseTime {
+                    // G93: F = 1 / minutes for this move
+                    let dz = s.z.map_or(0.0, |z| (r - z).abs()).max(1e-6);
+                    out.push(format!("G1 Z{} F{:.3}", num(*r), feed / dz));
+                } else {
+                    out.push(format!("G1 Z{} F{feed:.0}", num(*r)));
+                }
                 s.z = Some(*r);
             }
             Move::Cut {
@@ -83,8 +89,18 @@ pub fn post(tp: &Toolpath, machine: &Machine) -> String {
                 plunge_cap,
             } => {
                 let (x0, z0) = (s.x.unwrap_or(*x), s.z.unwrap_or(*r));
-                let (dx, dz, da) = (x - x0, r - z0, a - s.a);
-                let len = true_length(dx, dz, da, z0, *r);
+                // G93 feeds are per move: time the move the controller will actually run,
+                // i.e. between the printed (rounded) coordinates
+                let q = |v: f64| {
+                    if machine.feed_mode == FeedMode::InverseTime {
+                        // exactly the printed value
+                        num(v).parse::<f64>().unwrap_or(v)
+                    } else {
+                        v
+                    }
+                };
+                let (dx, dz, da) = (q(*x) - q(x0), q(*r) - q(z0), q(*a) - q(s.a));
+                let len = true_length(dx, dz, da, q(z0), q(*r));
                 if len < 1e-6 {
                     continue;
                 }

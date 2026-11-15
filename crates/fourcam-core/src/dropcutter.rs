@@ -227,7 +227,16 @@ impl DropCutter {
             if ymin > r || ymax < -r {
                 continue;
             }
-            best = best.max(drop_triangle(&self.cutter, &lt));
+            // bound: no contact can be higher than zmax - h(closest approach)
+            let dmin = origin_distance_2d([
+                [lt[0][0], lt[0][1]],
+                [lt[1][0], lt[1][1]],
+                [lt[2][0], lt[2][1]],
+            ]);
+            if dmin > r || zmax - self.cutter.height(dmin) <= best {
+                continue;
+            }
+            best = best.max(drop_triangle_above(&self.cutter, &lt, best));
         }
         best
     }
@@ -236,8 +245,14 @@ impl DropCutter {
 /// Tip height for a tool at the origin (axis vertical) against one triangle; `-inf` if the
 /// triangle is outside the footprint.
 pub fn drop_triangle(cutter: &Cutter, t: &Triangle) -> f64 {
+    drop_triangle_above(cutter, t, f64::NEG_INFINITY)
+}
+
+/// Like [`drop_triangle`], but may skip work that cannot beat `floor` (the result is then
+/// `<= floor`).
+fn drop_triangle_above(cutter: &Cutter, t: &Triangle, floor: f64) -> f64 {
     let r = cutter.radius();
-    let mut best = f64::NEG_INFINITY;
+    let mut best = floor;
     // facet: plane z = z0 + g·(p - p0)
     let n = crate::mesh::cross(crate::mesh::sub(t[1], t[0]), crate::mesh::sub(t[2], t[0]));
     let nlen = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
@@ -262,9 +277,25 @@ pub fn drop_triangle(cutter: &Cutter, t: &Triangle) -> f64 {
     }
     // edges (vertices are their end points)
     for i in 0..3 {
-        best = best.max(drop_edge(cutter, t[i], t[(i + 1) % 3]));
+        let (a, b) = (t[i], t[(i + 1) % 3]);
+        if a[2].max(b[2]) - cutter.height(segment_distance_2d(a, b).min(r)) <= best {
+            continue;
+        }
+        best = best.max(drop_edge(cutter, a, b));
     }
     best
+}
+
+/// Distance in the xy plane from the origin to segment `a`-`b`.
+fn segment_distance_2d(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let e = [b[0] - a[0], b[1] - a[1]];
+    let l2 = e[0] * e[0] + e[1] * e[1];
+    let t = if l2 > 0.0 {
+        (-(a[0] * e[0] + a[1] * e[1]) / l2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (a[0] + t * e[0]).hypot(a[1] + t * e[1])
 }
 
 fn inside_2d(t: &Triangle, p: [f64; 2]) -> bool {
@@ -317,8 +348,9 @@ fn drop_edge(cutter: &Cutter, a: [f64; 3], b: [f64; 3]) -> f64 {
     let mut c = hi - gr * (hi - lo);
     let mut d = lo + gr * (hi - lo);
     let (mut fc, mut fd) = (f(c), f(d));
-    for _ in 0..60 {
-        if hi - lo < 1e-12 {
+    let len = (e[0] * e[0] + e[1] * e[1] + (b[2] - a[2]).powi(2)).sqrt();
+    for _ in 0..80 {
+        if (hi - lo) * len < 1e-7 {
             break;
         }
         if fc > fd {

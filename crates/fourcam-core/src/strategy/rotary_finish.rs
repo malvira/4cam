@@ -5,6 +5,49 @@ use crate::dropcutter::DropCutter;
 use crate::job::{FinishPattern, RotaryFinish};
 use crate::toolpath::{Builder, Move};
 
+/// Emit a straight cut from `p0` to `p1` (`[x, r, a]`), split until the surface under the
+/// move stays within `tol` below it (checked at the quarter points).
+fn refine(
+    b: &mut Builder,
+    cl: &dyn Fn(f64, f64) -> f64,
+    p0: [f64; 3],
+    p1: [f64; 3],
+    tol: f64,
+    depth: u32,
+    op: &RotaryFinish,
+) {
+    let at = |t: f64| {
+        [
+            p0[0] + (p1[0] - p0[0]) * t,
+            p0[1] + (p1[1] - p0[1]) * t,
+            p0[2] + (p1[2] - p0[2]) * t,
+        ]
+    };
+    // highest surface point found above the straight move
+    let mut top = f64::NEG_INFINITY;
+    let mut rises = false;
+    for t in [0.25, 0.5, 0.75] {
+        let p = at(t);
+        let need = cl(p[0], p[2]);
+        top = top.max(need);
+        rises |= need > p[1] + tol;
+    }
+    if rises && depth < 14 {
+        let m = at(0.5);
+        let mid = [m[0], cl(m[0], m[2]), m[2]];
+        refine(b, cl, p0, mid, tol, depth + 1, op);
+        refine(b, cl, mid, p1, tol, depth + 1, op);
+        return;
+    }
+    if rises {
+        // a wall (the surface jumps within a few microns): climb, cross, then descend
+        let top = top.max(p0[1]).max(p1[1]);
+        b.cut(p0[0], top, p0[2], op.feed, op.plunge_feed);
+        b.cut(p1[0], top, p1[2], op.feed, op.plunge_feed);
+    }
+    b.cut(p1[0], p1[1], p1[2], op.feed, op.plunge_feed);
+}
+
 /// Plan a finishing pass. `r_max` is the part's largest radius (for `stepover_mm` in `along`).
 /// Returns the lowest tip radius used.
 pub fn rotary_finish(
@@ -21,7 +64,12 @@ pub fn rotary_finish(
         return Err("sample_mm and sample_deg must be > 0".into());
     }
     let first = b.moves.len();
-    let cut = |b: &mut Builder, x: f64, a: f64| b.cut(x, cl(x, a), a, op.feed, op.plunge_feed);
+    let tol = op.tolerance.max(1e-4);
+    // feed to (x, a), subdividing where the surface rises above the straight move
+    let cut = |b: &mut Builder, x: f64, a: f64| {
+        let (xs, rs, as_) = (b.x.unwrap_or(x), b.r.unwrap_or(0.0), b.a);
+        refine(b, &cl, [xs, rs, as_], [x, cl(x, a), a], tol, 0, op);
+    };
     match op.pattern {
         FinishPattern::Along => {
             let step = match (op.stepover_deg, op.stepover_mm) {

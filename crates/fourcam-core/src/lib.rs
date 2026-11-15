@@ -10,6 +10,7 @@ pub mod machine;
 pub mod mesh;
 pub mod numeric;
 pub mod post;
+pub mod render;
 pub mod strategy;
 pub mod toolpath;
 pub mod verify;
