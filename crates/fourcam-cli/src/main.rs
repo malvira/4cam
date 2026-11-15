@@ -30,6 +30,9 @@ USAGE:
       Add turning, a diamond knurl on the body face and a V-bit front chamfer,
       derived from the model's faces (defaults: the Z1 knob).
   4cam ops list | show <type> | check <job-or-project.json>
+  4cam ops defaults <type> <job-or-project.json> [--setup id] [--tool n] [--machine id]
+      A new operation with every parameter filled from the setup's tools,
+      spindle, machine limits and part faces.
       The operation registry: types, parameters (units, defaults, limits),
       accepted tools and geometry; check validates a file's operations.
   4cam profiles list|show|import|export|dir ...
@@ -215,6 +218,54 @@ fn cmd_ops(args: &[String]) -> Result<ExitCode, String> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&t).map_err(|e| e.to_string())?
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("defaults") => {
+            let kind = args.get(1).ok_or(
+                "ops defaults <type> <job-or-project.json> [--setup id] [--tool n] [--machine id]",
+            )?;
+            let o = parse(&args[2..], &["setup", "tool", "machine"])?;
+            let path = o.one_input()?;
+            let (p, _) = fourcam::project::Project::from_json_any(&read(path)?)
+                .map_err(|e| format!("{path}: {e}"))?;
+            let reg = profiles_cmd::Registry::load();
+            let machine = match o.flag("machine") {
+                Some(m) => Some(profiles_cmd::resolve_machine(&reg, m)?),
+                None => None,
+            };
+            let tool = o
+                .flag("tool")
+                .map(|t| t.parse::<u32>().map_err(|_| format!("--tool: {t}")))
+                .transpose()?;
+            let setup = o
+                .flag("setup")
+                .map(str::to_string)
+                .or_else(|| p.setups.first().map(|s| s.id.clone()))
+                .ok_or("no setups")?;
+            let dir = Path::new(path)
+                .parent()
+                .unwrap_or(Path::new("."))
+                .to_path_buf();
+            let models = p.models.clone();
+            let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
+                fourcam::project::ModelKind::Mesh(src) => Mesh::load(&dir.join(&src.file))
+                    .ok()
+                    .map(|m| m.oriented(src.axis, src.translate)),
+                _ => None,
+            };
+            let v = p.op_defaults(
+                kind,
+                &setup,
+                tool,
+                &[],
+                &reg.libraries(),
+                machine.as_ref(),
+                &meshes,
+            )?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?
             );
             Ok(ExitCode::SUCCESS)
         }

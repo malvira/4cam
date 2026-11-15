@@ -63,6 +63,8 @@ export async function load(source) {
     checkProject: (doc) => call("check_project", doc),
     faceRegions: (doc, model, meshBytes) => call("face_regions", doc, model, meshBytes),
     wizardKnurl: (doc, params, meshBytes) => call("wizard_knurl", doc, params || {}, meshBytes),
+    // a new operation with every field filled: opts {type, setup, tool, geometry, machine}
+    opDefaults: (doc, opts, meshBytes) => call("op_defaults", doc, opts || {}, meshBytes),
     // convert a profile file (4cam JSON, Fusion .tools/.json/.mch/.f3d) -> {kind, profile, notes}
     importProfile: (bytes, name) => call("import_profile", bytes, name || "profile.json"),
     meshTriangles: (job, opts, meshBytes) => call("mesh_triangles", job, opts || {}, meshBytes),

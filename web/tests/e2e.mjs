@@ -330,10 +330,38 @@ try {
   check("reordering operations reorders the G-code", ci > 0 && ki > ci, `chamfer at ${ci}, knurl at ${ki}`);
   await treeAct("op3", "down");
   await settle();
+  // every operation type: the create form comes fully filled and applies without problems
+  const typesAll = await js("window.__4cam.state.tree.types.map(t => t.kind).join(',')");
+  const filled = [];
+  for (const kind of String(typesAll).split(",")) {
+    await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
+    await waitFor(() => js(`!!document.getElementById('opForm') && !!window.__4cam.state.tree.draft && window.__4cam.state.tree.draft.op.type === '${kind}'`), `the ${kind} form`, 15000);
+    const blanks = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && !['__name', '__axial'].includes(e.name) && e.value.trim() === '').map(e => e.name).join(',')");
+    const before = await js("document.querySelectorAll('#tree .tree-op').length");
+    await js("document.getElementById('opForm').requestSubmit(); true");
+    await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${before + 1}`), `${kind} to be added`, 15000);
+    const id = await js("[...document.querySelectorAll('#tree .tree-op')].pop().dataset.op");
+    filled.push(`${kind}:${blanks || "none blank"}`);
+    if (blanks) break;
+    await treeAct(id, "delete");
+    await settle();
+  }
+  check("every operation type's new form is fully filled and applies cleanly", filled.length === 5 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
+  // changing the tool refreshes defaults the user hasn't edited
+  await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
+  await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 15000);
+  const pat1 = await js("document.getElementById('opForm').elements.pattern.value");
+  await js("const f = document.getElementById('opForm'); f.elements.feed.value = '123'; f.elements.feed.dispatchEvent(new Event('input', { bubbles: true })); f.elements.tool.value = '2'; f.elements.tool.dispatchEvent(new Event('change', { bubbles: true })); true");
+  await waitFor(() => js("window.__4cam.state.tree.draft?.op.tool === 2 && document.getElementById('opForm').elements.pattern.value === 'along'"), "defaults for the V-bit", 15000);
+  const keptFeed = await js("document.getElementById('opForm').elements.feed.value");
+  check("changing the tool refreshes untouched defaults and keeps edited ones", pat1 === "around" && keptFeed === "123", `pattern around -> along with the V-bit; edited feed kept at ${keptFeed}`);
+  await js("document.getElementById('cancelDraft').click(); true");
+  await settle();
+
   // add an operation from the registry's form
   await js("document.getElementById('treeAddType').value = 'flank_chamfer'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("!!document.getElementById('opForm')"), "the operation form", 10000);
-  await js("document.getElementById('opForm').requestSubmit(); true");
+  await js("const f0 = document.getElementById('opForm'); f0.elements.edge.value = ''; f0.requestSubmit(); true");
   const probs = await waitFor(() => js("document.getElementById('opErrors')?.textContent || ''"), "the missing-field message", 10000);
   await js("const f = document.getElementById('opForm'); f.elements.edge.value = '0, 7.2'; f.elements.tip_offset.value = '0.8'; f.elements.passes.value = '0'; f.elements.feed.value = '200'; f.elements.plunge_feed.value = '60'; f.requestSubmit(); true");
   await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 4"), "the new operation", 10000);

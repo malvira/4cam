@@ -328,6 +328,194 @@ pub fn kind_of(op: &Operation) -> &'static str {
     }
 }
 
+// ------------------------------------------------------------------ defaults
+
+/// What defaults are derived from.
+pub struct DefaultsContext<'a> {
+    /// The setup, lowered to a job (stock, tools, spindle, part).
+    pub job: &'a crate::job::Job,
+    /// The part's face regions (from the profile or mesh), if known.
+    pub regions: Option<&'a [crate::geometry::FaceRegion]>,
+    /// Machine limits (feed cap, spindle range).
+    pub machine: Option<&'a crate::profiles::MachineProfile>,
+    /// Chosen tool number (None: the first tool whose shape the operation accepts).
+    pub tool: Option<u32>,
+    /// Containment boundary from the operation's geometry selection.
+    pub boundary: Option<crate::geometry::Boundary>,
+}
+
+/// Round to a "nice" step (0.05 mm, 5 mm/min ...).
+fn nice(v: f64, step: f64) -> f64 {
+    ((v / step).round() * step * 1e6).round() / 1e6
+}
+
+/// A complete, valid operation of `kind` with every parameter filled in from the context:
+/// tool size (depths, stepovers), spindle speed and the machine's feed cap (feeds), and the
+/// part / selected geometry (ranges, knurl body, chamfer edge). Every host gets the same
+/// defaults from here.
+pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
+    let t = find(kind).ok_or(format!("unknown operation type {kind:?}"))?;
+    let job = cx.job;
+    // tool: the one asked for, else the first the operation accepts
+    let tool = match cx.tool {
+        Some(n) => job.tool(n).ok_or(format!("tool T{n} is not defined"))?,
+        None => job
+            .tools
+            .iter()
+            .find(|x| t.tool_shapes.contains(&tool_kind(&x.shape)))
+            .ok_or(format!(
+                "{kind} needs a {} tool; the job has none",
+                t.tool_shapes.join(" or ")
+            ))?,
+    };
+    let shape = tool_kind(&tool.shape);
+    let d = match tool.shape {
+        ToolShape::Flat { diameter } | ToolShape::Ball { diameter } => diameter,
+        ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(3.175),
+    };
+    // feeds: 0.025 mm per tooth (single flute) at the job's rpm, capped by the machine
+    let cap = cx.machine.and_then(|m| m.max_feed).unwrap_or(f64::INFINITY);
+    let rpm = job.spindle_rpm as f64;
+    let feed = nice((0.025 * rpm).clamp(50.0, 0.75 * cap), 5.0);
+    let plunge = nice((feed / 5.0).max(10.0), 5.0);
+    // where: the selection's X range, else the part's
+    let part_x = || -> Option<[f64; 2]> {
+        if let Some(r) = cx.regions {
+            let lo = r.iter().map(|f| f.x[0]).fold(f64::INFINITY, f64::min);
+            let hi = r.iter().map(|f| f.x[1]).fold(f64::NEG_INFINITY, f64::max);
+            if lo.is_finite() {
+                return Some([lo, hi]);
+            }
+        }
+        let p = job.part.profile.as_ref()?;
+        Some([p.points.first()?[0], p.points.last()?[0]])
+    };
+    let x_range = cx
+        .boundary
+        .and_then(|b| b.x)
+        .or_else(part_x)
+        .unwrap_or([-10.0, 0.0]);
+    let x_range = [nice(x_range[0], 0.001), nice(x_range[1], 0.001)];
+    let a_range = cx.boundary.and_then(|b| b.a).unwrap_or([0.0, 360.0]);
+    let mut v = serde_json::Map::new();
+    v.insert("type".into(), json!(kind));
+    v.insert("tool".into(), json!(tool.number));
+    let depth = nice((0.125 * d).max(0.05), 0.05);
+    let step = nice((0.3 * d).max(0.1), 0.05);
+    let fine = nice((0.125 * d).max(0.05), 0.05);
+    match kind {
+        "rotary_turning" => {
+            v.insert("rough_depth".into(), json!(depth));
+            v.insert("rough_step".into(), json!(step));
+            v.insert("rough_feed".into(), json!(feed));
+            v.insert("finish_allowance".into(), json!(0.15));
+            v.insert("finish_step".into(), json!(fine));
+            v.insert("finish_feed".into(), json!(nice(0.85 * feed, 5.0)));
+            v.insert("plunge_feed".into(), json!(plunge));
+        }
+        "rotary_rough" => {
+            v.insert("x_range".into(), json!(x_range));
+            v.insert("step_down".into(), json!(depth));
+            v.insert("step_x".into(), json!(step));
+            v.insert("allowance".into(), json!(0.15));
+            v.insert("feed".into(), json!(feed));
+            v.insert("plunge_feed".into(), json!(plunge));
+        }
+        "rotary_finish" => {
+            let along = shape != "flat";
+            v.insert(
+                "pattern".into(),
+                json!(if along { "along" } else { "around" }),
+            );
+            v.insert(
+                "x_range".into(),
+                json!(if along {
+                    x_range
+                } else {
+                    [x_range[1], x_range[0]]
+                }),
+            );
+            v.insert("a_range".into(), json!(a_range));
+            if along {
+                v.insert("stepover_deg".into(), json!(3.0));
+            } else {
+                v.insert("stepover_mm".into(), json!(fine));
+            }
+            v.insert("feed".into(), json!(nice(1.25 * feed, 5.0).min(0.75 * cap)));
+            v.insert("plunge_feed".into(), json!(plunge));
+        }
+        "helical_knurl" => {
+            let regions = cx
+                .regions
+                .ok_or("helical_knurl defaults need the part's faces")?;
+            let body = regions
+                .iter()
+                .filter(|r| r.shape == "cone" || r.shape == "cylinder")
+                .max_by(|a, b| a.area.total_cmp(&b.area))
+                .ok_or("the part has no conical or cylindrical body to knurl")?;
+            let (r0, r1) = crate::wizards::radius_at_ends(body, regions);
+            let front = regions
+                .iter()
+                .map(|r| r.x[1])
+                .fold(f64::NEG_INFINITY, f64::max);
+            let (x0, x1) = (body.x[0], body.x[1]);
+            let r_at = |x: f64| r0 + (r1 - r0) * (x - x0) / (x1 - x0);
+            let r_mean = 0.5 * (r0 + r_at(front));
+            // about 2 mm between grooves around the mean circumference
+            let count = ((std::f64::consts::TAU * r_mean / 2.0).round() as u32).max(4);
+            v.insert("body_back".into(), json!([nice(x0, 1e-6), nice(r0, 1e-6)]));
+            v.insert(
+                "body_front".into(),
+                json!([nice(front, 1e-6), nice(r_at(front), 1e-6)]),
+            );
+            v.insert("count".into(), json!(count));
+            v.insert("helix_angle".into(), json!(30.0));
+            v.insert("fill".into(), json!(0.95));
+            v.insert("passes".into(), json!([0.6, 1.0]));
+            v.insert("feed".into(), json!(nice(feed * 2.0 / 3.0, 5.0)));
+            v.insert("plunge_feed".into(), json!(plunge));
+        }
+        "flank_chamfer" => {
+            let regions = cx
+                .regions
+                .ok_or("flank_chamfer defaults need the part's faces")?;
+            let front = regions
+                .iter()
+                .map(|r| r.x[1])
+                .fold(f64::NEG_INFINITY, f64::max);
+            let face = regions
+                .iter()
+                .filter(|r| r.shape == "plane" && (r.x[0] - front).abs() < 1e-9)
+                .max_by(|a, b| a.area.total_cmp(&b.area))
+                .ok_or("the part has no front face to chamfer")?;
+            v.insert(
+                "edge".into(),
+                json!([nice(front, 1e-6), nice(face.r[1], 1e-6)]),
+            );
+            v.insert("tip_offset".into(), json!(0.5));
+            v.insert("passes".into(), json!([0.2, 0.0]));
+            v.insert("feed".into(), json!(nice(feed * 2.0 / 3.0, 5.0)));
+            v.insert("plunge_feed".into(), json!(plunge));
+        }
+        _ => return Err(format!("no defaults for {kind:?}")),
+    }
+    // every other parameter: its registry default
+    for p in &t.params {
+        if !v.contains_key(p.name) && !p.default.is_null() {
+            v.insert(p.name.into(), p.default.clone());
+        }
+    }
+    let out = Value::Object(v);
+    let problems = check(&out, Some(&job.tools));
+    if !problems.is_empty() {
+        return Err(format!(
+            "defaults for {kind} are not valid: {}",
+            problems.join("; ")
+        ));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +578,133 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn defaults_for_every_type_are_complete_valid_and_plan_on_the_knob() {
+        let job = Job::from_json(include_str!("../../../examples/knob/knob.job.json")).unwrap();
+        let mesh = crate::Mesh::revolve(job.part.profile.as_ref().unwrap(), 360);
+        let (regions, _) = crate::geometry::face_regions(&mesh, 30.0);
+        let z1 = crate::profiles::builtin_machine("makera-z1-4axis").unwrap();
+        // tools on hand for every shape: the knob's flat T1 and V-bit T2, plus a ball T3
+        let mut job = job;
+        job.tools.push(crate::job::Tool {
+            number: 3,
+            description: "ball 3.175".into(),
+            shape: ToolShape::Ball { diameter: 3.175 },
+            flute_length: Some(12.0),
+        });
+        for t in registry() {
+            let cx = DefaultsContext {
+                job: &job,
+                regions: Some(&regions),
+                machine: Some(&z1),
+                tool: None,
+                boundary: None,
+            };
+            let v = defaults(t.kind, &cx).unwrap_or_else(|e| panic!("{}: {e}", t.kind));
+            // every parameter present (none blank)
+            for p in &t.params {
+                let has = v.get(p.name).is_some_and(|x| !x.is_null());
+                let either = matches!(p.name, "stepover_deg" | "stepover_mm"); // one of the two
+                assert!(has || either, "{}: {} has no default", t.kind, p.name);
+            }
+            assert!(
+                check(&v, Some(&job.tools)).is_empty(),
+                "{}: {:?}",
+                t.kind,
+                check(&v, Some(&job.tools))
+            );
+            // feeds respect the machine's cap
+            for k in ["feed", "rough_feed", "finish_feed"] {
+                if let Some(f) = v.get(k).and_then(Value::as_f64) {
+                    assert!(f <= 0.75 * 4000.0, "{}: {k} {f}", t.kind);
+                }
+            }
+            // and it plans on the knob setup
+            let op: Operation = serde_json::from_value(v.clone()).unwrap();
+            let mut one = job.clone();
+            one.programs = vec![crate::job::Program {
+                name: "t".into(),
+                title: "t".into(),
+                notes: vec![],
+                reset_a: false,
+                operations: vec![op],
+            }];
+            let tps = crate::plan(&one).unwrap_or_else(|e| panic!("{}: {e}", t.kind));
+            assert!(tps[0].moves.len() > 10, "{}", t.kind);
+        }
+        // defaults follow the context: the knob's own values come out for the knob
+        let cx = DefaultsContext {
+            job: &job,
+            regions: Some(&regions),
+            machine: Some(&z1),
+            tool: None,
+            boundary: None,
+        };
+        let turn = defaults("rotary_turning", &cx).unwrap();
+        assert_eq!(
+            (
+                turn["rough_depth"].as_f64(),
+                turn["rough_step"].as_f64(),
+                turn["rough_feed"].as_f64(),
+                turn["plunge_feed"].as_f64()
+            ),
+            (Some(0.4), Some(0.95), Some(300.0), Some(60.0))
+        );
+        let knurl = defaults("helical_knurl", &cx).unwrap();
+        assert_eq!(knurl["body_back"], json!([-15.0, 10.0]));
+        assert_eq!(knurl["body_front"], json!([0.0, 8.0]));
+        assert_eq!(knurl["count"], json!(28));
+        let chamfer = defaults("flank_chamfer", &cx).unwrap();
+        assert_eq!(chamfer["edge"], json!([0.0, 7.2]));
+        // a ball tool finishes along X, a flat one around; a selection sets the range
+        let b = crate::geometry::Boundary {
+            x: Some([-15.0, -1.0]),
+            a: None,
+        };
+        let ball = defaults(
+            "rotary_finish",
+            &DefaultsContext {
+                tool: Some(3),
+                boundary: Some(b),
+                ..cx
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (ball["pattern"].as_str(), ball["x_range"].clone()),
+            (Some("along"), json!([-15.0, -1.0]))
+        );
+        let flat = defaults(
+            "rotary_finish",
+            &DefaultsContext {
+                tool: Some(1),
+                ..cx
+            },
+        )
+        .unwrap();
+        assert_eq!(flat["pattern"], "around");
+        // a slow machine caps the feeds
+        let mut slow = z1.clone();
+        slow.max_feed = Some(200.0);
+        let capped = defaults(
+            "rotary_turning",
+            &DefaultsContext {
+                machine: Some(&slow),
+                ..cx
+            },
+        )
+        .unwrap();
+        assert!(capped["rough_feed"].as_f64().unwrap() <= 150.0);
+        assert!(defaults(
+            "helical_knurl",
+            &DefaultsContext {
+                tool: Some(1),
+                ..cx
+            }
+        )
+        .is_err());
     }
 
     #[test]

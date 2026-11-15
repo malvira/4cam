@@ -414,3 +414,65 @@ fn knurl_wizard_rebuilds_the_knob() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn ops_defaults_for_every_type_are_valid_and_plan() {
+    let dir = out_dir("defaults");
+    let text = std::fs::read_to_string(root().join("examples/knob/knob.project.json")).unwrap();
+    let mut p: serde_json::Value = serde_json::from_str(&text).unwrap();
+    for (k, kind) in [
+        "rotary_turning",
+        "rotary_rough",
+        "rotary_finish",
+        "helical_knurl",
+        "flank_chamfer",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let o = bin()
+            .args(["ops", "defaults", kind, "examples/knob/knob.project.json"])
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "{kind}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        let mut op: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+        let id = format!("d{k}");
+        op["id"] = id.clone().into();
+        p["setups"][0]["operations"]
+            .as_array_mut()
+            .unwrap()
+            .push(op);
+        p["setups"][0]["outputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"name": format!("defaults_{kind}"), "title": kind, "operations": [id]}));
+    }
+    let f = dir.join("defaults.project.json");
+    std::fs::write(&f, p.to_string()).unwrap();
+    let o = bin().args(["ops", "check"]).arg(&f).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("8 operation(s) checked, 0 problem(s)"));
+    let o = bin()
+        .arg("run")
+        .arg(&f)
+        .arg("--out")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
+    for kind in [
+        "rotary_turning",
+        "rotary_rough",
+        "rotary_finish",
+        "helical_knurl",
+        "flank_chamfer",
+    ] {
+        let nc = std::fs::read_to_string(dir.join(format!("defaults_{kind}.nc"))).unwrap();
+        assert!(nc.lines().count() > 50, "{kind}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}

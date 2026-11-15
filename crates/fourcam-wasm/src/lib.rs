@@ -520,6 +520,61 @@ pub mod api {
         json!({"regions": regions, "triangles": f32s(&tri), "region_of": u16s(&idx)})
     }
 
+    /// Defaults for a new operation: `opts` = {type, setup?, tool?, geometry?, machine?,
+    /// libraries?}. Every parameter comes back filled.
+    pub fn op_defaults(doc: &str, opts: &str, mesh: &[u8]) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let (p, _) = match fourcam::project::Project::from_json_any(doc) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let libs = match libraries(&o) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let Some(kind) = o["type"].as_str() else {
+            return err("op_defaults needs a type");
+        };
+        let setup = o["setup"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| p.setups.first().map(|s| s.id.clone()));
+        let Some(setup) = setup else {
+            return err("the project has no setups");
+        };
+        let geometry: Vec<fourcam::geometry::Selection> =
+            serde_json::from_value(o["geometry"].clone()).unwrap_or_default();
+        let machine = match &o["machine"] {
+            Value::String(id) => profiles::builtin_machine(id),
+            Value::Object(_) => serde_json::from_value(o["machine"].clone()).ok(),
+            _ => None,
+        };
+        let parsed = (!mesh.is_empty())
+            .then(|| Mesh::from_bytes(mesh).ok())
+            .flatten();
+        let models = p.models.clone();
+        let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
+            fourcam::project::ModelKind::Mesh(src) => {
+                parsed.clone().map(|m| m.oriented(src.axis, src.translate))
+            }
+            _ => None,
+        };
+        let tool = o["tool"].as_u64().map(|t| t as u32);
+        match p.op_defaults(
+            kind,
+            &setup,
+            tool,
+            &geometry,
+            &libs,
+            machine.as_ref(),
+            &meshes,
+        ) {
+            Ok(v) => v,
+            Err(e) => err(e),
+        }
+    }
+
     /// Run the knurl wizard on a document (params JSON, mesh bytes for mesh models); returns
     /// the updated 0.2 project and what was added.
     pub fn wizard_knurl(doc: &str, params: &str, mesh: &[u8]) -> Value {
@@ -574,6 +629,7 @@ pub mod api {
             "profile_list" => profile_list(),
             "face_regions" => face_regions(&s(a), &s(b), c),
             "wizard_knurl" => wizard_knurl(&s(a), &s(b), c),
+            "op_defaults" => op_defaults(&s(a), &s(b), c),
             "op_types" => serde_json::to_value(fourcam::ops::registry()).unwrap_or(Value::Null),
             "check_project" => match fourcam::project::Project::from_json_any(&s(a)) {
                 Ok((p, upgraded)) => {

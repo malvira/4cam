@@ -862,7 +862,11 @@ window.__4cam.splitters = {
 new ResizeObserver(() => drawSide()).observe($("side"));
 
 // ---------------------------------------------------------------- project tree (0.2)
-window.__4cam.tree = setupTree({ engine, $, state, readJob, writeJob, showError, getThree, onChange: () => { renderQuick(); renderTools(); } });
+window.__4cam.tree = setupTree({
+  engine, $, state, readJob, writeJob, showError, getThree,
+  machineArg: () => (typeof machineArg() === "string" && machineArg() !== "custom" ? machineArg() : null),
+  onChange: () => { renderQuick(); renderTools(); },
+});
 $("job").addEventListener("change", () => window.__4cam.tree.refresh());
 
 // ---------------------------------------------------------------- machining simulation

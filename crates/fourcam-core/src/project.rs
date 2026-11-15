@@ -343,6 +343,73 @@ impl Project {
         out
     }
 
+    /// Defaults for a new operation in a setup: every parameter filled from the setup's
+    /// tools, spindle speed, machine limits, part faces and the given geometry selection.
+    #[allow(clippy::too_many_arguments)]
+    pub fn op_defaults(
+        &self,
+        kind: &str,
+        setup: &str,
+        tool: Option<u32>,
+        geometry: &[crate::geometry::Selection],
+        libraries: &[ToolLibrary],
+        machine: Option<&crate::profiles::MachineProfile>,
+        meshes: &dyn Fn(&str) -> Option<crate::Mesh>,
+    ) -> Result<Value, String> {
+        let s = self.setup(setup).ok_or(format!("no setup {setup:?}"))?;
+        let job = self.setup_job_raw(s, libraries)?;
+        // faces of the part: the mesh model if any, else the profile
+        let model = s
+            .part
+            .iter()
+            .find(|id| {
+                self.models
+                    .iter()
+                    .any(|m| &m.id == *id && matches!(m.kind, ModelKind::Mesh(_)))
+            })
+            .or(s.part.first());
+        let regions = model.and_then(|m| self.model_regions(m, meshes));
+        let radius = tool
+            .and_then(|n| job.tool(n))
+            .map_or(0.0, |t| match t.shape {
+                job::ToolShape::Flat { diameter } | job::ToolShape::Ball { diameter } => {
+                    diameter / 2.0
+                }
+                job::ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0) / 2.0,
+            });
+        let boundary = if geometry.is_empty() {
+            None
+        } else {
+            Some(crate::geometry::boundary(
+                geometry,
+                &|m| self.model_regions(m, meshes),
+                radius,
+            )?)
+        };
+        let machine_owned;
+        let machine = match machine {
+            Some(m) => Some(m),
+            None => {
+                machine_owned = s.machine.as_deref().and_then(profiles::builtin_machine);
+                machine_owned.as_ref()
+            }
+        };
+        let mut v = crate::ops::defaults(
+            kind,
+            &crate::ops::DefaultsContext {
+                job: &job,
+                regions: regions.as_deref(),
+                machine,
+                tool,
+                boundary,
+            },
+        )?;
+        if !geometry.is_empty() {
+            v["geometry"] = serde_json::to_value(geometry).map_err(|e| e.to_string())?;
+        }
+        Ok(v)
+    }
+
     pub fn setup(&self, id: &str) -> Option<&Setup> {
         self.setups.iter().find(|s| s.id == id)
     }

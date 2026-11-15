@@ -6,7 +6,7 @@
 const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"];
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-export function setupTree({ engine, $, state, readJob, writeJob, showError, onChange, getThree }) {
+export function setupTree({ engine, $, state, readJob, writeJob, showError, onChange, getThree, machineArg }) {
   const t = { doc: null, problems: [], types: [], setup: null, selected: null, picking: false, regions: null };
   state.tree = t;
 
@@ -105,6 +105,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       <label>Name <input name="__name" value="${esc(op.name || "")}"></label>`;
     for (const p of ty.params) {
       const v = op[p.name];
+      // rotary_finish uses one stepover or the other, depending on the pattern
+      if (p.name === "stepover_deg" && op.pattern === "around") continue;
+      if (p.name === "stepover_mm" && op.pattern === "along" && op.stepover_deg != null) continue;
       const label = `${p.name.replace(/_/g, " ")}${p.unit ? ` (${p.unit})` : ""}`;
       if (p.name === "tool") {
         html += `<label>${label}<select name="tool">${tools.map((n) => `<option ${n === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>`;
@@ -227,9 +230,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     f.ids = f.ids.includes(region.id) ? f.ids.filter((x) => x !== region.id) : [...f.ids, region.id];
     if (!f.ids.length) op.geometry = op.geometry.filter((g) => g !== f);
     if (!op.geometry.length) delete op.geometry;
-    writeJob(t.doc);
+    if (!t.draft) writeJob(t.doc);
     paintPicked();
-    renderEditor();
+    if (t.draft) await refreshDefaults();
+    else renderEditor();
     $("pickInfo").textContent = f.ids.length ? `${f.ids.length} face(s): ${f.ids.join(", ")}` : "whole model";
     return region;
   }
@@ -243,14 +247,21 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const s = setup();
       let id;
       for (let k = s.operations.length + 1; ; k++) if (!s.operations.some((o) => o.id === `op${k}`)) { id = `op${k}`; break; }
-      // a draft: required parameters are filled in the form before it joins the project
-      const op = { id, type: kind };
-      for (const p of ty.params) if (p.default != null) op[p.name] = p.default;
-      const tools = (t.doc.tools || []).filter((x) => ty.tool_shapes.includes(x.kind));
-      op.tool = (tools[0] || t.doc.tools?.[0])?.number ?? 1;
-      t.draft = { op, out: $("treeAddOut").value, title: ty.title };
+      // a draft with every field filled by the engine's defaults (from the setup's tools,
+      // spindle, machine limits and part faces); it joins the project on Apply
+      const out = $("treeAddOut").value;
       t.selected = id;
-      render();
+      t.edited = new Set();
+      try {
+        const { result } = await engine("opDefaults", t.doc, { type: kind, setup: s.id, machine: machineArg?.() ?? null }, state.mesh);
+        t.draft = { op: { id, ...result }, out, title: ty.title };
+        render();
+      } catch (e) {
+        t.draft = null;
+        t.selected = null;
+        render();
+        showError(`Cannot add ${ty.title}: ${e.message}`);
+      }
       return;
     }
     if (el.id === "cancelDraft") {
@@ -305,8 +316,44 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       await commit();
     }
   });
+  // fields the user typed into keep their values when defaults are refreshed
+  $("tree").addEventListener("input", (ev) => {
+    const f = ev.target.closest("#opForm");
+    if (f && ev.target.name && t.edited) t.edited.add(ev.target.name);
+  });
+
+  /** Re-derive the draft's defaults (tool or geometry changed), keeping edited fields. */
+  async function refreshDefaults() {
+    if (!t.draft) return;
+    const cur = readForm();
+    try {
+      const { result } = await engine(
+        "opDefaults",
+        t.doc,
+        { type: cur.type, setup: t.setup, tool: cur.tool, geometry: cur.geometry || [], machine: machineArg?.() ?? null },
+        state.mesh,
+      );
+      const next = { ...cur };
+      for (const [k, v] of Object.entries(result)) if (!t.edited.has(k) && k !== "tool") next[k] = v;
+      t.draft.op = next;
+      renderEditor();
+    } catch (e) {
+      const box = $("opErrors");
+      if (box) {
+        box.textContent = e.message;
+        box.classList.remove("hidden");
+      }
+    }
+  }
+  state.tree.refreshDefaults = refreshDefaults;
+
   $("tree").addEventListener("change", async (ev) => {
     const el = ev.target;
+    if (el.closest("#opForm") && el.name === "tool" && t.draft) {
+      t.edited.delete("tool");
+      return refreshDefaults();
+    }
+    if (el.closest("#opForm") && el.name === "__axial" && t.draft) return refreshDefaults();
     if (el.id === "treeSetup") {
       t.setup = el.value;
       t.selected = null;

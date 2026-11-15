@@ -268,7 +268,7 @@ fn setup_has(ops: &[ProjectOp], id: &str) -> bool {
 
 /// Radii at the body face's two ends. A cone's radius changes monotonically along X; which end
 /// is larger comes from the neighbouring faces (the face that meets it at that X).
-fn radius_at_ends(body: &FaceRegion, regions: &[FaceRegion]) -> (f64, f64) {
+pub(crate) fn radius_at_ends(body: &FaceRegion, regions: &[FaceRegion]) -> (f64, f64) {
     if body.shape == "cylinder" {
         return (body.r[0], body.r[1]);
     }
