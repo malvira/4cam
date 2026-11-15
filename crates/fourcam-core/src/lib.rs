@@ -6,6 +6,7 @@
 pub mod archive;
 pub mod dropcutter;
 pub mod geom;
+pub mod geometry;
 pub mod job;
 pub mod machine;
 pub mod mesh;

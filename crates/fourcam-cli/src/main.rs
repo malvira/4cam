@@ -23,6 +23,9 @@ USAGE:
   4cam upgrade <job.json> [--out <project.json>]
       Convert a 0.1 job to a 0.2 project (models, tools, setups, operations).
       run/simulate/toolpath accept either version.
+  4cam faces <job-or-project.json> [--model <id>] [--crease <deg>]
+      Face regions of each model (split at sharp edges) with their stable ids,
+      for an operation's geometry selection (kind faces, with model and ids).
   4cam ops list | show <type> | check <job-or-project.json>
       The operation registry: types, parameters (units, defaults, limits),
       accepted tools and geometry; check validates a file's operations.
@@ -117,6 +120,39 @@ fn load_job(path: &str) -> Result<Job, String> {
         return Err(format!("{path}: no setups"));
     }
     Ok(jobs.swap_remove(0).1)
+}
+
+fn cmd_faces(o: &Opts) -> Result<ExitCode, String> {
+    let path = o.one_input()?;
+    let (p, _) = fourcam::project::Project::from_json_any(&read(path)?)
+        .map_err(|e| format!("{path}: {e}"))?;
+    let dir = Path::new(path).parent().unwrap_or(Path::new("."));
+    let crease: f64 = o.flag("crease").map_or(Ok(30.0), |v| {
+        v.parse().map_err(|_| format!("--crease: {v}"))
+    })?;
+    for m in &p.models {
+        if o.flag("model").is_some_and(|want| want != m.id) {
+            continue;
+        }
+        let mesh = match &m.kind {
+            fourcam::project::ModelKind::Profile(prof) => Mesh::revolve(prof, 360),
+            fourcam::project::ModelKind::Mesh(src) => Mesh::load(&dir.join(&src.file))
+                .map_err(|e| e.to_string())?
+                .oriented(src.axis, src.translate),
+        };
+        let (regions, _) = fourcam::geometry::face_regions(&mesh, crease);
+        println!("model {} ({} faces):", m.id, regions.len());
+        for r in &regions {
+            let a = r.a.map_or("all round".to_string(), |a| {
+                format!("A {:.1}..{:.1}", a[0], a[1])
+            });
+            println!(
+                "  {}  {:<9} X {:>8.3}..{:<8.3} R {:.3}..{:.3}  {a}  area {:.1} mm2",
+                r.id, r.shape, r.x[0], r.x[1], r.r[0], r.r[1], r.area
+            );
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_ops(args: &[String]) -> Result<ExitCode, String> {
@@ -217,6 +253,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "revolve" => cmd_revolve(&parse(rest, &["segments"])?),
         "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
         "ops" => cmd_ops(rest),
+        "faces" => cmd_faces(&parse(rest, &["model", "crease"])?),
         "mesh-info" => cmd_mesh_info(&parse(rest, &[])?),
         "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na"])?),
         "help" | "-h" | "--help" => {
@@ -230,7 +267,16 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
 fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
     let job_path = o.one_input()?;
     let reg = profiles_cmd::Registry::load();
-    let jobs = fourcam::project::jobs_from_any(&read(job_path)?, &reg.libraries())
+    let dir = Path::new(job_path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let meshes = |src: &fourcam::job::MeshSource| {
+        Mesh::load(&dir.join(&src.file))
+            .ok()
+            .map(|m| m.oriented(src.axis, src.translate))
+    };
+    let jobs = fourcam::project::jobs_from_any_with(&read(job_path)?, &reg.libraries(), &meshes)
         .map_err(|e| format!("{job_path}: {e}"))?;
     let mut bad = 0;
     for (setup, job) in &jobs {

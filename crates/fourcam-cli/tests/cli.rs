@@ -318,3 +318,62 @@ fn two_setup_project_runs_every_setup() {
     }
     std::fs::remove_dir_all(&out).ok();
 }
+
+#[test]
+fn faces_list_and_face_selection_in_a_project() {
+    let o = bin()
+        .args([
+            "faces",
+            "examples/knob/knob_finish.project.json",
+            "--model",
+            "mesh",
+        ])
+        .output()
+        .unwrap();
+    let s = String::from_utf8_lossy(&o.stdout).to_string();
+    assert!(
+        o.status.success() && s.contains("model mesh (8 faces)"),
+        "{s}"
+    );
+    // pick the taper (the long cone) and finish only it
+    let taper = s
+        .lines()
+        .find(|l| l.contains(" cone ") && l.contains("-15.000..-0.800"))
+        .and_then(|l| l.split_whitespace().next())
+        .unwrap()
+        .to_string();
+    let text =
+        std::fs::read_to_string(root().join("examples/knob/knob_finish.project.json")).unwrap();
+    let mut p: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let ops = p["setups"][0]["operations"].as_array_mut().unwrap();
+    ops[1]["geometry"] = serde_json::json!([{"kind": "faces", "model": "mesh", "ids": [taper]}]);
+    let dir = out_dir("faces");
+    std::fs::copy(root().join("examples/knob/knob.stl"), dir.join("knob.stl")).unwrap();
+    let f = dir.join("p.json");
+    std::fs::write(&f, p.to_string()).unwrap();
+    let o = bin()
+        .arg("run")
+        .arg(&f)
+        .arg("--out")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let nc = std::fs::read_to_string(dir.join("knob_4_finish_along.nc")).unwrap();
+    let xs: Vec<f64> = nc
+        .lines()
+        .filter(|l| l.starts_with("G1 X"))
+        .filter_map(|l| l.split_whitespace().nth(1)?.strip_prefix('X')?.parse().ok())
+        .collect();
+    let lo = xs.iter().cloned().fold(f64::INFINITY, f64::min);
+    assert!(
+        lo >= -16.588,
+        "the finish should stay on the taper (+ tool radius): min X {lo}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

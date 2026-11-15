@@ -120,6 +120,9 @@ pub struct ProjectOp {
     pub color: Option<String>,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Where it may cut (empty = the whole model). See [`crate::geometry::Selection`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub geometry: Vec<crate::geometry::Selection>,
     #[serde(flatten)]
     pub op: Operation,
 }
@@ -216,6 +219,7 @@ impl Project {
                     name: String::new(),
                     color: None,
                     enabled: true,
+                    geometry: Vec::new(),
                     op: op.clone(),
                 });
             }
@@ -344,7 +348,95 @@ impl Project {
     }
 
     /// The 0.1 job that plans a setup (enabled operations only; empty outputs dropped).
+    /// Face selections on mesh models need [`Project::setup_job_with`].
     pub fn setup_job(&self, setup: &Setup, libraries: &[ToolLibrary]) -> Result<Job, String> {
+        self.setup_job_with(setup, libraries, &|_| None)
+    }
+
+    /// Face regions of a model: profiles are revolved (360 facets); meshes come from `meshes`.
+    pub fn model_regions(
+        &self,
+        model: &str,
+        meshes: &dyn Fn(&str) -> Option<crate::Mesh>,
+    ) -> Option<Vec<crate::geometry::FaceRegion>> {
+        let m = self.models.iter().find(|m| m.id == model)?;
+        let mesh = match &m.kind {
+            ModelKind::Profile(p) => crate::Mesh::revolve(p, 360),
+            ModelKind::Mesh(_) => meshes(model)?,
+        };
+        Some(crate::geometry::face_regions(&mesh, 30.0).0)
+    }
+
+    /// Like [`Project::setup_job`], with mesh models available for face selections.
+    pub fn setup_job_with(
+        &self,
+        setup: &Setup,
+        libraries: &[ToolLibrary],
+        meshes: &dyn Fn(&str) -> Option<crate::Mesh>,
+    ) -> Result<Job, String> {
+        let mut job = self.setup_job_raw(setup, libraries)?;
+        // apply geometry selections as containment boundaries
+        for o in setup
+            .operations
+            .iter()
+            .filter(|o| o.enabled && !o.geometry.is_empty())
+        {
+            let radius = job
+                .tool(o.op.tool())
+                .map(|t| match t.shape {
+                    job::ToolShape::Flat { diameter } | job::ToolShape::Ball { diameter } => {
+                        diameter / 2.0
+                    }
+                    job::ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0) / 2.0,
+                })
+                .unwrap_or(0.0);
+            let b =
+                crate::geometry::boundary(&o.geometry, &|m| self.model_regions(m, meshes), radius)
+                    .map_err(|e| format!("operation {:?}: {e}", o.id))?;
+            let target = job
+                .programs
+                .iter_mut()
+                .flat_map(|p| p.operations.iter_mut())
+                .find(|op| **op == o.op)
+                .ok_or(format!("operation {:?} not found in the plan", o.id))?;
+            let clamp = |r: [f64; 2], b: [f64; 2]| -> [f64; 2] {
+                let (lo, hi) = (r[0].min(r[1]).max(b[0]), r[0].max(r[1]).min(b[1]));
+                if r[0] <= r[1] {
+                    [lo, hi]
+                } else {
+                    [hi, lo]
+                }
+            };
+            match target {
+                Operation::RotaryFinish(f) => {
+                    if let Some(x) = b.x {
+                        f.x_range = clamp(f.x_range, x);
+                    }
+                    if let Some(a) = b.a {
+                        f.a_range = clamp(f.a_range, a);
+                    }
+                }
+                Operation::RotaryRough(r) => {
+                    if let Some(x) = b.x {
+                        r.x_range = clamp(r.x_range, x);
+                    }
+                    if b.a.is_some() {
+                        return Err(format!("operation {:?}: roughing goes all the way round; an angular range does not apply", o.id));
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "operation {:?} ({}): takes its geometry from its parameters, not from a selection",
+                        o.id,
+                        crate::ops::kind_of(&o.op)
+                    ))
+                }
+            }
+        }
+        Ok(job)
+    }
+
+    fn setup_job_raw(&self, setup: &Setup, libraries: &[ToolLibrary]) -> Result<Job, String> {
         let mut part = serde_json::Map::new();
         for id in &setup.part {
             let m = self
@@ -478,6 +570,15 @@ pub fn simulate_project(
 
 /// Jobs to plan from a 0.1 job or 0.2 project text: one per setup, as `(setup id, job)`.
 pub fn jobs_from_any(text: &str, libraries: &[ToolLibrary]) -> Result<Vec<(String, Job)>, String> {
+    jobs_from_any_with(text, libraries, &|_| None)
+}
+
+/// Like [`jobs_from_any`], with mesh models available (for face selections).
+pub fn jobs_from_any_with(
+    text: &str,
+    libraries: &[ToolLibrary],
+    meshes: &dyn Fn(&MeshSource) -> Option<crate::Mesh>,
+) -> Result<Vec<(String, Job)>, String> {
     let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
     if v.get("schema_version").and_then(Value::as_str) == Some(job::SCHEMA_VERSION) {
         return Ok(vec![(
@@ -486,9 +587,13 @@ pub fn jobs_from_any(text: &str, libraries: &[ToolLibrary]) -> Result<Vec<(Strin
         )]);
     }
     let (p, _) = Project::from_json_any(text)?;
+    let by_model = |id: &str| match &p.models.iter().find(|m| m.id == id)?.kind {
+        ModelKind::Mesh(src) => meshes(src),
+        ModelKind::Profile(_) => None,
+    };
     p.setups
         .iter()
-        .map(|s| Ok((s.id.clone(), p.setup_job(s, libraries)?)))
+        .map(|s| Ok((s.id.clone(), p.setup_job_with(s, libraries, &by_model)?)))
         .collect()
 }
 
@@ -616,6 +721,60 @@ mod tests {
         let mut bad = p.clone();
         bad.setups[1].outputs[0].name = "knob_1_profile".into();
         assert!(bad.validate().unwrap_err().contains("used twice"));
+    }
+
+    #[test]
+    fn face_selection_limits_where_the_tool_goes() {
+        let text = include_str!("../../../examples/knob/knob_finish.job.json");
+        let (mut p, _) = Project::from_json_any(text).unwrap();
+        // finish only the taper of the revolved profile (the mesh is the same shape)
+        let regions = p.model_regions("profile", &|_| None).unwrap();
+        let taper = regions
+            .iter()
+            .find(|r| r.shape == "cone" && (r.x[0] + 15.0).abs() < 1e-6)
+            .unwrap();
+        let s = &mut p.setups[0];
+        let finish = s.operations.iter_mut().find(|o| o.id == "op2").unwrap();
+        finish.geometry = vec![crate::geometry::Selection::Faces {
+            model: "profile".into(),
+            ids: vec![taper.id.clone()],
+        }];
+        let text = serde_json::to_string(&p).unwrap();
+        let (p, _) = Project::from_json_any(&text).unwrap();
+        let job = p.setup_job(&p.setups[0], &[]).unwrap();
+        let Operation::RotaryFinish(f) = &job.programs[1].operations[0] else {
+            panic!()
+        };
+        // ball 3.175: the taper's X extent grown by the tool radius, inside the op's own
+        // range [-21.0, 0.6]; the planned cuts stay inside it
+        // plan against the revolved profile (the mesh file is the same shape)
+        let mut no_mesh = job.clone();
+        no_mesh.part.mesh = None;
+        let tps = crate::plan(&no_mesh).unwrap();
+        let (lo, hi) = tps[1]
+            .moves
+            .iter()
+            .filter_map(|m| match m {
+                crate::Move::Cut { x, .. } => Some(*x),
+                _ => None,
+            })
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                (a.min(x), b.max(x))
+            });
+        assert!(lo >= -16.5876 && hi <= 0.6001, "cuts span {lo}..{hi}");
+        assert!(
+            (f.x_range[0] - (-15.0 - 1.5875)).abs() < 1e-9 && (f.x_range[1] - 0.6).abs() < 1e-9,
+            "{:?}",
+            f.x_range
+        );
+        // an axial range on the knurl is refused: it takes its geometry from its parameters
+        let (mut q, _) = Project::from_json_any(KNOB).unwrap();
+        q.setups[0].operations[1].geometry =
+            vec![crate::geometry::Selection::AxialRange { x: [-5.0, 0.0] }];
+        assert!(q
+            .setup_job(&q.setups[0], &[])
+            .unwrap_err()
+            .contains("takes its geometry from its parameters"));
     }
 
     #[test]

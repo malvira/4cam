@@ -58,7 +58,18 @@ pub mod api {
 
     /// The job to plan from a 0.1 job or a 0.2 project (its first setup).
     fn job_any(text: &str, libs: &[ToolLibrary]) -> Result<Job, String> {
-        let mut jobs = fourcam::project::jobs_from_any(text, libs)?;
+        job_any_mesh(text, libs, &[])
+    }
+
+    /// Same, with the mesh bytes available to face selections on mesh models.
+    fn job_any_mesh(text: &str, libs: &[ToolLibrary], mesh: &[u8]) -> Result<Job, String> {
+        let parsed = (!mesh.is_empty())
+            .then(|| Mesh::from_bytes(mesh).ok())
+            .flatten();
+        let meshes = |src: &fourcam::job::MeshSource| {
+            parsed.clone().map(|m| m.oriented(src.axis, src.translate))
+        };
+        let mut jobs = fourcam::project::jobs_from_any_with(text, libs, &meshes)?;
         if jobs.is_empty() {
             return Err("the project has no setups".into());
         }
@@ -150,7 +161,7 @@ pub mod api {
             Ok(l) => l,
             Err(e) => return err(e),
         };
-        let job = match job_any(job_json, &libs) {
+        let job = match job_any_mesh(job_json, &libs, mesh) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -342,7 +353,7 @@ pub mod api {
             Ok(l) => l,
             Err(e) => return err(e),
         };
-        let job = match job_any(job_json, &libs) {
+        let job = match job_any_mesh(job_json, &libs, mesh) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -435,6 +446,33 @@ pub mod api {
         })
     }
 
+    /// Face regions of a model (`model` id; the mesh bytes for mesh models), plus each
+    /// triangle's region index and the triangles themselves (f32 base64) for picking.
+    pub fn face_regions(doc: &str, model: &str, mesh: &[u8]) -> Value {
+        let (p, _) = match fourcam::project::Project::from_json_any(doc) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let Some(m) = p.models.iter().find(|m| m.id == model.trim()) else {
+            return err(format!("no model {model:?}"));
+        };
+        let mesh = match &m.kind {
+            fourcam::project::ModelKind::Profile(prof) => Mesh::revolve(prof, 360),
+            fourcam::project::ModelKind::Mesh(src) => match Mesh::from_bytes(mesh) {
+                Ok(x) => x.oriented(src.axis, src.translate),
+                Err(e) => return err(e),
+            },
+        };
+        let (regions, of) = fourcam::geometry::face_regions(&mesh, 30.0);
+        let tri: Vec<f32> = mesh
+            .triangles
+            .iter()
+            .flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32)))
+            .collect();
+        let idx: Vec<u16> = of.iter().map(|&k| k as u16).collect();
+        json!({"regions": regions, "triangles": f32s(&tri), "region_of": u16s(&idx)})
+    }
+
     /// Dispatch by name (what `fc_call` uses).
     pub fn call(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Value {
         let s = |v: &[u8]| String::from_utf8_lossy(v).into_owned();
@@ -455,6 +493,7 @@ pub mod api {
             }
             "simulate" => simulate(&s(a), &s(b), c),
             "profile_list" => profile_list(),
+            "face_regions" => face_regions(&s(a), &s(b), c),
             "op_types" => serde_json::to_value(fourcam::ops::registry()).unwrap_or(Value::Null),
             "check_project" => match fourcam::project::Project::from_json_any(&s(a)) {
                 Ok((p, upgraded)) => {
