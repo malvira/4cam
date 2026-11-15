@@ -47,25 +47,20 @@ impl Machine {
         serde_json::from_str(text)
     }
 
-    /// Built-in profile for the Makera Z1 with its 4th axis.
+    /// Built-in post for the Makera Z1 with its 4th axis.
     pub fn makera_z1() -> Machine {
-        Machine::from_json(include_str!("../../../machines/makera-z1.json"))
-            .expect("bundled makera-z1.json is valid")
+        Machine::builtin("makera-z1-4axis").expect("built in")
     }
 
-    /// Built-in LinuxCNC profile (XYZA, G93 inverse-time feeds).
+    /// Built-in LinuxCNC post (XYZA, G93 inverse-time feeds).
     pub fn linuxcnc() -> Machine {
-        Machine::from_json(include_str!("../../../machines/linuxcnc.json"))
-            .expect("bundled linuxcnc.json is valid")
+        Machine::builtin("linuxcnc-4axis").expect("built in")
     }
 
-    /// Built-in profile by name: `makera-z1` or `linuxcnc`.
+    /// Post templates of a built-in machine profile (see [`crate::profiles`]), by id or alias
+    /// (`makera-z1`, `linuxcnc`, `carvera`, `carvera-air`).
     pub fn builtin(name: &str) -> Option<Machine> {
-        match name {
-            "makera-z1" | "z1" => Some(Machine::makera_z1()),
-            "linuxcnc" => Some(Machine::linuxcnc()),
-            _ => None,
-        }
+        crate::profiles::builtin_machine(name).map(|p| p.post)
     }
 }
 

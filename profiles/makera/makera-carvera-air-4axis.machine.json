@@ -1,0 +1,114 @@
+{
+  "format": "4cam-machine",
+  "version": 1,
+  "id": "makera-carvera-air-4axis",
+  "name": "Makera Carvera Air with 4th axis",
+  "vendor": "Makera",
+  "model": "Carvera Air",
+  "sources": [
+    {
+      "url": "https://github.com/MakeraInc/CarveraProfiles/raw/refs/heads/main/CAM_Post_Processors/Fusion360-profiles/Fusion-Profiles.zip",
+      "note": "Fusion 360 machine 'Makera Carvera Air 4-axis Community Version 1.4.6': A about +X, 4000 mm/min, feed mode DPM combination. No travel or spindle limits in the file."
+    },
+    {
+      "url": "https://www.makera.com/products/carvera-air",
+      "note": "work area 300 x 200 x 130 mm, 4th axis 92 mm diameter x 200 mm, 200 W spindle 0-13000 rpm (harmonic-drive 4th axis)"
+    }
+  ],
+  "kinematics": {
+    "linear": [
+      {
+        "letter": "X",
+        "direction": [
+          1,
+          0,
+          0
+        ],
+        "min": 0,
+        "max": 300,
+        "max_feed": 4000,
+        "max_rapid": 4000
+      },
+      {
+        "letter": "Y",
+        "direction": [
+          0,
+          -1,
+          0
+        ],
+        "min": -200,
+        "max": 0,
+        "max_feed": 4000,
+        "max_rapid": 4000
+      },
+      {
+        "letter": "Z",
+        "direction": [
+          0,
+          0,
+          1
+        ],
+        "min": 0,
+        "max": 130,
+        "max_feed": 4000,
+        "max_rapid": 4000
+      }
+    ],
+    "rotary": [
+      {
+        "letter": "A",
+        "axis": [
+          1,
+          0,
+          0
+        ],
+        "carries": "workpiece",
+        "handedness": "right",
+        "continuous": true,
+        "max_feed": 4000
+      }
+    ],
+    "spindle_axis": [
+      0,
+      0,
+      1
+    ]
+  },
+  "rotary_envelope": {
+    "max_diameter": 92,
+    "max_length": 200
+  },
+  "spindle": {
+    "min_rpm": 0,
+    "max_rpm": 13000,
+    "power_w": 200
+  },
+  "max_feed": 4000,
+  "tool_changer": {
+    "kind": "manual",
+    "max_tool_diameter": 8
+  },
+  "post": {
+    "name": "Makera Carvera Air with 4th axis",
+    "feed_mode": "degrees_as_length",
+    "decimals": 3,
+    "origin_comment": "Zero: X0 front face, Y0/Z0 rotation axis, A rotates about X",
+    "preamble": [
+      "G21 G90 G94",
+      "G17"
+    ],
+    "reset_rotary": "G92 A0 (re-zero A here so the profile job's rotations don't unwind)",
+    "tool_change": "M6 T{tool} (tool change + tool length measurement)",
+    "spindle_on": "M3 S{rpm}",
+    "dwell": "G4 P3",
+    "postamble": [
+      "M5",
+      "G0 Z{safe}",
+      "M30"
+    ]
+  },
+  "notes": [
+    "A community guide gives the Air spindle as 3000-13000 rpm; Makera's page says 0-13000.",
+    "The Fusion file declares a 6-tool changer; the Air changes tools by hand (quick change), so this profile uses manual."
+  ]
+}

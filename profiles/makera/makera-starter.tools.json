@@ -1,0 +1,348 @@
+{
+  "format": "4cam-tools",
+  "version": 1,
+  "id": "makera-starter",
+  "name": "Makera starter tools",
+  "vendor": "Makera",
+  "sources": [
+    {
+      "url": "https://github.com/MakeraInc/CarveraProfiles/tree/main/CAM_Post_Processors/Fusion360-profiles/Tool%20Files",
+      "note": "dimensions and starting speeds/feeds taken from Makera's Fusion 360 libraries (no license file: re-typed facts, not copied files)"
+    },
+    {
+      "url": "https://www.makera.com/pages/software",
+      "note": "Makera software/profile downloads page"
+    }
+  ],
+  "tools": [
+    {
+      "id": "spiral-o-metal-3.175x12",
+      "name": "Spiral O Metal 3.175 x 12 mm (single flute)",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "flat",
+        "diameter": 3.175
+      },
+      "flute_length": 12,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 1,
+      "presets": [
+        {
+          "material": "aluminium",
+          "rpm": 12000,
+          "feed": 500,
+          "plunge": 200
+        }
+      ],
+      "number": 1,
+      "note": "the knob's T1"
+    },
+    {
+      "id": "spiral-o-metal-2x8",
+      "name": "Spiral O Metal 2 x 8 mm",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "flat",
+        "diameter": 2
+      },
+      "flute_length": 8,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 1,
+      "presets": [
+        {
+          "material": "aluminium",
+          "rpm": 12000,
+          "feed": 500,
+          "plunge": 200
+        }
+      ]
+    },
+    {
+      "id": "spiral-o-metal-4x12",
+      "name": "Spiral O Metal 4 x 12 mm",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "flat",
+        "diameter": 4
+      },
+      "flute_length": 12,
+      "overall_length": 50,
+      "shank_diameter": 4,
+      "flutes": 1,
+      "presets": [
+        {
+          "material": "aluminium",
+          "rpm": 12000,
+          "feed": 500,
+          "plunge": 200
+        }
+      ]
+    },
+    {
+      "id": "spiral-o-3.175x17",
+      "name": "Spiral O 3.175 x 17 mm (wood/plastic)",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "flat",
+        "diameter": 3.175
+      },
+      "flute_length": 17,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 1,
+      "presets": [
+        {
+          "material": "hardwood",
+          "rpm": 10000,
+          "feed": 1000,
+          "plunge": 300
+        }
+      ]
+    },
+    {
+      "id": "spiral-o-6x22",
+      "name": "Spiral O 6 x 22 mm (wood/plastic)",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "flat",
+        "diameter": 6
+      },
+      "flute_length": 22,
+      "overall_length": 50,
+      "shank_diameter": 6,
+      "flutes": 1,
+      "presets": [
+        {
+          "material": "hardwood",
+          "rpm": 10000,
+          "feed": 1000,
+          "plunge": 300
+        }
+      ]
+    },
+    {
+      "id": "ball-metal-3.175x10",
+      "name": "Ball end mill Metal 3.175 x 10 mm",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "ball",
+        "diameter": 3.175
+      },
+      "flute_length": 10,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 2,
+      "presets": [
+        {
+          "material": "aluminium",
+          "rpm": 12000,
+          "feed": 500,
+          "plunge": 300
+        }
+      ],
+      "number": 3
+    },
+    {
+      "id": "ball-3.175x22",
+      "name": "Ball nose 3.175 x 22 mm (2 flute)",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "ball",
+        "diameter": 3.175
+      },
+      "flute_length": 22,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 2,
+      "presets": [
+        {
+          "material": "hardwood",
+          "rpm": 12000,
+          "feed": 500,
+          "plunge": 200
+        }
+      ]
+    },
+    {
+      "id": "ball-2x12",
+      "name": "Ball nose 2 x 12 mm (2 flute)",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "ball",
+        "diameter": 2
+      },
+      "flute_length": 12,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 2,
+      "presets": [
+        {
+          "material": "hardwood",
+          "rpm": 12000,
+          "feed": 500,
+          "plunge": 200
+        }
+      ]
+    },
+    {
+      "id": "ball-1x4",
+      "name": "Ball nose 1 x 4 mm (2 flute)",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "ball",
+        "diameter": 1
+      },
+      "flute_length": 4,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 2,
+      "presets": [
+        {
+          "material": "hardwood",
+          "rpm": 12000,
+          "feed": 500,
+          "plunge": 200
+        }
+      ]
+    },
+    {
+      "id": "vbit-90-3.175",
+      "name": "90 deg V-bit, 3.175 mm",
+      "vendor": "generic",
+      "number": 2,
+      "shape": {
+        "kind": "vbit",
+        "angle": 90,
+        "diameter": 3.175
+      },
+      "flute_length": 1.6,
+      "shank_diameter": 3.175,
+      "flutes": 1,
+      "presets": [
+        {
+          "material": "aluminium",
+          "rpm": 12000,
+          "feed": 200,
+          "plunge": 60
+        }
+      ],
+      "note": "the knob's T2 (cutting diameter 3.175 mm, from Mar)"
+    },
+    {
+      "id": "engraving-30-0.2",
+      "name": "Single flute engraving 30 deg, 0.2 mm tip",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "vbit",
+        "angle": 30,
+        "diameter": 3.175,
+        "tip_diameter": 0.2
+      },
+      "flute_length": 9,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 1,
+      "presets": [
+        {
+          "material": "hardwood",
+          "rpm": 12000,
+          "feed": 1000,
+          "plunge": 500
+        }
+      ]
+    },
+    {
+      "id": "engraving-metal-30-0.3",
+      "name": "Single flute engraving Metal 30 deg, 0.3 mm tip",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "vbit",
+        "angle": 30,
+        "diameter": 3.175,
+        "tip_diameter": 0.3
+      },
+      "flute_length": 9,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 1,
+      "presets": [
+        {
+          "material": "aluminium",
+          "rpm": 12000,
+          "feed": 500,
+          "plunge": 200
+        }
+      ]
+    },
+    {
+      "id": "engraving-20-0.3-6mm",
+      "name": "Two flute engraving 20 deg, 0.3 mm tip, 6 mm shank",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "vbit",
+        "angle": 20,
+        "diameter": 6,
+        "tip_diameter": 0.3
+      },
+      "flute_length": 17,
+      "overall_length": 50,
+      "shank_diameter": 6,
+      "flutes": 2,
+      "presets": [
+        {
+          "material": "hardwood",
+          "rpm": 12000,
+          "feed": 1000,
+          "plunge": 500
+        }
+      ]
+    },
+    {
+      "id": "corn-3.175x12",
+      "name": "Corn (burr) bit 3.175 x 12 mm",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "flat",
+        "diameter": 3.175
+      },
+      "flute_length": 12,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 8,
+      "presets": [
+        {
+          "material": "pcb/fr4",
+          "rpm": 12000,
+          "feed": 500,
+          "plunge": 200
+        }
+      ],
+      "note": "corn bits are modelled as flat end mills"
+    },
+    {
+      "id": "drill-3.175",
+      "name": "Drill 3.175 mm",
+      "vendor": "Makera",
+      "shape": {
+        "kind": "drill",
+        "diameter": 3.175,
+        "point_angle": 118
+      },
+      "flute_length": 12,
+      "overall_length": 38,
+      "shank_diameter": 3.175,
+      "flutes": 2,
+      "presets": [
+        {
+          "material": "aluminium",
+          "rpm": 8000,
+          "feed": 0,
+          "plunge": 100
+        }
+      ],
+      "note": "drills are stored but not used by the rotary strategies yet"
+    }
+  ]
+}

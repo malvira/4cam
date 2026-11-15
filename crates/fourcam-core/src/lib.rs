@@ -3,6 +3,7 @@
 //! Pipeline: [`Job`] (JSON) -> [`plan`] -> machine-neutral [`Toolpath`]s -> [`post`] with a
 //! [`Machine`] profile -> G-code, which [`verify_gcode`] can sanity-check.
 
+pub mod archive;
 pub mod dropcutter;
 pub mod geom;
 pub mod job;
@@ -10,6 +11,7 @@ pub mod machine;
 pub mod mesh;
 pub mod numeric;
 pub mod post;
+pub mod profiles;
 pub mod render;
 pub mod sim;
 pub mod strategy;

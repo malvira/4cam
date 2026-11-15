@@ -1,0 +1,93 @@
+{
+  "format": "4cam-machine",
+  "version": 1,
+  "id": "linuxcnc-4axis",
+  "name": "LinuxCNC 4-axis (XYZA), inverse-time feeds",
+  "vendor": "generic",
+  "model": "LinuxCNC XYZA",
+  "sources": [
+    {
+      "url": "https://linuxcnc.org/docs/html/gcode/g-code.html#gcode:g93-g94-g95",
+      "note": "G93 inverse-time feed mode"
+    }
+  ],
+  "kinematics": {
+    "linear": [
+      {
+        "letter": "X",
+        "direction": [
+          1,
+          0,
+          0
+        ],
+        "min": -1000,
+        "max": 1000
+      },
+      {
+        "letter": "Y",
+        "direction": [
+          0,
+          1,
+          0
+        ],
+        "min": -1000,
+        "max": 1000
+      },
+      {
+        "letter": "Z",
+        "direction": [
+          0,
+          0,
+          1
+        ],
+        "min": -1000,
+        "max": 1000
+      }
+    ],
+    "rotary": [
+      {
+        "letter": "A",
+        "axis": [
+          1,
+          0,
+          0
+        ],
+        "carries": "workpiece",
+        "handedness": "right",
+        "continuous": true
+      }
+    ],
+    "spindle_axis": [
+      0,
+      0,
+      1
+    ]
+  },
+  "tool_changer": {
+    "kind": "manual"
+  },
+  "notes": [
+    "Generic: travels and spindle limits are placeholders; copy and edit for a real machine."
+  ],
+  "post": {
+    "name": "LinuxCNC 4-axis (XYZA), inverse-time feeds",
+    "feed_mode": "inverse_time",
+    "decimals": 3,
+    "origin_comment": "Zero: X0 front face, Y0/Z0 rotation axis, A rotates about X",
+    "preamble": [
+      "G21 G90 G17",
+      "G93 (inverse-time feed: F = 1/minutes per move)",
+      "G64 P0.01"
+    ],
+    "reset_rotary": "G92 A0",
+    "tool_change": "T{tool} M6\nG43 H{tool}",
+    "spindle_on": "M3 S{rpm}",
+    "dwell": "G4 P3",
+    "postamble": [
+      "M5",
+      "G0 Z{safe}",
+      "G94",
+      "M30"
+    ]
+  }
+}

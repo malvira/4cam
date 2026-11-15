@@ -9,6 +9,9 @@ pub const SCHEMA_VERSION: &str = "0.1";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Job {
     pub schema_version: String,
+    /// Machine profile id (see `profiles/`), used when no machine is given explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     pub stock: Stock,
     /// Radial clearance above the stock for safe rapids (mm).
     #[serde(default = "default_clearance")]
