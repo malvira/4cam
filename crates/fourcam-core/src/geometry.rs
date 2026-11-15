@@ -25,7 +25,9 @@ pub struct FaceRegion {
     pub shape: String,
 }
 
-fn key(p: &[f64; 3]) -> (i64, i64, i64) {
+type VKey = (i64, i64, i64);
+
+fn key(p: &[f64; 3]) -> VKey {
     let q = |v: f64| (v * 1e4).round() as i64;
     (q(p[0]), q(p[1]), q(p[2]))
 }
@@ -48,7 +50,7 @@ pub fn face_regions(mesh: &Mesh, crease_deg: f64) -> (Vec<FaceRegion>, Vec<usize
     let tris = &mesh.triangles;
     let normals: Vec<Option<[f64; 3]>> = tris.iter().map(unit_normal).collect();
     // edges keyed by welded vertex positions
-    let mut edges: HashMap<((i64, i64, i64), (i64, i64, i64)), Vec<usize>> = HashMap::new();
+    let mut edges: HashMap<(VKey, VKey), Vec<usize>> = HashMap::new();
     for (i, t) in tris.iter().enumerate() {
         for e in 0..3 {
             let (a, b) = (key(&t[e]), key(&t[(e + 1) % 3]));
