@@ -140,3 +140,50 @@ Playback runs long seeks the same way, between snapshots.
 
 The ring gains less because its cutting is concentrated in a few X bands, so most threads
 finish early. Interleaving rows across threads would even that out.
+
+## C: GPU simulation prototype (done)
+
+**The crate.** `crates/fourcam-gpu` uses wgpu 25 and one WGSL compute shader. It is not in
+the default build. The CLI uses it with `cargo build -p fourcam-cli --features gpu`, which
+adds `4cam simulate --gpu`. `simulate_or_cpu` falls back to the CPU simulation in two cases:
+- when there is no hardware adapter (software adapters count as none);
+- when a job has indexed 3+1 moves or more than 255 operations.
+
+**How it works.**
+- The CPU samples the moves exactly as `sim::apply_segment` does and gives each tool
+  position its cell window, in f64.
+- The shader evaluates the CPU's ray-entry iteration per (position, cell) in f32 and keeps
+  the lowest with `atomicMin` on height (µm) << 8 | tag.
+
+**Agreement with the CPU** (`cargo test -p fourcam-gpu`, on the RTX 5080):
+
+| Example | Tool positions | Largest height difference | Tags that differ |
+| --- | ---: | ---: | ---: |
+| knob (turning, knurl, chamfer) | 299 146 | 0.001 mm | 0.000 % |
+| ring (wrapped grooves, text, V-carve) | 69 354 | 0.001 mm | 0.000 % |
+
+The test also checks that an indexed job falls back and gives the plain CPU result.
+
+**Bug found on the way.** The test caught a portability bug. On this machine's backend,
+`%` of a negative `i32` behaved like the unsigned remainder, so cells just before angle 0
+were written to the wrong column. The shader now keeps the index positive before wrapping.
+
+**Speed** (`cargo run --release -p fourcam-gpu --example bench`; whole job, GPU time
+includes upload and readback):
+
+| Example | Grid | Cells | CPU 1 thread | CPU 32 threads | RTX 5080 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| knob | Normal | 66 480 | 1 980 ms | 240 ms | **22 ms** |
+| knob | Fine | 398 880 | 23 402 ms | 2 565 ms | **44 ms** |
+| knob | Ultra | 1 595 520 | - | 17 887 ms | **136 ms** |
+| ring | Normal | 122 400 | 2 321 ms | 639 ms | **11 ms** |
+| ring | Fine | 734 400 | 13 283 ms | 3 693 ms | **16 ms** |
+| ring | Ultra | 2 937 600 | - | 27 940 ms | **51 ms** |
+
+The GPU is 50 to 500 times faster than all CPU threads, and the gap widens with the grid.
+The shader is the same one a WebGPU path in the browser would use (step D). The prototype
+does not yet simulate on the GPU:
+- indexed moves;
+- 3-axis (block) grids;
+- playback (one tool position at a time is a poor fit; it needs batched seeks);
+- the report statistics, which still come from the CPU run.

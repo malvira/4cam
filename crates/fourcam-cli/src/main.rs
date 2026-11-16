@@ -48,7 +48,7 @@ USAGE:
   4cam toolpath <job.json>
       Print the machine-neutral toolpath IR as JSON.
   4cam simulate <job.json> [--out <dir>] [--sim-res coarse|normal|fine|ultra]
-                [--dx <mm>] [--na <cells>]
+                [--dx <mm>] [--na <cells>] [--gpu]
       Simulate material removal of all programs in order on a radial heightmap
       (default fine: 0.05 mm x 720 cells around; coarse 0.2 x 180, normal
       0.1 x 240, ultra 0.025 x 1440), compare with the part, and write a
@@ -81,6 +81,11 @@ fn parse(args: &[String], known: &[&str]) -> Result<Opts, String> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if let Some(name) = a.strip_prefix("--") {
+            // `name?` in `known`: a switch without a value
+            if known.contains(&format!("{name}?").as_str()) {
+                o.flags.push((name.to_string(), "on".into()));
+                continue;
+            }
             if !known.contains(&name) {
                 return Err(format!("unknown option --{name}\n\n{USAGE}"));
             }
@@ -100,6 +105,10 @@ impl Opts {
             .rev()
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.as_str())
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.flag(name).is_some()
     }
 
     fn one_input(&self) -> Result<&str, String> {
@@ -355,7 +364,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             cmd_wizard_knurl(&parse(more, &["params", "out"])?)
         }
         "mesh-info" => cmd_mesh_info(&parse(rest, &[])?),
-        "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na", "sim-res"])?),
+        "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na", "sim-res", "gpu?"])?),
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
@@ -608,7 +617,28 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
             .and_then(|d| fourcam::cutter_for(t, d.shape).ok())
     };
     let mut bad = false;
+    // --gpu (built with the `gpu` feature): the stock for the previews on the GPU
+    #[cfg(feature = "gpu")]
+    let gpu = o.has("gpu").then(fourcam_gpu::Gpu::new).flatten();
+    #[cfg(not(feature = "gpu"))]
+    if o.has("gpu") {
+        return Err("this 4cam was built without GPU support (cargo feature `gpu`)".into());
+    }
     for ((tp, prog), (name, st, dev)) in tps.iter().zip(&job.programs).zip(&res.programs) {
+        #[cfg(feature = "gpu")]
+        {
+            let used = fourcam_gpu::simulate_or_cpu(
+                gpu.as_ref(),
+                &mut stock,
+                std::slice::from_ref(tp),
+                &cutters,
+                (dx * 2.0).min(0.1),
+            );
+            if o.has("gpu") {
+                println!("{name}: stock on {used:?}");
+            }
+        }
+        #[cfg(not(feature = "gpu"))]
         sim::simulate(&mut stock, tp, &cutters, (dx * 2.0).min(0.1));
         // knurls and chamfers cut below the turned profile by design
         let shapes_part = prog.operations.iter().any(|o| {

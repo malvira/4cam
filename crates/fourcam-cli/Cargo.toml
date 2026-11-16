@@ -14,3 +14,8 @@ path = "src/main.rs"
 fourcam-core = { path = "../fourcam-core" }
 serde_json = "1"
 ureq = "3"
+fourcam-gpu = { path = "../fourcam-gpu", optional = true }
+
+[features]
+# `4cam simulate --gpu`: the stock simulation on the GPU (wgpu), falling back to the CPU
+gpu = ["dep:fourcam-gpu"]

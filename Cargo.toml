@@ -6,6 +6,7 @@ members = [
     "crates/fourcam-wasm",
     "crates/fourcam-py",
     "crates/fourcam-fixtures",
+    "crates/fourcam-gpu",
 ]
 # the Python extension needs a Python toolchain; build it with scripts/build-python
 default-members = ["crates/fourcam-core", "crates/fourcam-cli", "crates/fourcam-wasm", "crates/fourcam-fixtures"]
