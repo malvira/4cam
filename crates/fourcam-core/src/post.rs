@@ -75,7 +75,10 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
                     }
                 };
                 let m = crate::kinematics::to_machine(*tip, a);
-                let changed = |old: Option<f64>, new: f64| old.is_none_or(|o| num(o) != num(new));
+                // a value counts as changed when it really moved: the part-frame round trip
+                // leaves ~1e-12 noise that must not flip a printed digit into a sideways rapid
+                let changed =
+                    |old: Option<f64>, new: f64| old.is_none_or(|o| (o - new).abs() > 1e-6);
                 match feed {
                     None => {
                         let mut w = String::from("G0");
