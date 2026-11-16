@@ -6,3 +6,4 @@ examples/embed/csharp/bin/
 examples/embed/csharp/obj/
 examples/embed/node/node_modules/
 examples/embed/node/package-lock.json
+__pycache__/
