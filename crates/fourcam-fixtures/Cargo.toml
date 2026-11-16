@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 publish = false
 
 [[bin]]
@@ -12,4 +17,4 @@ name = "fourcam-fixtures"
 path = "src/main.rs"
 
 [dependencies]
-fourcam-core = { path = "../fourcam-core" }
+fourcam-core = { version = "0.1.0", path = "../fourcam-core" }

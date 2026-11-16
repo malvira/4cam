@@ -5,13 +5,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+publish = false
 
 [lib]
 name = "fourcam_solidcraft"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-fourcam-core = { path = "../../crates/fourcam-core" }
+fourcam-core = { version = "0.1.0", path = "../../crates/fourcam-core" }
 serde_json = "1"
 flate2 = "1"
 

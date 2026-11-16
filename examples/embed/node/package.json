@@ -1,0 +1,7 @@
+{
+  "name": "fourcam-embed-example",
+  "private": true,
+  "type": "module",
+  "description": "Uses the fourcam npm package; here the one packed locally by scripts/build-npm.sh (published: \"fourcam\": \"^0.1.0\")",
+  "dependencies": { "fourcam": "file:../../../target/pkg/fourcam-0.1.0.tgz" }
+}

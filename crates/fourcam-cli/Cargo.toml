@@ -5,16 +5,23 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+# the tests read the repository's examples and fixtures: not shipped
+exclude = ["tests/"]
 
 [[bin]]
 name = "4cam"
 path = "src/main.rs"
 
 [dependencies]
-fourcam-core = { path = "../fourcam-core" }
+fourcam-core = { version = "0.1.0", path = "../fourcam-core" }
 serde_json = "1"
 ureq = "3"
-fourcam-gpu = { path = "../fourcam-gpu", optional = true }
+fourcam-gpu = { version = "0.1.0", path = "../fourcam-gpu", optional = true }
 
 [features]
 # `4cam simulate --gpu`: the stock simulation on the GPU (wgpu), falling back to the CPU

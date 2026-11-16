@@ -607,15 +607,13 @@ impl ToolLibrary {
 // ------------------------------------------------------------------ registry
 
 const BUILTIN_MACHINES: [&str; 4] = [
-    include_str!("../../../profiles/makera/makera-z1-4axis.machine.json"),
-    include_str!("../../../profiles/makera/makera-carvera-4axis.machine.json"),
-    include_str!("../../../profiles/makera/makera-carvera-air-4axis.machine.json"),
-    include_str!("../../../profiles/generic/linuxcnc-4axis.machine.json"),
+    include_str!("../profiles/makera/makera-z1-4axis.machine.json"),
+    include_str!("../profiles/makera/makera-carvera-4axis.machine.json"),
+    include_str!("../profiles/makera/makera-carvera-air-4axis.machine.json"),
+    include_str!("../profiles/generic/linuxcnc-4axis.machine.json"),
 ];
 
-const BUILTIN_LIBRARIES: [&str; 1] = [include_str!(
-    "../../../profiles/makera/makera-starter.tools.json"
-)];
+const BUILTIN_LIBRARIES: [&str; 1] = [include_str!("../profiles/makera/makera-starter.tools.json")];
 
 /// Machine profiles shipped with 4cam.
 pub fn builtin_machines() -> Vec<MachineProfile> {
@@ -1594,7 +1592,7 @@ mod tests {
 
     #[test]
     fn validation_names_the_problem() {
-        let z1 = include_str!("../../../profiles/makera/makera-z1-4axis.machine.json");
+        let z1 = include_str!("../profiles/makera/makera-z1-4axis.machine.json");
         let bad = z1.replace("\"max\": 200,", "\"max\": -50,");
         assert!(MachineProfile::from_json(&bad)
             .unwrap_err()
@@ -1607,7 +1605,7 @@ mod tests {
         assert!(MachineProfile::from_json(&bad)
             .unwrap_err()
             .contains("repeat"));
-        let lib = include_str!("../../../profiles/makera/makera-starter.tools.json");
+        let lib = include_str!("../profiles/makera/makera-starter.tools.json");
         let bad = lib.replace("\"angle\": 90", "\"angle\": 190");
         assert!(ToolLibrary::from_json(&bad)
             .unwrap_err()

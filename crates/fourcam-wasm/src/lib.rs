@@ -13,7 +13,7 @@ pub mod api {
     };
     use serde_json::{json, Value};
 
-    pub const EXAMPLE_JOB: &str = include_str!("../../../examples/knob/knob.job.json");
+    pub const EXAMPLE_JOB: &str = include_str!("../data/knob.job.json");
 
     fn err(msg: impl std::fmt::Display) -> Value {
         json!({ "error": msg.to_string() })

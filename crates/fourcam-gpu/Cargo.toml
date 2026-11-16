@@ -5,10 +5,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+# tests and benchmarks read the repository's examples and fixtures: not shipped
+exclude = ["tests/", "examples/"]
 
 [dependencies]
-fourcam-core = { path = "../fourcam-core" }
+fourcam-core = { version = "0.1.0", path = "../fourcam-core" }
 wgpu = "25"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }

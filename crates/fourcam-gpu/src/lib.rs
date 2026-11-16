@@ -79,7 +79,7 @@ impl Gpu {
             .ok()?;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("stamp"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../../web/gpu/stamp.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("stamp.wgsl").into()),
         });
         let entry =
             |binding: u32, ty: wgpu::BufferBindingType, dynamic: bool| wgpu::BindGroupLayoutEntry {

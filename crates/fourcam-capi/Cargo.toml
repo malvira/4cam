@@ -5,13 +5,20 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+# the tests read the repository's examples and fixtures: not shipped
+exclude = ["tests/"]
 
 [lib]
 name = "fourcam_c"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-fourcam-wasm = { path = "../fourcam-wasm" }
+fourcam-wasm = { version = "0.1.0", path = "../fourcam-wasm" }
 serde_json = "1"
 
 [dev-dependencies]

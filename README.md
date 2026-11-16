@@ -247,9 +247,13 @@ The tests cover:
 - `crates/fourcam-py`: the Python bindings (pyo3, abi3, Python 3.9 or later).
 - `web/`: the browser app (`index.html`, `app.js`, `worker.js`) and its end-to-end test.
 - `scripts/`: the build and check scripts.
-- `profiles/`: built-in machine profiles and tool libraries (`profiles/_downloads/` is a
-  git-ignored cache of vendor files).
-- `docs/`: the profile formats, Makera sources and the roadmap.
+- `crates/fourcam-core/profiles/`: built-in machine profiles and tool libraries
+  (`profiles/_downloads/` at the root is a git-ignored cache of vendor files).
+- `docs/`: the profile formats, Makera sources and the roadmap;
+  [docs/embedding.md](docs/embedding.md) for embedding 4cam (Rust, C/C++, C#/.NET, Python,
+  JavaScript; runnable examples in `examples/embed/`) and
+  [docs/packaging.md](docs/packaging.md) for the crates, wheel and npm package (prepared,
+  not published).
 - `examples/`: example jobs and their outputs.
 - `tests/fixtures/`: test fixtures. These are the knob's original Python part and G-code
   generators, and a synthetic Fusion-format tool library. `crates/fourcam-fixtures`
