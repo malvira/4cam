@@ -150,8 +150,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     const faces = op.geometry?.find((g) => g.kind === "faces");
     const ax = op.geometry?.find((g) => g.kind === "axial_range");
-    // face and axial selections bound rotary operations (X/A); 3-axis types take their area as parameters
-    if (!ty.machine_needs.includes("xyz") && ty.geometry.some((g) => g === "mesh" || g === "profile" || g === "axial_range")) {
+    // face and axial selections bound rotary operations (X/A); picked faces bound the 3D raster
+    // too (it cuts only where the tool rests on them); other 3-axis types take their area as
+    // parameters
+    if (ty.kind === "raster3d" || (!ty.machine_needs.includes("xyz") && ty.geometry.some((g) => g === "mesh" || g === "profile" || g === "axial_range"))) {
       html += `<div class="row small"><button type="button" id="pickFaces">${t.picking ? "Done picking" : "Pick faces on the model"}</button>
         <span id="pickInfo">${faces ? `${faces.ids.length} face(s): ${faces.ids.map(esc).join(", ")}` : "whole model"}</span>
         ${faces ? '<button type="button" id="clearFaces">Clear</button>' : ""}</div>

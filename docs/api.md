@@ -43,7 +43,7 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
 | `ops::registry()` | Operation types and their parameters. |
 | `ops::check` | Validate an operation. |
 | `project::Project::op_defaults` / `ops::defaults` | A new operation with every field filled from the tool, spindle, machine limits and part faces. |
-| `geometry::face_regions` | Pickable faces with stable ids. |
+| `geometry::face_regions` | Pickable faces with stable ids. A `faces` selection on `raster3d` or `rotary_finish` keeps the passes where the tool rests on those faces (`face_subset` gives their triangles). |
 | `wizards::KnurlWizard` | The knurl wizard. |
 | `sim::Playback` | Material-removal playback (rotary). |
 | `sim3::Heightmap3` | Material removal for 3-axis programs (a Z heightmap of the block). |

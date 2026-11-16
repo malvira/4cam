@@ -491,6 +491,30 @@ impl Project {
             let b =
                 crate::geometry::boundary(&o.geometry, &|m| self.model_regions(m, meshes), radius)
                     .map_err(|e| format!("operation {:?}: {e}", o.id))?;
+            // faces of the part's mesh model become a contact mask (profiles' faces are axial
+            // bands, which the X range bounds exactly)
+            let mut face_ids: Vec<String> = Vec::new();
+            for s in &o.geometry {
+                if let crate::geometry::Selection::Faces { model, ids } = s {
+                    let is_mesh = self
+                        .models
+                        .iter()
+                        .any(|m| &m.id == model && matches!(m.kind, ModelKind::Mesh(_)));
+                    if is_mesh {
+                        if !setup.part.contains(model) {
+                            return Err(format!(
+                                "operation {:?}: faces of {model:?}, which is not this setup's part",
+                                o.id
+                            ));
+                        }
+                        for id in ids {
+                            if !face_ids.contains(id) {
+                                face_ids.push(id.clone());
+                            }
+                        }
+                    }
+                }
+            }
             let target = job
                 .programs
                 .iter_mut()
@@ -513,6 +537,20 @@ impl Project {
                     if let Some(a) = b.a {
                         f.a_range = clamp(f.a_range, a);
                     }
+                    f.faces = face_ids;
+                }
+                Operation::Raster3d(r) => {
+                    // only faces: the passes' area comes from the parameters
+                    if o.geometry.iter().any(|s| {
+                        !matches!(s, crate::geometry::Selection::Faces { .. })
+                    }) || face_ids.is_empty()
+                    {
+                        return Err(format!(
+                            "operation {:?}: raster3d takes faces of the part's mesh as its selection",
+                            o.id
+                        ));
+                    }
+                    r.faces = face_ids;
                 }
                 Operation::RotaryRough(r) => {
                     if let Some(x) = b.x {

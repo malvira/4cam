@@ -38,6 +38,7 @@ fn finish(angle: f64, pattern: &str, direction: &str, scallop: f64) -> Raster3d 
         pattern: pattern.into(),
         direction: direction.into(),
         scallop,
+        faces: Vec::new(),
         feed: 600.0,
         plunge_feed: 60.0,
     }

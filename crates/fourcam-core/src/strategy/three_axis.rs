@@ -530,6 +530,20 @@ pub fn raster3d(
     safe: f64,
     op: &Raster3d,
 ) -> Result<(), String> {
+    raster3d_on(b, dc, None, stock, safe, op)
+}
+
+/// [`raster3d`] limited to where the tool rests on the faces in `sel` (a drop-cutter on just
+/// those faces, following the whole part through `dc`): it lifts to the safe height between
+/// runs, and links rows at depth only when the link stays on the faces.
+pub fn raster3d_on(
+    b: &mut Builder,
+    dc: &DropCutter3,
+    sel: Option<&DropCutter3>,
+    stock: &StockBox,
+    safe: f64,
+    op: &Raster3d,
+) -> Result<(), String> {
     let [x0, x1] = op.x_range;
     let [y0, y1] = op.y_range;
     let floor = op.floor;
@@ -579,6 +593,8 @@ pub fn raster3d(
     for level in levels(top, floor + op.leave, op.step_down.max(d * 0.05)) {
         let z_of = |x: f64, y: f64| surf(x, y).max(level);
         let mut first = true;
+        // face selection: at the safe height until the first run on the faces
+        let mut lifted = true;
         let mut emitted = 0usize;
         for k in 0..=n {
             let wk = w0 + (w1 - w0) * k as f64 / n as f64;
@@ -606,6 +622,10 @@ pub fn raster3d(
             } else {
                 row
             };
+            if let Some(s) = sel {
+                masked_row(b, dc, s, &z_of, &row, safe, top, op, &mut lifted);
+                continue;
+            }
             let [sx, sy] = row[0];
             let z0 = z_of(sx, sy);
             if first {
@@ -636,6 +656,89 @@ pub fn raster3d(
         leave(b, safe);
     }
     Ok(())
+}
+
+/// Where the tool rests on the selected faces (see [`super::rotary_finish::on_faces`]).
+fn on_sel(dc: &DropCutter3, sel: &DropCutter3, x: f64, y: f64) -> bool {
+    super::rotary_finish::on_faces(
+        dc.z_at(x, y, f64::NEG_INFINITY),
+        sel.z_at(x, y, f64::NEG_INFINITY),
+        f64::NEG_INFINITY,
+    )
+}
+
+/// One raster row on selected faces: cut its runs on them, finding their edges to 1 um,
+/// lifting between runs; a row's first run is reached at depth from the last one when the
+/// straight link stays on the faces.
+#[allow(clippy::too_many_arguments)]
+fn masked_row(
+    b: &mut Builder,
+    dc: &DropCutter3,
+    sel: &DropCutter3,
+    z_of: &dyn Fn(f64, f64) -> f64,
+    row: &[[f64; 2]],
+    safe: f64,
+    top: f64,
+    op: &Raster3d,
+    lifted: &mut bool,
+) {
+    let feeds = [op.feed, op.plunge_feed];
+    let inside = |p: [f64; 2]| on_sel(dc, sel, p[0], p[1]);
+    let lerp =
+        |p: [f64; 2], q: [f64; 2], t: f64| [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+    let dist = |p: [f64; 2], q: [f64; 2]| ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt();
+    let at = |p: [f64; 2]| [p[0], p[1], z_of(p[0], p[1])];
+    let mut prev: Option<[f64; 2]> = None;
+    for &q in row {
+        let here = inside(q);
+        match (*lifted, here) {
+            (false, true) => {
+                let from = b.p3.expect("cutting");
+                // from the last row's end: at depth only if the link stays on the faces
+                let link_ok = prev.is_some() || {
+                    let a = [from[0], from[1]];
+                    let n = ((dist(a, q) / op.sample.max(0.01)).ceil() as usize).max(1);
+                    (1..n).all(|k| inside(lerp(a, q, k as f64 / n as f64)))
+                };
+                if link_ok {
+                    line_refined(b, z_of, from, at(q), op.tolerance, 0, feeds);
+                } else {
+                    leave(b, safe);
+                    let z = z_of(q[0], q[1]);
+                    enter(b, safe, q[0], q[1], top + 1.0, z, op.plunge_feed);
+                }
+            }
+            (true, false) => {}
+            (false, false) => {
+                // leaving the faces: cut to their edge, then up
+                if let Some(p) = prev {
+                    let e = super::rotary_finish::boundary(p, q, true, &lerp, &inside, dist(p, q));
+                    let from = b.p3.expect("cutting");
+                    line_refined(b, z_of, from, at(e), op.tolerance, 0, feeds);
+                }
+                leave(b, safe);
+                *lifted = true;
+            }
+            (true, true) => {
+                // onto the faces: down at their edge, from above the stock
+                let e = prev.map_or(q, |p| {
+                    super::rotary_finish::boundary(p, q, false, &lerp, &inside, dist(p, q))
+                });
+                let z = z_of(e[0], e[1]);
+                enter(b, safe, e[0], e[1], top + 1.0, z, op.plunge_feed);
+                *lifted = false;
+                if dist(e, q) > 1e-9 {
+                    line_refined(b, z_of, at(e), at(q), op.tolerance, 0, feeds);
+                }
+            }
+        }
+        prev = Some(q);
+    }
+    // one-way passes always come back from above
+    if op.pattern == "one_way" && !*lifted {
+        leave(b, safe);
+        *lifted = true;
+    }
 }
 
 fn line_refined(

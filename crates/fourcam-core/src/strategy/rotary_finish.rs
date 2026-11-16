@@ -93,6 +93,48 @@ pub fn rotary_finish(
     safe_r: f64,
     op: &RotaryFinish,
 ) -> Result<f64, String> {
+    rotary_finish_on(b, dc, None, r_max, safe_r, op)
+}
+
+/// Where the tool rests on the selected faces: dropped on them alone it sits as high as on
+/// the whole part (so the contact is theirs), and they are under it at all.
+pub(crate) fn on_faces(full: f64, selected: f64, none: f64) -> bool {
+    selected > none && selected >= full - 1e-6
+}
+
+/// The point next to the boundary between `p` and `q` (one inside, one out), on the inside,
+/// to within about 1 um of travel (`len` is the travel from `p` to `q`).
+pub(crate) fn boundary<P: Copy>(
+    p: P,
+    q: P,
+    p_inside: bool,
+    lerp: &dyn Fn(P, P, f64) -> P,
+    inside: &dyn Fn(P) -> bool,
+    len: f64,
+) -> P {
+    let (mut lo, mut hi) = (0.0f64, 1.0f64); // lo on p's side
+    let n = ((len.max(1e-9) / 1e-3).log2().ceil().max(1.0) as usize).min(40);
+    for _ in 0..n {
+        let m = 0.5 * (lo + hi);
+        if inside(lerp(p, q, m)) == p_inside {
+            lo = m;
+        } else {
+            hi = m;
+        }
+    }
+    lerp(p, q, if p_inside { lo } else { hi })
+}
+
+/// [`rotary_finish`] limited to where the tool rests on the faces in `sel` (a drop-cutter on
+/// just those faces): elsewhere it lifts to the safe radius.
+pub fn rotary_finish_on(
+    b: &mut Builder,
+    dc: &DropCutter,
+    sel: Option<&DropCutter>,
+    r_max: f64,
+    safe_r: f64,
+    op: &RotaryFinish,
+) -> Result<f64, String> {
     let floor = op.min_radius.max(0.0);
     let cl = |x: f64, a: f64| dc.radius_at(x, a, floor) + op.leave;
     let [x0, x1] = op.x_range;
@@ -113,6 +155,59 @@ pub fn rotary_finish(
             0,
             (op.feed, op.plunge_feed),
         );
+    };
+    // face selection: cut only where the tool rests on the selected faces, lifting between
+    let inside = |x: f64, a: f64| {
+        sel.is_none_or(|s| on_faces(dc.radius_at(x, a, -1.0), s.radius_at(x, a, -1.0), -1.0))
+    };
+    let lifted = std::cell::Cell::new(false);
+    let last = std::cell::Cell::new(None::<(f64, f64)>);
+    let lerp =
+        |p: (f64, f64), q: (f64, f64), t: f64| (p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t);
+    let in_p = |p: (f64, f64)| inside(p.0, p.1);
+    let go = |b: &mut Builder, x: f64, a: f64| {
+        if sel.is_none() {
+            cut(b, x, a);
+            return;
+        }
+        let prev = last.replace(Some((x, a)));
+        let span = |p: (f64, f64)| (x - p.0).abs() + r_max * (a - p.1).to_radians().abs();
+        match (lifted.get(), inside(x, a)) {
+            (false, true) => cut(b, x, a),
+            (true, false) => {}
+            (false, false) => {
+                // leaving the faces: cut to their edge, then up
+                if let Some(p) = prev {
+                    let e = boundary(p, (x, a), true, &lerp, &in_p, span(p));
+                    cut(b, e.0, e.1);
+                }
+                b.rapid_r(safe_r);
+                lifted.set(true);
+            }
+            (true, true) => {
+                // back on them: down at their edge
+                let e = prev.map_or((x, a), |p| {
+                    boundary(p, (x, a), false, &lerp, &in_p, span(p))
+                });
+                b.rapid_r(safe_r);
+                b.rapid(Some(e.0), None, Some(e.1));
+                b.plunge(cl(e.0, e.1), op.plunge_feed);
+                lifted.set(false);
+                cut(b, x, a);
+            }
+        }
+    };
+    // the first point of a pass: from the safe radius
+    let start = |b: &mut Builder, x: f64, a: f64| {
+        b.rapid_r(safe_r);
+        if sel.is_none() {
+            b.rapid(Some(x), None, Some(a));
+            b.plunge(cl(x, a), op.plunge_feed);
+        } else {
+            lifted.set(true);
+            last.set(None);
+            go(b, x, a);
+        }
     };
     match op.pattern {
         FinishPattern::Along => {
@@ -141,9 +236,7 @@ pub fn rotary_finish(
             let xs: Vec<f64> = (0..=m)
                 .map(|i| x0 + (x1 - x0) * i as f64 / m as f64)
                 .collect();
-            b.rapid_r(safe_r);
-            b.rapid(Some(xs[0]), None, Some(angles[0]));
-            b.plunge(cl(xs[0], angles[0]), op.plunge_feed);
+            start(b, xs[0], angles[0]);
             for (i, &a) in angles.iter().enumerate() {
                 let forward = i % 2 == 0;
                 let pass: Vec<f64> = if forward {
@@ -152,13 +245,13 @@ pub fn rotary_finish(
                     xs.iter().rev().copied().collect()
                 };
                 for &x in &pass {
-                    cut(b, x, a);
+                    go(b, x, a);
                 }
                 if let Some(&next) = angles.get(i + 1) {
                     let x_end = *pass.last().unwrap();
                     let k = ((next - a).abs() / op.sample_deg).ceil().max(1.0) as usize;
                     for j in 1..=k {
-                        cut(b, x_end, a + (next - a) * j as f64 / k as f64);
+                        go(b, x_end, a + (next - a) * j as f64 / k as f64);
                     }
                 }
             }
@@ -174,12 +267,12 @@ pub fn rotary_finish(
             let a0 = op.a_range[0];
             let n_rev = (360.0 / op.sample_deg).ceil() as usize;
             let seg = 360.0 / n_rev as f64;
-            b.rapid_r(safe_r);
-            b.rapid(Some(x0), None, Some(a0));
-            b.plunge(cl(x0, a0), op.plunge_feed);
+            // the helix's angle (the tool's while it cuts; kept going while it is lifted)
+            let mut at = a0;
+            start(b, x0, a0);
             for _ in 0..n_rev {
-                let a = b.a + seg;
-                cut(b, x0, a);
+                at += seg;
+                go(b, x0, at);
             }
             let len = (x1 - x0).abs();
             if len > 1e-9 {
@@ -187,25 +280,33 @@ pub fn rotary_finish(
                 let da = 360.0 * len / step / n as f64;
                 for i in 1..=n {
                     let x = x0 + (x1 - x0) * i as f64 / n as f64;
-                    let a = b.a + da;
-                    cut(b, x, a);
+                    at += da;
+                    go(b, x, at);
                 }
             }
             for _ in 0..n_rev {
-                let a = b.a + seg;
-                cut(b, x1, a);
+                at += seg;
+                go(b, x1, at);
             }
             b.rapid_r(safe_r);
             if op.clean_walls {
                 // A helix reaches the foot of a wall at only one angle per turn, leaving a
                 // strip as wide as the stepover; finish each wall foot with a full turn.
                 for xw in wall_feet(&cl, x0.min(x1), x0.max(x1)) {
-                    let a = b.a;
-                    b.rapid_r(safe_r);
-                    b.rapid_x(xw);
-                    b.plunge(cl(xw, a), op.plunge_feed);
-                    for k in 1..=n_rev {
-                        cut(b, xw, a + seg * k as f64);
+                    if sel.is_none() {
+                        let a = b.a;
+                        b.rapid_r(safe_r);
+                        b.rapid_x(xw);
+                        b.plunge(cl(xw, a), op.plunge_feed);
+                        for k in 1..=n_rev {
+                            cut(b, xw, a + seg * k as f64);
+                        }
+                    } else {
+                        start(b, xw, at);
+                        for k in 1..=n_rev {
+                            go(b, xw, at + seg * k as f64);
+                        }
+                        at += seg * n_rev as f64;
                     }
                     b.rapid_r(safe_r);
                 }

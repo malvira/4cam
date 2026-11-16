@@ -141,6 +141,23 @@ console.log(`3-axis plate: ${pl.programs.map((p) => `${p.name} ${p.lines} lines`
   assert.ok(ps.stocks[1].max_gouge < 0.03 && ps.stocks[1].rapid_hits === 0, JSON.stringify({ g: ps.stocks[1].max_gouge, r: ps.stocks[1].rapid_hits }));
   console.log(`tapered ball dome: ${r.programs[1].lines} lines, deepest gouge ${ps.stocks[1].max_gouge.toFixed(3)} mm`);
 }
+// the dome's raster limited to its cap (a face selection on the mesh): every call that
+// lowers the project gets the mesh, so the selection resolves
+{
+  const capped = JSON.parse(JSON.stringify(plate));
+  capped.setups[0].operations.find((o) => o.id === "op5").geometry = [{ kind: "faces", model: "dome", ids: ["f049d19c2"] }];
+  const r = cam.planAndPost(capped, "", dome, { max_points: 200000 });
+  assert.ok(!r.error, r.error);
+  const pts = r.programs[1].toolpath.points;
+  let far = 0;
+  for (let i = 0; i < pts.length; i += 4) if (pts[i + 3] === 3) far = Math.max(far, Math.hypot(pts[i] - 46, pts[i + 1] - 20));
+  assert.ok(far <= 6 + 1.5875 + 0.05, `raster reaches ${far} mm from the dome's axis`);
+  const tri = cam.meshTriangles(capped, { max_triangles: 5000 }, dome);
+  assert.ok(!tri.error, tri.error);
+  const ps = cam.simulate(capped, {}, dome);
+  assert.ok(!ps.error && ps.stocks[1].rapid_hits === 0, ps.error);
+  console.log(`dome cap only: raster within ${far.toFixed(2)} mm of the axis; meshTriangles and simulate resolve the selection`);
+}
 // a pocket of any shape: an L with a round island, from paths instead of the rectangle
 {
   const shaped = JSON.parse(JSON.stringify(plate));

@@ -76,7 +76,25 @@ goldens are still byte-identical.
    A setup is planned by lowering it to a 0.1 job, so the goldens stay identical.
 2. **Operation registry. Done:** `crates/fourcam-core/src/ops.rs` describes each type (parameters with units, defaults and limits; tool shapes; geometry; machine needs; whether it shapes the part on purpose). `4cam ops list|show|check`, WASM `opTypes`/`checkProject`. A test keeps the specs in step with the engine.
 3. **Setups. Done (rotary):** `4cam run` plans every setup (each with its own machine); a setup with `"stock": {"shape": "from_previous"}` starts from the previous setup's simulated stock (`project::simulate_project`); validation rejects a first setup that carries stock and duplicate output names. Example: `examples/knob/knob_two_setups.project.json`. Not yet: work-offset changes between setups (re-chucking at a different X or A), non-rotary holding.
-4. **Geometry selection. Done (prototype):** `crates/fourcam-core/src/geometry.rs` splits a model into face regions at sharp edges (30°), with ids that survive reordering and STL round trips, and a shape guess (plane, cylinder, cone, freeform). An operation's `geometry` (faces, axial range, angular range) becomes a containment boundary in X and A; the drop-cutter still checks the whole model, so selections never gouge neighbouring faces. `4cam faces`, WASM `face_regions` (with per-triangle region ids for picking). Not yet: true surface-limited toolpaths, curves and 2D paths.
+4. **Geometry selection. Done (prototype):** `crates/fourcam-core/src/geometry.rs` splits a model into face regions at sharp edges (30°), with ids that survive reordering and STL round trips, and a shape guess (plane, cylinder, cone, freeform). An operation's `geometry` (faces, axial range, angular range) becomes a containment boundary in X and A; the drop-cutter still checks the whole model, so selections never gouge neighbouring faces. `4cam faces`, WASM `face_regions` (with per-triangle region ids for picking).
+
+   **Face-bounded rasters. Done:** faces picked on a mesh model limit `raster3d` (vise,
+   or indexed on a rotary setup) and `rotary_finish` (both patterns) to where the tool
+   rests on them:
+   - At plan time the engine rebuilds the regions on the part's mesh and drops the tool on
+     the selected faces alone as well as on the whole part. A point counts as on the faces
+     where the two heights agree, so the tool still follows (and never gouges) the whole
+     surface.
+   - Run edges are found by bisection to 1 µm. The tool lifts between runs, and a raster
+     links rows at depth only when the link stays on the faces.
+   - A tool resting on a face's rim is on that face, so its footprint can reach a tool
+     diameter past the edge.
+   - Profiles' faces are axial bands: there the X range bounds them as before.
+   - Tested by simulation: the dome's cap on the plate, a cone of the knob along and
+     around. Each selected face is finished, nothing more than a diameter away is touched,
+     and nothing is gouged.
+
+   Not yet: curves and 2D paths as selections.
 5. **Knurl wizard. Done:** `crates/fourcam-core/src/wizards.rs` reads the model's faces (the body cone, extended to the front face, and the front face's edge for the chamfer) and adds turning, a diamond knurl and a V-bit flank chamfer as ordinary operations and outputs. On the knob it rebuilds the program byte-for-byte. `4cam wizard knurl`, WASM `wizardKnurl`.
 6. **Frontend setup/operation tree. Done:** the web app's Project panel (`web/tree.js`) shows setups, output files and operations; operations can be added from forms generated from the operation registry (validated by the engine before they join the project), edited, turned on/off, coloured, reordered and deleted; faces are picked by clicking the model; the knurl wizard runs from the tree; Generate and the machining simulation use the chosen setup and the operation colours. Originally planned as: type, tool, geometry chosen by clicking the model,
    reorder, enable, colour.
@@ -136,7 +154,7 @@ goldens are still byte-identical.
 
   Tapered ball tools: done (rotary rough/finish, raster3d, rough3d, engrave; drop-cutter
   checked against brute force, scallop stepover checked by a simulated cut).
-  Not yet: face selections as raster boundaries on 3-axis setups.
+  Face selections bound 3-axis rasters too (see "Face-bounded rasters" above).
 - **Engraving (part 2). Done:**
   - `engrave` follows polylines and text in a built-in single-stroke font (A-Z, 0-9, some
     punctuation; an original design) at a depth in `step_down` passes, with a V-bit, ball or

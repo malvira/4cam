@@ -151,6 +151,30 @@ impl Ctx<'_> {
     }
 }
 
+/// The triangles of `mesh` in its face regions `ids` ([`geometry::face_regions`] at 30°,
+/// the same regions a face selection names).
+pub fn face_subset(mesh: &Mesh, ids: &[String]) -> Result<Mesh, String> {
+    let (regions, label) = geometry::face_regions(mesh, 30.0);
+    let want: Vec<usize> = ids
+        .iter()
+        .map(|id| {
+            regions
+                .iter()
+                .position(|r| &r.id == id)
+                .ok_or(format!("the part has no face {id:?}"))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(Mesh {
+        triangles: mesh
+            .triangles
+            .iter()
+            .zip(&label)
+            .filter(|(_, l)| want.contains(l))
+            .map(|(t, _)| *t)
+            .collect(),
+    })
+}
+
 fn check_flute(tool: &job::Tool, stock_r: f64, r_min: f64) -> Result<(), Error> {
     if let Some(flute) = tool.flute_length {
         let depth = stock_r - r_min;
@@ -404,9 +428,24 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             }
             (Operation::RotaryFinish(o), _) => {
                 let mesh = ctx.surface(&prog.name)?;
-                let dc = DropCutter::new(mesh, cutter.expect("set above"));
-                let r_min = strategy::rotary_finish(&mut b, &dc, mesh.max_radius(), safe_r, o)
-                    .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
+                let c = cutter.expect("set above");
+                let dc = DropCutter::new(mesh, c);
+                let sel = if o.faces.is_empty() {
+                    None
+                } else {
+                    let sub = face_subset(mesh, &o.faces)
+                        .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
+                    Some(DropCutter::new(&sub, c))
+                };
+                let r_min = strategy::rotary_finish_on(
+                    &mut b,
+                    &dc,
+                    sel.as_ref(),
+                    mesh.max_radius(),
+                    safe_r,
+                    o,
+                )
+                .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
             }
             (Operation::RotaryRough(o), _) => {
@@ -486,11 +525,37 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                             ctx.surface(&prog.name)?
                         };
                         let turned = (index != 0.0).then(|| mesh.rotated_x(index));
-                        let dc = t3::DropCutter3::new(
-                            turned.as_ref().unwrap_or(mesh),
-                            cutter.expect("set above"),
-                        );
-                        t3::raster3d(&mut b, &dc, sb, safe_r, o).map_err(err)?
+                        let c = cutter.expect("set above");
+                        let dc = t3::DropCutter3::new(turned.as_ref().unwrap_or(mesh), c);
+                        if o.faces.is_empty() {
+                            t3::raster3d(&mut b, &dc, sb, safe_r, o).map_err(err)?
+                        } else {
+                            let sub = face_subset(mesh, &o.faces).map_err(err)?;
+                            let sub = if index != 0.0 {
+                                sub.rotated_x(index)
+                            } else {
+                                sub
+                            };
+                            // the passes need cover only the faces, and the tool beside them
+                            let mut o = o.clone();
+                            if let Some((lo, hi)) = sub.bounds() {
+                                let r = c.radius();
+                                let clip = |range: [f64; 2], a: f64, b: f64| {
+                                    let (l, h) = (range[0].min(range[1]), range[0].max(range[1]));
+                                    let (l, h) = (l.max(a - r), h.min(b + r));
+                                    if range[0] <= range[1] {
+                                        [l, h]
+                                    } else {
+                                        [h, l]
+                                    }
+                                };
+                                o.x_range = clip(o.x_range, lo[0], hi[0]);
+                                o.y_range = clip(o.y_range, lo[1], hi[1]);
+                            }
+                            let seld = t3::DropCutter3::new(&sub, c);
+                            t3::raster3d_on(&mut b, &dc, Some(&seld), sb, safe_r, &o)
+                                .map_err(err)?
+                        }
                     }
                     _ => unreachable!(),
                 }

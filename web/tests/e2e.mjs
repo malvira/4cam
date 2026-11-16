@@ -561,6 +561,34 @@ try {
   const remembered = await js("JSON.parse(localStorage.getItem('4cam.simRes')).v");
   check("the resolution setting is remembered", remembered === "normal", remembered);
 
+  // 8g2. face-bounded raster: pick the dome's cap for its raster; the finish stays on it
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl') && !!document.querySelector('#tree .tree-op[data-op=\"op5\"]')"), "the plate again", 15000);
+    await js("document.querySelector('#tree .tree-op[data-op=\"op5\"] [data-act=\"select\"]').click(); true");
+    await waitFor(() => js("!!document.getElementById('pickFaces')"), "the raster's face picker", 15000);
+    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!!window.__4cam.state.tree.pickMesh"), "pick mode on the plate", 15000);
+    await js("window.__4cam.setView('iso', {})");
+    const at = await js(`(() => { const v = window.__4cam.state.three; const p = new v.THREE.Vector3(46, 20, -0.6).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
+    const capPick = String(await js(`const pr = await window.__4cam.tree.pickAt(${at[0]}, ${at[1]}); pr ? pr.id + ' ' + pr.shape : 'none'`));
+    await js("document.getElementById('pickFaces').click(); true");
+    await sleep(400);
+    const faces = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.id === 'op5').geometry || [])");
+    await js("document.getElementById('generate').click(); true");
+    await waitDone("generation with the picked cap", 240000);
+    const far = await js("(() => { const p = window.__4cam.state.result.programs.find(q => q.name === 'plate_2_dome').toolpath.points; let m = 0; for (let i = 0; i < p.length; i += 4) if (p[i + 3] === 3) m = Math.max(m, Math.hypot(p[i] - 46, p[i + 1] - 20)); return m; })()");
+    const okTabs = await js("[...document.querySelectorAll('#tabs button')].every(b => b.textContent.endsWith('OK'))");
+    check("picking the dome's cap keeps its raster on the cap (cuts within the cap + the tool radius)", capPick.startsWith("f049d19c2") && /f049d19c2/.test(faces) && far <= 6 + 1.5875 + 0.05 && okTabs, `picked ${capPick}; geometry ${faces}; farthest cut ${far.toFixed(3)} mm from the dome's axis`);
+    await shot("13b_pick_dome_cap");
+    // back to the whole model (the editor may have closed when generating)
+    if (!(await js("!!document.getElementById('clearFaces')"))) {
+      await js("document.querySelector('#tree .tree-op[data-op=\"op5\"] [data-act=\"select\"]').click(); true");
+    }
+    await waitFor(() => js("!!document.getElementById('clearFaces')"), "the clear button", 15000);
+    await js("document.getElementById('clearFaces').click(); true");
+    await waitFor(() => js("!JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.id === 'op5').geometry"), "the selection cleared", 15000);
+  }
   // 8h. WebGPU stock simulation against the CPU (WASM): Simulate and playback, rotary and
   // 3-axis; indexed jobs and "GPU off" fall back and say so
   const webgpu = String(await js("const adp = navigator.gpu ? await navigator.gpu.requestAdapter() : null; String(!!adp)")) === "true";
@@ -721,6 +749,7 @@ try {
   await shot("06_phone");
 
   const errors = cdp.events.filter((e) => e.method === "Runtime.exceptionThrown").map((e) => e.params.exceptionDetails.exception?.description || e.params.exceptionDetails.text);
+  if (errors.length) console.log(`uncaught page errors:\n${errors.join("\n---\n")}`);
   check("no uncaught page errors", errors.length === 0, errors.join(" | ").slice(0, 300));
 } catch (e) {
   failed = true;

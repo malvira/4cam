@@ -328,6 +328,11 @@ pub struct Raster3d {
     /// (ball or V-bit); `stepover` is used otherwise.
     #[serde(default)]
     pub scallop: f64,
+    /// Face regions of the part mesh the tool may touch (ids from
+    /// [`crate::geometry::face_regions`] at 30°, filled from a face selection): passes run
+    /// only where the tool rests on them, following the whole part. Empty: the whole part.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<String>,
     pub feed: f64,
     pub plunge_feed: f64,
 }
@@ -501,6 +506,12 @@ pub enum FinishPattern {
 pub struct RotaryFinish {
     pub tool: u32,
     pub pattern: FinishPattern,
+    /// Face regions of the part mesh the tool may touch (ids from
+    /// [`crate::geometry::face_regions`] at 30°, filled from a face selection): passes run
+    /// only where the tool rests on them, following the whole part. Empty: the whole part.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<String>,
+
     /// Axial extent `[start, end]` of the tool tip.
     pub x_range: [f64; 2],
     /// Angular extent (degrees) for `along`; a full turn by default.

@@ -57,11 +57,7 @@ pub mod api {
     }
 
     /// The job to plan from a 0.1 job or a 0.2 project (its first setup).
-    fn job_any(text: &str, libs: &[ToolLibrary]) -> Result<Job, String> {
-        job_any_mesh(text, libs, &[])
-    }
-
-    /// Same, with the mesh bytes available to face selections on mesh models.
+    /// (Also given the mesh bytes, so face selections on mesh models resolve.)
     fn job_any_mesh(text: &str, libs: &[ToolLibrary], mesh: &[u8]) -> Result<Job, String> {
         let meshes = |src: &fourcam::job::MeshSource| {
             (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
@@ -331,7 +327,7 @@ pub mod api {
     /// Simulate all programs in order. `opts`: `{"dx": mm, "na": cells}` (default 0.1, 360).
     /// Returns the grid, the part map and the stock map after each program (radii, f32).
     pub fn simulate(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
-        let job = match job_any(job_json, &profiles::builtin_libraries()) {
+        let job = match job_any_mesh(job_json, &profiles::builtin_libraries(), mesh) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -388,7 +384,7 @@ pub mod api {
     /// Oriented mesh triangles (flattened xyz, f32) for display, thinned to about
     /// `max_triangles` (`opts`, default 200000).
     pub fn mesh_triangles(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
-        let job = match job_any(job_json, &profiles::builtin_libraries()) {
+        let job = match job_any_mesh(job_json, &profiles::builtin_libraries(), mesh) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
