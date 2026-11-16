@@ -132,6 +132,15 @@ impl Kinematics {
             .iter()
             .find(|a| a.letter.eq_ignore_ascii_case(letter))
     }
+
+    /// The rotary axis turning about X (either way, any letter): the one 4cam's rotary
+    /// toolpaths drive.
+    pub fn rotary_about_x(&self) -> Option<&RotaryAxis> {
+        self.rotary.iter().find(|a| {
+            let n = (a.axis[0].powi(2) + a.axis[1].powi(2) + a.axis[2].powi(2)).sqrt();
+            n > 0.0 && (a.axis[0].abs() / n - 1.0).abs() < 1e-6
+        })
+    }
 }
 
 /// Largest work the rotary axis holds.
@@ -197,9 +206,59 @@ fn finite(v: f64) -> bool {
 
 impl MachineProfile {
     pub fn from_json(text: &str) -> Result<MachineProfile, String> {
-        let m: MachineProfile =
+        let mut m: MachineProfile =
             serde_json::from_str(text).map_err(|e| format!("machine profile: {e}"))?;
         m.validate()?;
+        m.post.axes = m.axis_map()?;
+        Ok(m)
+    }
+
+    /// How the toolpath's axes become this machine's words (see [`crate::machine::AxisMap`]):
+    /// each linear word from the axis that moves the tool along that direction (and its
+    /// sign), the rotary word from the rotary axis about X. Its sign flips for a left-handed
+    /// axis, an axis pointing along -X, and a head that turns the tool instead of the work.
+    pub fn axis_map(&self) -> Result<crate::machine::AxisMap, String> {
+        let mut m = crate::machine::AxisMap::default();
+        for (k, e) in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            .iter()
+            .enumerate()
+        {
+            let along = |d: &[f64; 3]| d[0] * e[0] + d[1] * e[1] + d[2] * e[2];
+            if let Some(a) = self
+                .kinematics
+                .linear
+                .iter()
+                .find(|a| a.direction.is_some_and(|d| along(&d).abs() > 0.999))
+            {
+                m.letters[k] = a.letter.clone();
+                m.signs[k] = along(&a.direction.expect("found")).signum();
+            }
+        }
+        for a in &self.kinematics.linear {
+            if let Some(d) = a.direction {
+                let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                if n > 0.0 && d.iter().filter(|c| c.abs() / n > 1e-6).count() > 1 {
+                    return Err(format!(
+                        "machine profile {:?}: linear axis {} moves along {d:?}; 4cam posts need axes along X, Y or Z",
+                        self.id, a.letter
+                    ));
+                }
+            }
+        }
+        if let Some(r) = self.kinematics.rotary.iter().find(|r| {
+            let n = (r.axis[0].powi(2) + r.axis[1].powi(2) + r.axis[2].powi(2)).sqrt();
+            n > 0.0 && (r.axis[0].abs() / n - 1.0).abs() < 1e-6
+        }) {
+            m.letters[3] = r.letter.clone();
+            let mut sign = r.axis[0].signum();
+            if r.handedness == "left" {
+                sign = -sign;
+            }
+            if r.carries == "tool" {
+                sign = -sign;
+            }
+            m.signs[3] = sign;
+        }
         Ok(m)
     }
 
@@ -688,14 +747,11 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
             None,
             "this machine has no rotary axis; 4cam's strategies need one about X".into(),
         );
-    } else if m.kinematics.rotary("A").is_none_or(|a| {
-        let n = (a.axis[0].powi(2) + a.axis[1].powi(2) + a.axis[2].powi(2)).sqrt();
-        (a.axis[0] / n - 1.0).abs() > 1e-6
-    }) {
+    } else if m.kinematics.rotary_about_x().is_none() {
         push(
             "error",
             None,
-            "4cam's strategies need an A axis turning about X".into(),
+            "4cam's rotary strategies need a rotary axis turning about X".into(),
         );
     }
     if let Some(tc) = &m.tool_changer {
@@ -729,7 +785,7 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
     }
     let x = m.kinematics.linear("X");
     let z = m.kinematics.linear("Z");
-    let a = m.kinematics.rotary("A");
+    let a = m.kinematics.rotary_about_x();
     for tp in tps {
         let name = Some(tp.name.as_str());
         if job.stock_box.is_some() {
@@ -1016,7 +1072,7 @@ pub fn import(bytes: &[u8], name: &str) -> Result<Import, String> {
     if v.get("feed_mode").is_some() && v.get("tool_change").is_some() {
         let post = Machine::from_json(text).map_err(|e| format!("{base}: {e}"))?;
         let id = slug(stem);
-        let p = MachineProfile {
+        let mut p = MachineProfile {
             format: MACHINE_FORMAT.into(),
             version: FORMAT_VERSION,
             id: if id.is_empty() {
@@ -1041,6 +1097,7 @@ pub fn import(bytes: &[u8], name: &str) -> Result<Import, String> {
             post,
         };
         p.validate()?;
+        p.post.axes = p.axis_map()?;
         return Ok(Import {
             notes: p.notes.clone(),
             item: Imported::Machine(p),
@@ -1304,6 +1361,10 @@ fn fusion_machine(v: &Value, stem: &str) -> Result<Import, String> {
                         a.get(2)?.as_f64()?,
                     ])
                 });
+                // Fusion gives the carriage's own direction. An axis that does not carry the
+                // head moves the table, so the tool moves the other way relative to the work.
+                let tool_side = parts_under_contain(p, "head");
+                let d = d.map(|v| if tool_side { v } else { v.map(|c| -c) });
                 linear.push(LinearAxis {
                     letter,
                     direction: d,
@@ -1407,6 +1468,7 @@ fn fusion_machine(v: &Value, stem: &str) -> Result<Import, String> {
             spindle_on: "M3 S{rpm}".into(),
             dwell: Some("G4 P3".into()),
             postamble: vec!["M5".into(), "G0 Z{safe}".into(), "M30".into()],
+            axes: Default::default(),
         }
     };
     post.feed_mode = feed_mode;
@@ -1452,6 +1514,8 @@ fn fusion_machine(v: &Value, stem: &str) -> Result<Import, String> {
         notes: notes.clone(),
         post,
     };
+    let mut p = p;
+    p.post.axes = p.axis_map()?;
     p.validate()?;
     Ok(Import {
         item: Imported::Machine(p),
@@ -1638,6 +1702,24 @@ mod tests {
     fn fusion_machine_imports_from_mch_and_f3d() {
         let text = fusion_machine_json().to_string();
         let imp = import(text.as_bytes(), "simulation.mch").unwrap();
+        // the table's Y [0, -1, 0] becomes the tool's motion relative to the work: +Y
+        let Imported::Machine(m0) = &imp.item else {
+            panic!("not a machine")
+        };
+        let dirs: Vec<_> = m0
+            .kinematics
+            .linear
+            .iter()
+            .map(|a| (a.letter.clone(), a.direction))
+            .collect();
+        assert!(
+            dirs.contains(&("Y".to_string(), Some([0.0, 1.0, 0.0]))),
+            "{dirs:?}"
+        );
+        assert!(
+            dirs.contains(&("X".to_string(), Some([1.0, 0.0, 0.0]))),
+            "{dirs:?}"
+        );
         let Imported::Machine(m) = &imp.item else {
             panic!()
         };

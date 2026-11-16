@@ -42,7 +42,25 @@ The same format describes:
 - a 3+1 machine like the Z1;
 - later, 5-axis trunnions or head-head machines.
 
-Today's strategies need an A axis about X. The limit check says so if a machine has none.
+Today's rotary strategies need a rotary axis about X (any letter). The limit check says so
+if a machine has none.
+
+**Axis directions and posting.**
+- **Linear `direction`.** This is the tool's motion relative to the work when the axis
+  moves positive. Fusion 360 machine files give the carriage's own direction instead, so the
+  importer reverses axes that move the table rather than the head. A Makera table's Y
+  `[0, -1, 0]` becomes `[0, 1, 0]`.
+- **The axis map.** 4cam's toolpaths use one convention: X, Y, Z are the tool's motion
+  relative to the work, and A turns the work right-handed about +X. When a profile loads,
+  `axis_map` works out each word for this machine:
+  - each linear word comes from the axis that moves the tool along that direction, with its
+    sign;
+  - the rotary word comes from the axis about X, with its letter;
+  - the rotary sign flips for a left-handed axis, for an axis along -X, and for a head that
+    turns the tool instead of the work.
+- **The post writes through that map.** Every built-in profile maps one to one. A machine
+  whose A turns the other way gets every A word negated, and is still correct.
+- **Unsupported.** Linear axes that are not along X, Y or Z are refused.
 
 **Units.** Linear values are in mm and mm/min; rotary feeds are in deg/min.
 

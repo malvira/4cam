@@ -36,6 +36,40 @@ pub struct Machine {
     pub dwell: Option<String>,
     #[serde(default)]
     pub postamble: Vec<String>,
+    /// How the toolpath's X, Y, Z and A become this machine's words, from its kinematics
+    /// (filled in when a profile is loaded; identity for the usual XYZ + A about +X).
+    #[serde(default, skip_serializing_if = "AxisMap::is_identity")]
+    pub axes: AxisMap,
+}
+
+/// The toolpath works in one convention: X, Y, Z are the tool's motion relative to the work,
+/// and A turns the workpiece right-handed about +X. A machine's word for each of them, and
+/// the sign that turns the toolpath's value into the word's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AxisMap {
+    pub letters: [String; 4],
+    pub signs: [f64; 4],
+}
+
+impl Default for AxisMap {
+    fn default() -> Self {
+        AxisMap {
+            letters: ["X", "Y", "Z", "A"].map(String::from),
+            signs: [1.0; 4],
+        }
+    }
+}
+
+impl AxisMap {
+    pub fn is_identity(&self) -> bool {
+        *self == AxisMap::default()
+    }
+
+    /// The word for toolpath axis `k` (0 X, 1 Y, 2 Z, 3 A) at value `v`, with `d` decimals.
+    pub fn word(&self, k: usize, v: f64, d: usize) -> String {
+        let v = self.signs[k] * v;
+        format!("{}{v:.d$}", self.letters[k])
+    }
 }
 
 fn default_decimals() -> usize {

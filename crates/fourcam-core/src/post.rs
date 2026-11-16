@@ -28,6 +28,8 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
     let mut marks = Vec::new();
     let d = machine.decimals;
     let num = |v: f64| format!("{v:.d$}");
+    // axis words as this machine names and signs them (identity for XYZ + A about +X)
+    let word = |k: usize, v: f64| machine.axes.word(k, v, d);
     let safe = num(tp.safe_r);
     let mut out: Vec<String> = Vec::new();
 
@@ -64,9 +66,9 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
             Move::Operation { id, kind } => marks.push((*id, kind.clone(), out.len())),
             Move::Rapid3 { x, y, z } => {
                 let mut w = String::from("G0");
-                for (l, v, st) in [("X", x, &mut s.x), ("Y", y, &mut s.y), ("Z", z, &mut s.z)] {
+                for (k, v, st) in [(0, x, &mut s.x), (1, y, &mut s.y), (2, z, &mut s.z)] {
                     if let Some(v) = v {
-                        w += &format!(" {l}{}", num(*v));
+                        w += &format!(" {}", word(k, *v));
                         *st = Some(*v);
                     }
                 }
@@ -83,7 +85,12 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
                 } else {
                     format!("{feed:.0}")
                 };
-                out.push(format!("G1 X{} Y{} Z{} F{fw}", num(*x), num(*y), num(*z)));
+                out.push(format!(
+                    "G1 {} {} {} F{fw}",
+                    word(0, *x),
+                    word(1, *y),
+                    word(2, *z)
+                ));
                 s.x = Some(*x);
                 s.y = Some(*y);
                 s.z = Some(*z);
@@ -98,15 +105,15 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
             Move::Rapid { x, r, a } => {
                 let mut w = String::from("G0");
                 if let Some(z) = r {
-                    w += &format!(" Z{}", num(*z));
+                    w += &format!(" {}", word(2, *z));
                     s.z = Some(*z);
                 }
                 if let Some(x) = x {
-                    w += &format!(" X{}", num(*x));
+                    w += &format!(" {}", word(0, *x));
                     s.x = Some(*x);
                 }
                 if let Some(a) = a {
-                    w += &format!(" A{}", num(*a));
+                    w += &format!(" {}", word(3, *a));
                     s.a = *a;
                 }
                 out.push(w);
@@ -115,9 +122,9 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
                 if machine.feed_mode == FeedMode::InverseTime {
                     // G93: F = 1 / minutes for this move
                     let dz = s.z.map_or(0.0, |z| (r - z).abs()).max(1e-6);
-                    out.push(format!("G1 Z{} F{:.3}", num(*r), feed / dz));
+                    out.push(format!("G1 {} F{:.3}", word(2, *r), feed / dz));
                 } else {
-                    out.push(format!("G1 Z{} F{feed:.0}", num(*r)));
+                    out.push(format!("G1 {} F{feed:.0}", word(2, *r)));
                 }
                 s.z = Some(*r);
             }
@@ -187,7 +194,12 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
                         };
                     }
                 }
-                out.push(format!("G1 X{} Z{} A{} F{fw}", num(*x), num(*r), num(*a)));
+                out.push(format!(
+                    "G1 {} {} {} F{fw}",
+                    word(0, *x),
+                    word(2, *r),
+                    word(3, *a)
+                ));
                 s.x = Some(*x);
                 s.z = Some(*r);
                 s.a = *a;

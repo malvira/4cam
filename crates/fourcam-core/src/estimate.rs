@@ -72,7 +72,7 @@ impl Dynamics {
                 }
             }
         }
-        if let Some(a) = p.kinematics.rotary("A") {
+        if let Some(a) = p.kinematics.rotary_about_x() {
             if let Some(f) = a.max_feed {
                 d.max_feed[3] = f;
                 d.rapid[3] = f;
