@@ -45,6 +45,9 @@ pub struct LinearAxis {
     pub max_feed: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rapid: Option<f64>,
+    /// mm/s² (time estimates; default 500)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accel: Option<f64>,
 }
 
 impl LinearAxis {
@@ -75,6 +78,26 @@ pub struct RotaryAxis {
     /// deg/min
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_feed: Option<f64>,
+    /// deg/min (default: max_feed)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rapid: Option<f64>,
+    /// deg/s² (time estimates; default 3600)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accel: Option<f64>,
+}
+
+/// Timing figures for machining-time estimates (see `estimate::Dynamics`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Timing {
+    /// Junction deviation (mm) of the controller's look-ahead (default 0.02).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub junction_deviation: Option<f64>,
+    /// Seconds per tool change, measuring included (default 20 ATC, 60 manual).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_change_s: Option<f64>,
+    /// Seconds for the spindle to start, beyond any programmed dwell (default 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spindle_start_s: Option<f64>,
 }
 
 fn default_carries() -> String {
@@ -160,6 +183,8 @@ pub struct MachineProfile {
     pub max_feed: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_changer: Option<ToolChanger>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<Timing>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     /// G-code templates.
@@ -1011,6 +1036,7 @@ pub fn import(bytes: &[u8], name: &str) -> Result<Import, String> {
             spindle: None,
             max_feed: None,
             tool_changer: None,
+            timing: None,
             notes: vec!["Imported from post templates only: no travels or spindle limits.".into()],
             post,
         };
@@ -1052,6 +1078,7 @@ fn default_rotary_kinematics() -> Kinematics {
         max: None,
         max_feed: None,
         max_rapid: None,
+        accel: None,
     };
     Kinematics {
         linear: vec![
@@ -1068,6 +1095,8 @@ fn default_rotary_kinematics() -> Kinematics {
             min: None,
             max: None,
             max_feed: None,
+            max_rapid: None,
+            accel: None,
         }],
         spindle_axis: [0.0, 0.0, 1.0],
     }
@@ -1282,6 +1311,7 @@ fn fusion_machine(v: &Value, stem: &str) -> Result<Import, String> {
                     max: num(p, "max"),
                     max_feed: feed("max_normal_speed"),
                     max_rapid: feed("max_rapid_speed"),
+                    accel: None,
                 });
             }
             Some("rotary") => {
@@ -1319,6 +1349,8 @@ fn fusion_machine(v: &Value, stem: &str) -> Result<Import, String> {
                     min,
                     max,
                     max_feed: feed("max_normal_speed"),
+                    max_rapid: feed("max_rapid_speed"),
+                    accel: None,
                 });
             }
             Some("head") => {
@@ -1416,6 +1448,7 @@ fn fusion_machine(v: &Value, stem: &str) -> Result<Import, String> {
             slots: if has_changer { slots } else { None },
             max_tool_diameter: max_tool_d,
         }),
+        timing: None,
         notes: notes.clone(),
         post,
     };

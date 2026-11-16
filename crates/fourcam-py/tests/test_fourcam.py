@@ -51,6 +51,19 @@ def test_mesh_job_and_simulation():
     assert sim["stocks"][0]["gouge_cells"] == 0
 
 
+
+def test_time_estimates():
+    res = fourcam.plan_and_post(fourcam.example_job(), max_points=1000)
+    total = sum(p["time"]["total_s"] for p in res["programs"])
+    assert abs(res["time_total_s"] - total) < 1e-6 and total > 60
+    for p in res["programs"]:
+        ops = sum(o["seconds"] for o in p["time"]["ops"])
+        assert ops <= p["time"]["total_s"] + 1e-6
+    # any G-code: 100 mm at 600 mm/min on the Z1 is a little over 10 s with acceleration
+    e = fourcam.estimate("G0 X0 Y0 Z5\nG1 X100 F600\n")
+    assert e["machine"] == "makera-z1-4axis" and 10.0 < e["feed_s"] < 10.1, e
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

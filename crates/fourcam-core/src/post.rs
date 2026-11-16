@@ -19,6 +19,13 @@ fn fill(template: &str, tool: u32, rpm: u32, safe: &str) -> String {
 
 /// Convert one program's toolpath to G-code. Lines end with `\n`.
 pub fn post(tp: &Toolpath, machine: &Machine) -> String {
+    post_marked(tp, machine).0
+}
+
+/// [`post`], plus where each operation starts: (operation id, kind, index of its first
+/// line). The text is the same.
+pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, String, usize)>) {
+    let mut marks = Vec::new();
     let d = machine.decimals;
     let num = |v: f64| format!("{v:.d$}");
     let safe = num(tp.safe_r);
@@ -54,7 +61,7 @@ pub fn post(tp: &Toolpath, machine: &Machine) -> String {
     for mv in &tp.moves {
         match mv {
             Move::Comment { text } => out.push(format!("({text})")),
-            Move::Operation { .. } => {}
+            Move::Operation { id, kind } => marks.push((*id, kind.clone(), out.len())),
             Move::Rapid3 { x, y, z } => {
                 let mut w = String::from("G0");
                 for (l, v, st) in [("X", x, &mut s.x), ("Y", y, &mut s.y), ("Z", z, &mut s.z)] {
@@ -193,5 +200,5 @@ pub fn post(tp: &Toolpath, machine: &Machine) -> String {
     }
     let mut text = out.join("\n");
     text.push('\n');
-    text
+    (text, marks)
 }

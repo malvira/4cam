@@ -37,6 +37,11 @@ USAGE:
       accepted tools and geometry; check validates a file's operations.
   4cam profiles list|show|import|export|dir ...
       Machine profiles and tool libraries (`4cam profiles help`).
+  4cam estimate <file.nc> [--machine <id|file|url>]
+      Estimate the machining time of any G-code file: feeds as the machine's
+      controller reads them (degrees-as-length, linear-only, inverse time), rapids,
+      acceleration and corner slow-downs, dwells and tool changes. `run` prints the
+      same per program, per operation and in total.
   4cam verify <file.nc> [--plunge <mm/min>] [--safe <radius>]
       Check G-code for over-fast Z descents and low X/A rapids.
       Defaults: --plunge 60, --safe = highest Z reached by a G0 move.
@@ -333,6 +338,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         "verify" => cmd_verify(&parse(rest, &["plunge", "safe"])?),
+        "estimate" => cmd_estimate(&parse(rest, &["machine"])?),
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
         "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
         "ops" => cmd_ops(rest),
@@ -367,12 +373,22 @@ fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
     let jobs = fourcam::project::jobs_from_any_with(&read(job_path)?, &reg.libraries(), &meshes)
         .map_err(|e| format!("{job_path}: {e}"))?;
     let mut bad = 0;
+    let mut total = 0.0;
     for (setup, job) in &jobs {
         if jobs.len() > 1 {
             println!("== setup {setup}");
         }
-        bad += run_setup(o, job_path, job, &reg)?;
+        let (b, t) = run_setup(o, job_path, job, &reg)?;
+        bad += b;
+        total += t;
+        if jobs.len() > 1 {
+            println!("setup {setup}: {}", fourcam::estimate::format_duration(t));
+        }
     }
+    println!(
+        "estimated machining time: {}",
+        fourcam::estimate::format_duration(total)
+    );
     Ok(if bad == 0 {
         ExitCode::SUCCESS
     } else {
@@ -386,8 +402,9 @@ fn run_setup(
     job_path: &str,
     job: &Job,
     reg: &profiles_cmd::Registry,
-) -> Result<usize, String> {
+) -> Result<(usize, f64), String> {
     let job = job.clone();
+    let mut seconds = 0.0;
     let wanted = o
         .flag("machine")
         .map(str::to_string)
@@ -412,11 +429,11 @@ fn run_setup(
         let text = post(tp, &machine);
         let path = out.join(format!("{}.nc", tp.name));
         std::fs::write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
-        let profile = job.part.profile.as_ref().map(|p| p.points.as_slice());
+        let part_profile = job.part.profile.as_ref().map(|p| p.points.as_slice());
         let png = out.join(format!("{}.png", tp.name));
         let image = match &job.stock_box {
             Some(sb) if render::is_xyz(tp) => render::preview_png3(tp, sb),
-            _ => render::preview_png(tp, job.stock.radius, profile),
+            _ => render::preview_png(tp, job.stock.radius, part_profile),
         };
         std::fs::write(&png, image).map_err(|e| format!("{}: {e}", png.display()))?;
         let issues = verify_gcode(&text, &limits_for(tp, &machine));
@@ -430,6 +447,20 @@ fn run_setup(
             println!("  {i}");
         }
         bad += issues.len();
+        let time = fourcam::estimate::estimate_toolpath(tp, &profile);
+        let e = &time.estimate;
+        let fmt = fourcam::estimate::format_duration;
+        println!(
+            "  time: {} (cutting {}, rapids {}, tool changes/dwells {})",
+            fmt(e.total_s),
+            fmt(e.feed_s),
+            fmt(e.rapid_s),
+            fmt(e.other_s)
+        );
+        for (id, kind, s) in &time.ops {
+            println!("    op {} {kind}: {}", id + 1, fmt(*s));
+        }
+        seconds += e.total_s;
         if let Some(g) = gouges.iter().find(|g| g.program == tp.name) {
             if g.moves_checked > 0 {
                 println!(
@@ -444,7 +475,34 @@ fn run_setup(
             }
         }
     }
-    Ok(bad)
+    Ok((bad, seconds))
+}
+
+fn cmd_estimate(o: &Opts) -> Result<ExitCode, String> {
+    let path = o.one_input()?;
+    let text = read(path)?;
+    let reg = profiles_cmd::Registry::load();
+    let profile =
+        profiles_cmd::resolve_machine(&reg, o.flag("machine").unwrap_or("makera-z1-4axis"))?;
+    let e = fourcam::estimate::estimate_gcode(
+        &text,
+        &fourcam::estimate::Dynamics::from_profile(&profile),
+    );
+    let fmt = fourcam::estimate::format_duration;
+    println!("machine: {} ({})", profile.id, profile.name);
+    println!(
+        "{path}: {} (cutting {} over {:.0} mm, rapids {} over {:.0} mm, tool changes/dwells {})",
+        fmt(e.total_s),
+        fmt(e.feed_s),
+        e.feed_mm,
+        fmt(e.rapid_s),
+        e.rapid_mm,
+        fmt(e.other_s)
+    );
+    for n in &e.notes {
+        println!("  note: {n}");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn highest_rapid_z(text: &str) -> Option<f64> {

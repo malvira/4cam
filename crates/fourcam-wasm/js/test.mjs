@@ -152,4 +152,12 @@ const rg = cam.planAndPost(ring, "makera-z1");
 assert.ok(!rg.error, rg.error);
 assert.deepEqual(rg.programs.map((p) => p.issues.length), [0]);
 console.log(`engraving: ring ${rg.programs[0].lines} lines; SVG rectangle -> ${sv.paths[0].length} points`);
+// machining time: per program (split by operation) and in total; any G-code text too
+const kt = cam.planAndPost(proj, "makera-z1");
+const kfiles = kt.programs.map((p) => p.time.total_s);
+assert.ok(Math.abs(kt.time_total_s - kfiles[0] - kfiles[1]) < 1e-6 && kfiles.every((s) => s > 60));
+assert.deepEqual(kt.programs.map((p) => p.time.ops.map((o) => o.id)), [["op1"], ["op2", "op3"]]);
+const eg = cam.estimateGcode("G0 X0 Y0 Z5\nG1 X100 F600\n", "makera-z1");
+assert.ok(eg.feed_s > 10 && eg.feed_s < 10.1, JSON.stringify(eg));
+console.log(`time estimates: knob ${kfiles.map((s) => (s / 60).toFixed(1)).join(" + ")} min`);
 console.log("wasm OK");

@@ -6,6 +6,7 @@
 pub mod archive;
 pub mod dropcutter;
 pub mod engrave;
+pub mod estimate;
 pub mod geom;
 pub mod geometry;
 pub mod job;

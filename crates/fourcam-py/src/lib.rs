@@ -102,6 +102,24 @@ fn simulate(
     to_py(py, v)
 }
 
+/// Estimate the machining time of G-code text for a machine (built-in name, dict or JSON
+/// text; default Makera Z1): dict with `total_s`, `feed_s`, `rapid_s`, `other_s`, distances
+/// and notes. `plan_and_post` results carry the same per program and per operation.
+#[pyfunction]
+#[pyo3(signature = (gcode, machine = None))]
+fn estimate(
+    py: Python<'_>,
+    gcode: &str,
+    machine: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Py<PyAny>> {
+    let machine = match machine {
+        Some(m) if !m.is_none() => json_text(py, m)?,
+        _ => String::new(),
+    };
+    let v = py.detach(|| api::estimate_gcode(gcode, &machine));
+    to_py(py, v)
+}
+
 #[pymodule]
 fn fourcam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
@@ -109,5 +127,6 @@ fn fourcam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(machine, m)?)?;
     m.add_function(wrap_pyfunction!(plan_and_post, m)?)?;
     m.add_function(wrap_pyfunction!(simulate, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate, m)?)?;
     Ok(())
 }

@@ -181,6 +181,15 @@ function currentMachine() {
 }
 
 // ---------------------------------------------------------------- generate
+/** "1 h 02 min", "12 min 05 s", "48 s" (as the engine's CLI prints them). */
+export function fmtTime(sec) {
+  const s = Math.max(0, Math.round(sec));
+  if (s >= 3600) return `${Math.floor(s / 3600)} h ${String(Math.floor((s % 3600 + 30) / 60)).padStart(2, "0")} min`;
+  if (s >= 60) return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+  return `${s} s`;
+}
+window.__4cam = Object.assign(window.__4cam || {}, { fmtTime });
+
 async function generate() {
   showError("");
   let job;
@@ -205,7 +214,9 @@ async function generate() {
     renderTabs();
     selectTab(0);
     const issues = result.programs.reduce((n, p) => n + p.issues.length, 0);
-    setStatus(`Generated ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s, ${issues} issue(s)`, "done");
+    setStatus(`Generated ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s, ${issues} issue(s); estimated machining time ${fmtTime(result.time_total_s)}`, "done");
+    // the tree shows each operation's and file's estimated time
+    await window.__4cam.tree?.refresh();
   } catch (e) {
     showError(e.message);
     setStatus("Failed", "error");
@@ -266,6 +277,7 @@ function selectTab(i) {
         : "Verifier: 0 issues (no fast plunges, no low rapids)"
     }</div>
     ${limitsHtml(p.name, esc)}
+    ${p.time ? `<div class="small" id="timeEst">Estimated time: <strong>${fmtTime(p.time.total_s)}</strong> (cutting ${fmtTime(p.time.feed_s)}, rapids ${fmtTime(p.time.rapid_s)}, tool changes/dwells ${fmtTime(p.time.other_s)})${state.result.programs.length > 1 ? ` &middot; all files ${fmtTime(state.result.time_total_s)}` : ""}</div>` : ""}
     ${g && g.moves_checked ? `<div class="small">Gouge check: ${g.moves_checked.toLocaleString("en")} cut moves, deepest ${g.max_depth.toFixed(4)} mm into the part</div>` : ""}
     ${sim && !sim.samples ? `<div class="small muted">Not simulated: its tool has no full shape (a V-bit needs a diameter). The stock shown is from the programs before it.</div>` : ""}
     ${sim ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock${sim.feature_cells ? `; ${sim.feature_cells.toLocaleString("en")} cells cut below the part on purpose (engraving, knurl, indexed features) not counted` : ""}</div>` : ""}`;

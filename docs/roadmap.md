@@ -141,6 +141,21 @@ goldens are still byte-identical.
 
   Not yet: V-carving outline fonts (only SVG shapes); the part model does not include
   engraved or indexed features, so the simulation summary counts them as gouges.
+- **Machining time estimates. Done:** `estimate.rs` reads G-code with the machine
+  profile:
+  - feeds as the controller reads them (degrees-as-length, linear-only, G93 inverse time),
+    capped by each axis's top feed and the controller's cap;
+  - rapids at each axis's rapid rate;
+  - a look-ahead planner with junction deviation and per-axis acceleration (trapezoids);
+  - dwells, tool changes and spindle starts.
+
+  New optional profile fields: `accel` on axes, `max_rapid` on rotary axes, and `timing`
+  (junction deviation, tool change and spindle start seconds), with stated defaults. Times
+  are shown per operation, per file and in total: `4cam run`, `4cam estimate <file.nc>`,
+  WASM `planAndPost`/`estimateGcode`, Python `estimate`, and the web app's summary and
+  operation tree. Hand-computed tests cover straight feeds and rapids, acceleration-limited
+  moves, corners and reversals, rotary moves in each feed mode, dwells, tool changes, inch
+  units and arcs.
 - ~~Indexed 3+1: 3-axis passes at fixed A angles.~~ Done: on a rotary setup the five 3-axis
   operations take `index_a` (deg). The planner turns A there at the safe radius, runs the
   3-axis strategy around the bar (raster3d on the part turned by A), and returns to Y0. The

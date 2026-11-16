@@ -510,6 +510,16 @@ try {
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await settle();
 
+  // 8f. machining time: in the summary, per file and per operation in the tree
+  await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+  await settle();
+  await js("document.getElementById('generate').click()");
+  await waitDone("knob generation for times", 240000);
+  await settle();
+  const tSum = await js("document.getElementById('timeEst')?.innerText || ''");
+  const tTree = await js("[...document.querySelectorAll('#tree .tree-time')].map(e => e.textContent).join(' | ')");
+  check("time estimates: summary, files and operations in the tree", /^Estimated time: \d/.test(tSum) && String(tTree).split(" | ").length === 5, `${tSum} || ${tTree}`);
+
   // 8d. relief plaque from a grayscale image: roughing + 45 deg parallel finish, simulated
   await js("document.getElementById('example').value = 'plaque'; document.getElementById('loadExample').click(); true");
   await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('plaque.png')"), "the plaque image", 15000);

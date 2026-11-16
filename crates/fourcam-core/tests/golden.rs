@@ -168,3 +168,28 @@ fn knob_project_0_2_gives_the_same_gcode() {
     let (q, _) = fourcam::project::Project::from_json_any(&text).unwrap();
     assert_eq!(p, q);
 }
+
+#[test]
+fn time_estimates_split_the_knob_by_operation() {
+    let job =
+        fourcam::Job::from_json(include_str!("../../../examples/knob/knob.job.json")).unwrap();
+    let z1 = fourcam::profiles::builtin_machine("makera-z1-4axis").unwrap();
+    let tps = fourcam::plan(&job).unwrap();
+    for tp in &tps {
+        let t = fourcam::estimate::estimate_toolpath(tp, &z1);
+        let e = &t.estimate;
+        // the operations and the preamble add up to the file
+        let parts: f64 = t.ops.iter().map(|o| o.2).sum::<f64>() + t.overhead_s;
+        assert!((parts - e.total_s).abs() < 1e-6, "{parts} vs {}", e.total_s);
+        assert!((e.feed_s + e.rapid_s + e.other_s - e.total_s).abs() < 1e-9);
+        // the G-code text alone gives the same total
+        let text = fourcam::post(tp, &z1.post);
+        let again = fourcam::estimate::estimate_gcode(
+            &text,
+            &fourcam::estimate::Dynamics::from_profile(&z1),
+        );
+        assert_eq!(again.total_s, e.total_s);
+        // one manual tool change (60 s) and the 3 s spindle dwell
+        assert!((e.other_s - 63.0).abs() < 1e-9, "{}", e.other_s);
+    }
+}

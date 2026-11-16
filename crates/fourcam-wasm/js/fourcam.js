@@ -73,5 +73,7 @@ export async function load(source) {
     simSeek: (n) => call("sim_seek", String(n)),
     // polylines (mm, Y up) from SVG text, placed with its box at opts.at and opts.height tall
     svgPaths: (svgText, opts) => call("svg_paths", svgText, opts || {}),
+    // machining time of any G-code text: {total_s, feed_s, rapid_s, other_s, ...}
+    estimateGcode: (gcode, machine) => call("estimate_gcode", gcode, machine || ""),
   };
 }

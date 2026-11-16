@@ -243,10 +243,23 @@ pub mod api {
         };
         let gouges = gouge_check(&job, &tps, mesh.as_ref()).unwrap_or_default();
         let limits = profiles::check_limits(&job, &tps, &profile);
+        // project operation ids by planning order (0.2 documents), for per-operation times
+        let op_ids = with_setup(&opts_v, || op_ids_and_colors(job_json)).map(|(ids, _)| ids);
+        let mut total_s = 0.0;
         let programs: Vec<Value> = tps
             .iter()
             .map(|tp| {
                 let gcode = post(tp, &machine);
+                let time = fourcam::estimate::estimate_toolpath(tp, &profile);
+                total_s += time.estimate.total_s;
+                let ops: Vec<Value> = time
+                    .ops
+                    .iter()
+                    .map(|(id, kind, s)| {
+                        let pid = op_ids.as_ref().and_then(|v| v.get(*id as usize)).cloned();
+                        json!({"index": id, "id": pid, "kind": kind, "seconds": s})
+                    })
+                    .collect();
                 let issues: Vec<String> = verify_gcode(&gcode, &limits_for(tp, &machine))
                     .iter()
                     .map(ToString::to_string)
@@ -262,6 +275,15 @@ pub mod api {
                     "issues": issues,
                     "gouge": g.map(|g| json!({"moves_checked": g.moves_checked, "max_depth": g.max_depth, "at": g.at})),
                     "safe_r": tp.safe_r,
+                    "time": {
+                        "total_s": time.estimate.total_s,
+                        "feed_s": time.estimate.feed_s,
+                        "rapid_s": time.estimate.rapid_s,
+                        "other_s": time.estimate.other_s,
+                        "feed_mm": time.estimate.feed_mm,
+                        "rapid_mm": time.estimate.rapid_mm,
+                        "ops": ops,
+                    },
                     "toolpath": { "points": points, "total": total, "thinned": thinned },
                 })
             })
@@ -276,6 +298,30 @@ pub mod api {
             "profile": job.part.profile,
             "mesh_bounds": mesh.as_ref().and_then(|m| m.bounds()),
             "programs": programs,
+            "time_total_s": total_s,
+        })
+    }
+
+    /// Machining time of any G-code text for `machine` (id/alias or a profile object; default
+    /// Makera Z1): {total_s, feed_s, rapid_s, other_s, feed_mm, rapid_mm, notes}.
+    pub fn estimate_gcode(text: &str, machine_text: &str) -> Value {
+        let profile = match parse_machine(machine_text, None) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let e = fourcam::estimate::estimate_gcode(
+            text,
+            &fourcam::estimate::Dynamics::from_profile(&profile),
+        );
+        json!({
+            "machine": profile.id,
+            "total_s": e.total_s,
+            "feed_s": e.feed_s,
+            "rapid_s": e.rapid_s,
+            "other_s": e.other_s,
+            "feed_mm": e.feed_mm,
+            "rapid_mm": e.rapid_mm,
+            "notes": e.notes,
         })
     }
 
@@ -821,6 +867,7 @@ pub mod api {
             "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&s(a), &s(b), c),
             "svg_paths" => svg_paths(&s(a), &s(b)),
+            "estimate_gcode" => estimate_gcode(&s(a), &s(b)),
             other => err(format!("unknown function {other:?}")),
         }
     }

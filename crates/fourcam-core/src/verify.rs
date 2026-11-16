@@ -52,7 +52,7 @@ impl fmt::Display for Issue {
 const SLACK: f64 = 1.02;
 
 /// Split a line into (letter, value) words, ignoring comments.
-fn words(line: &str) -> Vec<(char, f64)> {
+pub(crate) fn words(line: &str) -> Vec<(char, f64)> {
     let mut code = String::new();
     let mut depth = 0;
     for c in line.chars() {

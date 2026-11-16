@@ -65,17 +65,28 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>`;
     if (t.upgraded) html += `<div class="muted small">0.1 job shown as a 0.2 project; it is saved as 0.2 on the first edit.</div>`;
     let n = 0;
+    // estimated times from the last Generate of this setup
+    const res = state.result;
+    const fmt = window.__4cam?.fmtTime || ((x) => `${Math.round(x)} s`);
+    const fileTime = (name) => res?.programs?.find((p) => p.name === name)?.time?.total_s;
+    // by project id, or (a 0.1 job shown as a project) by planning order: the enabled
+    // operations of the outputs in turn
+    const planned = s.outputs.flatMap((o) => o.operations).filter((id) => opById(id)?.enabled !== false);
+    const opTime = (id) =>
+      res?.programs?.flatMap((p) => p.time?.ops || []).find((o) => (o.id ?? planned[o.index]) === id)?.seconds;
     for (const out of s.outputs) {
-      html += `<div class="tree-out" data-out="${esc(out.name)}"><div class="tree-outname">${esc(out.name)}.nc <span class="muted">${esc(out.title)}</span></div>`;
+      const ft = fileTime(out.name);
+      html += `<div class="tree-out" data-out="${esc(out.name)}"><div class="tree-outname">${esc(out.name)}.nc <span class="muted">${esc(out.title)}</span>${ft != null ? ` <span class="tree-time" title="estimated machining time">${fmt(ft)}</span>` : ""}</div>`;
       out.operations.forEach((id, k) => {
         const op = opById(id);
         if (!op) return;
         const i = s.operations.indexOf(op);
+        const ot = opTime(id);
         const geo = op.geometry?.length ? ` · ${op.geometry.map((g) => (g.kind === "faces" ? `${g.ids.length} face${g.ids.length > 1 ? "s" : ""}` : g.kind.replace("_", " "))).join(", ")}` : "";
         html += `<div class="tree-op ${t.selected === id ? "sel" : ""} ${op.enabled === false ? "off" : ""}" data-op="${esc(id)}">
           <input type="checkbox" data-act="enable" ${op.enabled === false ? "" : "checked"} aria-label="Enable ${esc(id)}">
           <input type="color" data-act="color" value="${colorOf(op, i)}" aria-label="Colour of ${esc(id)}">
-          <span class="tree-label" data-act="select">${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}</span></span>
+          <span class="tree-label" data-act="select">${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}${ot != null ? ` · <span class="tree-time">${fmt(ot)}</span>` : ""}</span></span>
           <button type="button" data-act="up" ${k === 0 ? "disabled" : ""} aria-label="Move ${esc(id)} up">▲</button>
           <button type="button" data-act="down" ${k === out.operations.length - 1 ? "disabled" : ""} aria-label="Move ${esc(id)} down">▼</button>
           <button type="button" data-act="delete" aria-label="Delete ${esc(id)}">✕</button></div>`;

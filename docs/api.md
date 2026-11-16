@@ -35,6 +35,7 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
 | `post(&toolpath, &machine)` | Toolpath to G-code. |
 | `verify_gcode(text, &limits)` | Unsafe-move check. |
 | `profiles::check_limits` | Check a job against a machine profile's limits. |
+| `estimate::estimate_toolpath` / `estimate::estimate_gcode` | Machining time of a program (split by operation) or of any G-code text, for a machine profile. |
 | `gouge_check` | Check toolpaths against the part. |
 | `ops::registry()` | Operation types and their parameters. |
 | `ops::check` | Validate an operation. |
@@ -69,6 +70,8 @@ All calls take and return JSON. No wasm-bindgen is needed.
   - `simOpen(doc, {setup, dx, na, cell}, mesh)` and `simSeek(n)` play it back move by move
     (for box setups the changed rows are Y rows, with `z` and the operation tags).
 - **Profiles:**
+  - `estimateGcode(gcode, machine)` estimates the machining time of any G-code text;
+    `planAndPost` results carry `time` per program (with `ops`) and `time_total_s`;
   - `svgPaths(svgText, {at, height, tolerance})` turns an SVG into polylines (mm, Y up) for
     `engrave`/`vcarve` paths;
   - `profileList()` lists the built-in machines and tool libraries;
