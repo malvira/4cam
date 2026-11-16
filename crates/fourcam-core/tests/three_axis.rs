@@ -11,12 +11,8 @@ fn plate() -> (Job, PathBuf) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/plate");
     let text = std::fs::read_to_string(dir.join("plate.project.json")).unwrap();
     let libs = fourcam::profiles::builtin_libraries();
-    let mut jobs = fourcam::project::jobs_from_any_with(&text, &libs, &|src| {
-        fourcam::Mesh::load(&dir.join(&src.file))
-            .ok()
-            .map(|m| m.oriented(src.axis, src.translate))
-    })
-    .unwrap();
+    let mut jobs =
+        fourcam::project::jobs_from_any_with(&text, &libs, &|src| src.load(&dir).ok()).unwrap();
     assert_eq!(jobs.len(), 1);
     (jobs.remove(0).1, dir)
 }

@@ -5,6 +5,7 @@
 //!     cargo run -p fourcam-fixtures -- --check (fails if a committed file differs)
 //!
 //! - examples/knob/knob.stl: the knob's revolved profile (720 facets around)
+//! - examples/plaque/plaque.png: a grayscale relief (rim, hill, ripples) for the plaque example
 //! - examples/plate/dome.stl: a spherical cap (base radius 6, height 4) standing on Z -4.5
 //!   at X46 Y20, for the 3-axis plate example
 
@@ -53,10 +54,42 @@ pub fn dome_mesh() -> Mesh {
     }
 }
 
+/// Grayscale relief for the plaque example (120 x 90 px; on the part 80 x 60 mm): a raised
+/// rim, a soft hill on the left and ripples round a point on the right. White is high.
+pub fn plaque_png() -> Vec<u8> {
+    let (w, h) = (120usize, 90usize);
+    let smooth = |e0: f64, e1: f64, x: f64| {
+        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let mut cv = fourcam::render::Canvas::new(w, h, [0, 0, 0]);
+    for j in 0..h {
+        for i in 0..w {
+            let (x, y) = (
+                (i as f64 + 0.5) * 80.0 / w as f64,
+                60.0 - (j as f64 + 0.5) * 60.0 / h as f64,
+            );
+            let edge = x.min(80.0 - x).min(y).min(60.0 - y);
+            let rim = 1.0 - smooth(3.0, 5.0, edge);
+            let hill = 0.8 * (-((x - 26.0).powi(2) + (y - 30.0).powi(2)) / (2.0 * 8.0 * 8.0)).exp();
+            let r = (x - 56.0).hypot(y - 30.0);
+            let ripple = 0.3
+                * 0.5
+                * (1.0 + (r * std::f64::consts::TAU / 6.0).cos())
+                * (1.0 - smooth(10.0, 14.0, r));
+            let v = (rim + hill + ripple).clamp(0.0, 1.0);
+            let g = (v * 255.0).round() as u8;
+            cv.set(i as i64, j as i64, [g, g, g]);
+        }
+    }
+    cv.to_png()
+}
+
 fn files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     vec![
         (root.join("examples/knob/knob.stl"), knob_stl(root)),
         (root.join("examples/plate/dome.stl"), dome_mesh().to_stl()),
+        (root.join("examples/plaque/plaque.png"), plaque_png()),
     ]
 }
 

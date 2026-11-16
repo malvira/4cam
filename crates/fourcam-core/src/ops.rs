@@ -308,24 +308,22 @@ pub fn registry() -> Vec<OperationType> {
         },
         OperationType {
             kind: "raster3d",
-            title: "3D raster (3-axis)",
-            description: "Drop-cutter raster over the part mesh, passes along X stepping in Y, in step-down levels.",
+            title: "3D parallel finishing",
+            description: "Drop-cutter passes over the part mesh (or an image relief) at an angle, zigzag or one-way, stepover from a scallop target; in step-down levels if the stock is above it.",
             group: "finishing",
-            params: vec![
-                tool(),
-                p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
-                p("x_range", "vec2", "mm", "X extent of the tool centre."),
-                p("y_range", "vec2", "mm", "Y extent of the tool centre."),
-                p("stepover", "number", "mm", "Distance between passes.").min(0.01),
-                p("sample", "number", "mm", "Point spacing along a pass.").min(0.005),
-                p("step_down", "number", "mm", "Depth per level (roughing to the surface).").min(0.01),
-                p("floor", "number", "mm", "Lowest Z (where there is no part).").min(-10000.0),
-                p("leave", "number", "mm", "Stock to leave on the surface.").opt(json!(0.0)),
-                p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),
-                feed(),
-                plunge(),
-            ],
-            tool_shapes: &["flat", "ball", "vbit"],
+            params: raster_params(),
+            tool_shapes: &["ball", "flat", "vbit"],
+            geometry: &["mesh"],
+            machine_needs: &["xyz"],
+            shapes_part: false,
+        },
+        OperationType {
+            kind: "rough3d",
+            title: "3D roughing",
+            description: "Clears the stock down to the part mesh (or an image relief) in step-down levels with parallel passes, leaving stock for the finish.",
+            group: "roughing",
+            params: raster_params(),
+            tool_shapes: &["flat", "ball"],
             geometry: &["mesh"],
             machine_needs: &["xyz"],
             shapes_part: false,
@@ -451,6 +449,7 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::Drill(_) => "drill",
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
+        Operation::Rough3d(_) => "rough3d",
     }
 }
 
@@ -470,6 +469,8 @@ pub struct DefaultsContext<'a> {
     pub boundary: Option<crate::geometry::Boundary>,
     /// XY extent of the part mesh (3-axis setups), for raster ranges.
     pub part_xy: Option<([f64; 2], [f64; 2])>,
+    /// Z extent of the part mesh (3-axis setups), for the raster floor.
+    pub part_z: Option<[f64; 2]>,
 }
 
 /// Round to a "nice" step (0.05 mm, 5 mm/min ...).
@@ -625,7 +626,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("feed".into(), json!(nice(feed * 2.0 / 3.0, 5.0)));
             v.insert("plunge_feed".into(), json!(plunge));
         }
-        "face" | "pocket" | "drill" | "contour" | "raster3d" => {
+        "face" | "pocket" | "drill" | "contour" | "raster3d" | "rough3d" => {
             // the vise block, or around the bar over the part (indexed 3+1 on a rotary setup)
             let rad = job.stock.radius;
             let sb = job.stock_box.unwrap_or(crate::job::StockBox {
@@ -695,13 +696,57 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                         "y_range".into(),
                         json!([nice(yr[0], 0.01), nice(yr[1], 0.01)]),
                     );
-                    v.insert("stepover".into(), json!(nice((0.15 * d).max(0.05), 0.01)));
+                    v.insert("angle".into(), json!(0.0));
+                    v.insert("pattern".into(), json!("zigzag"));
+                    v.insert("direction".into(), json!("climb"));
                     v.insert("sample".into(), json!(nice((0.1 * d).max(0.05), 0.01)));
-                    v.insert("step_down".into(), json!(depth));
-                    v.insert(
-                        "floor".into(),
-                        json!(nice(zb.max(sb.max[2] - hz / 2.0), 0.01)),
-                    );
+                    v.insert("tolerance".into(), json!(0.005));
+                    if kind == "rough3d" {
+                        // flat-end clearing: wide passes, deep levels, stock left for the finish
+                        v.insert("scallop".into(), json!(0.0));
+                        v.insert("stepover".into(), json!(nice(0.4 * d, 0.05)));
+                        v.insert("step_down".into(), json!(nice((0.5 * d).max(0.1), 0.05)));
+                        v.insert("leave".into(), json!(0.25));
+                    } else {
+                        // finishing: a ball or V-bit works to a scallop target (the stepover
+                        // shown is what it gives), a flat tool to 15% of its diameter
+                        let scallop = if matches!(shape, "ball" | "vbit") {
+                            0.01
+                        } else {
+                            0.0
+                        };
+                        let so = match tool.shape {
+                            ToolShape::Ball { diameter } if scallop > 0.0 => {
+                                2.0 * (scallop * (diameter - scallop)).sqrt()
+                            }
+                            ToolShape::Vbit { angle, .. } if scallop > 0.0 => {
+                                2.0 * scallop * (angle / 2.0).to_radians().tan()
+                            }
+                            _ => 0.15 * d,
+                        };
+                        v.insert("scallop".into(), json!(scallop));
+                        v.insert("stepover".into(), json!(nice(so.max(0.01), 0.001)));
+                        v.insert("step_down".into(), json!(depth));
+                        v.insert("leave".into(), json!(0.0));
+                    }
+                    // down to the bottom of the part (a relief's black level), else half the block
+                    let floor = match cx.part_z {
+                        Some([lo, _]) if job.stock_box.is_some() => lo.max(zb),
+                        _ => zb.max(sb.max[2] - hz / 2.0),
+                    };
+                    v.insert("floor".into(), json!(nice(floor, 0.01)));
+                    // after a 3D roughing the finish takes the whole depth in one level
+                    let roughed = job
+                        .programs
+                        .iter()
+                        .flat_map(|p| &p.operations)
+                        .any(|o| matches!(o, Operation::Rough3d(_)));
+                    if kind == "raster3d" && roughed {
+                        v.insert(
+                            "step_down".into(),
+                            json!(nice((sb.max[2] - floor).max(0.01), 0.01)),
+                        );
+                    }
                 }
             }
             if !v.contains_key("feed") {
@@ -728,6 +773,84 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
         ));
     }
     Ok(out)
+}
+
+/// Parameters shared by the parallel finishing and roughing rasters.
+fn raster_params() -> Vec<ParamSpec> {
+    vec![
+        tool(),
+        p(
+            "index_a",
+            "number",
+            "deg",
+            "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.",
+        )
+        .opt(json!(0.0)),
+        p("x_range", "vec2", "mm", "X extent of the tool centre."),
+        p("y_range", "vec2", "mm", "Y extent of the tool centre."),
+        p(
+            "angle",
+            "number",
+            "deg",
+            "Pass direction from +X (0: passes along X, stepping in Y).",
+        )
+        .opt(json!(0.0)),
+        p(
+            "pattern",
+            "choice",
+            "",
+            "Back and forth linked at depth, or every pass the same way.",
+        )
+        .choices(&["zigzag", "one_way"]),
+        p(
+            "direction",
+            "choice",
+            "",
+            "One-way passes: climb or conventional (clockwise spindle).",
+        )
+        .choices(&["climb", "conventional"]),
+        p(
+            "scallop",
+            "number",
+            "mm",
+            "Target scallop height; > 0 sets the stepover for ball and V-bit tools.",
+        )
+        .opt(json!(0.0))
+        .min(0.0),
+        p(
+            "stepover",
+            "number",
+            "mm",
+            "Distance between passes (when no scallop target applies).",
+        )
+        .min(0.01),
+        p("sample", "number", "mm", "Point spacing along a pass.").min(0.005),
+        p(
+            "step_down",
+            "number",
+            "mm",
+            "Depth per level (roughing to the surface).",
+        )
+        .min(0.01),
+        p(
+            "floor",
+            "number",
+            "mm",
+            "Lowest Z (where there is no part).",
+        )
+        .min(-10000.0),
+        p("leave", "number", "mm", "Stock to leave on the surface.").opt(json!(0.0)),
+        p(
+            "tolerance",
+            "number",
+            "mm",
+            "Largest dip of a straight move below the surface.",
+        )
+        .opt(json!(0.005))
+        .min(0.0001),
+        feed(),
+        plunge(),
+    ]
 }
 
 #[cfg(test)]
@@ -827,6 +950,7 @@ mod tests {
                 tool: None,
                 boundary: None,
                 part_xy: None,
+                part_z: None,
             };
             let v = defaults(t.kind, &cx).unwrap_or_else(|e| panic!("{}: {e}", t.kind));
             // every parameter present (none blank)
@@ -869,6 +993,7 @@ mod tests {
             tool: None,
             boundary: None,
             part_xy: None,
+            part_z: None,
         };
         let turn = defaults("rotary_turning", &cx).unwrap();
         assert_eq!(

@@ -154,11 +154,32 @@ pub fn post(tp: &Toolpath, machine: &Machine) -> String {
                     }
                     FeedMode::InverseTime => 1.0 / dt,
                 };
-                let fw = if machine.feed_mode == FeedMode::InverseTime {
+                let mut fw = if machine.feed_mode == FeedMode::InverseTime {
                     format!("{f:.3}")
                 } else {
                     format!("{f:.0}")
                 };
+                // on very short moves the printed (rounded) coordinates can descend faster than
+                // the exact ones: slow such a move so the program as written stays within the
+                // plunge cap (and its 2% allowance for F rounding)
+                let p = |v: f64| num(v).parse::<f64>().unwrap_or(v);
+                let (px, pz, pa) = (p(*x) - p(x0), p(*r) - p(z0), p(*a) - p(s.a));
+                if pz < 0.0 {
+                    let span = match machine.feed_mode {
+                        FeedMode::DegreesAsLength => (px * px + pz * pz + pa * pa).sqrt(),
+                        FeedMode::LinearOnly => px.hypot(pz),
+                        FeedMode::InverseTime => 1.0,
+                    };
+                    let fv: f64 = fw.parse().unwrap_or(f);
+                    if fv > 0.0 && -pz * fv / span > plunge_cap * 1.02 {
+                        let slow = span * plunge_cap / -pz;
+                        fw = if machine.feed_mode == FeedMode::InverseTime {
+                            format!("{:.3}", (slow * 1000.0).floor() / 1000.0)
+                        } else {
+                            format!("{:.0}", slow.floor().max(1.0))
+                        };
+                    }
+                }
                 out.push(format!("G1 X{} Z{} A{} F{fw}", num(*x), num(*r), num(*a)));
                 s.x = Some(*x);
                 s.z = Some(*r);

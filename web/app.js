@@ -137,6 +137,7 @@ async function loadExample(name) {
     const [file, mesh] = {
       plate: ["plate/plate.project.json", "plate/dome.stl"],
       knob_indexed: ["knob/knob_indexed.project.json", null],
+      plaque: ["plaque/plaque.project.json", "plaque/plaque.png"],
     }[name] || ["knob/knob_finish.job.json", "knob/knob.stl"];
     const [job, stl] = await Promise.all([
       fetch(`../examples/${file}`).then((r) => {
@@ -516,17 +517,21 @@ async function updateView() {
     } else if (prof && prof.length > 1) {
       groups.part.add(new THREE.Mesh(toGeometry(THREE, revolveProfile(prof, 120)), partMat));
     }
+    // frame the view again when the stock changes (another example or setup); keep the
+    // user's orbit otherwise
+    const fitKey = JSON.stringify(sb || [res.stock.radius, Math.round(xmin), Math.round(xmax)]);
+    if (v.fitted !== fitKey) v.fitted = null;
     if (!v.fitted && sb) {
       const c = [0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2), span = Math.max(sb.max[0] - sb.min[0], sb.max[1] - sb.min[1]);
       v.camera.position.set(c[0] - span * 0.3, c[1] - span * 1.2, c[2] + span * 0.9);
       v.controls.target.set(...c);
-      v.fitted = true;
+      v.fitted = fitKey;
     }
     if (!v.fitted) {
       const span = xmax - xmin;
       v.camera.position.set((xmin + xmax) / 2 - span * 0.2, -span * 1.3, R * 2.2);
       v.controls.target.set((xmin + xmax) / 2, 0, 0);
-      v.fitted = true;
+      v.fitted = fitKey;
     }
     v.simKey = null;
   }

@@ -8,7 +8,10 @@ supported API. Everything else is internal and may change.
 
 The document is a JSON project, `"schema_version": "0.2"`. It holds:
 
-- models: a revolved profile and/or a mesh file;
+- models: a revolved profile and/or a mesh file. A mesh model can instead be a grayscale
+  image (PNG or PGM) with `"image": {"width", "height", "depth", "base", "invert", "wrap"}`:
+  a relief, flat (white at `base + depth`) or wrapped round the rotary axis (`base` is then
+  the radius of black). `MeshSource::mesh(bytes)` builds either kind;
 - tools: inline, or references to a library;
 - setups: machine, stock, holding, part, operations, and outputs (G-code files).
 

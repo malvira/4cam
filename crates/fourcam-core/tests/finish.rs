@@ -256,6 +256,7 @@ fn mesh_file_pipeline_matches_revolved_profile() {
         file: "knob.stl".into(),
         axis: Default::default(),
         translate: [0.0; 3],
+        image: None,
     });
     assert!(plan(&with_mesh).is_err(), "mesh must be loaded first");
     let mesh = load_mesh(&with_mesh, &dir).unwrap().unwrap();

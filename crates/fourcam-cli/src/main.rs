@@ -140,9 +140,7 @@ fn cmd_wizard_knurl(o: &Opts) -> Result<ExitCode, String> {
         .to_path_buf();
     let models = p.models.clone();
     let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
-        fourcam::project::ModelKind::Mesh(src) => Mesh::load(&dir.join(&src.file))
-            .ok()
-            .map(|m| m.oriented(src.axis, src.translate)),
+        fourcam::project::ModelKind::Mesh(src) => src.load(&dir).ok(),
         _ => None,
     };
     let res = w.run(&mut p, &meshes)?;
@@ -178,9 +176,7 @@ fn cmd_faces(o: &Opts) -> Result<ExitCode, String> {
         }
         let mesh = match &m.kind {
             fourcam::project::ModelKind::Profile(prof) => Mesh::revolve(prof, 360),
-            fourcam::project::ModelKind::Mesh(src) => Mesh::load(&dir.join(&src.file))
-                .map_err(|e| e.to_string())?
-                .oriented(src.axis, src.translate),
+            fourcam::project::ModelKind::Mesh(src) => src.load(dir).map_err(|e| e.to_string())?,
         };
         let (regions, _) = fourcam::geometry::face_regions(&mesh, crease);
         println!("model {} ({} faces):", m.id, regions.len());
@@ -249,9 +245,7 @@ fn cmd_ops(args: &[String]) -> Result<ExitCode, String> {
                 .to_path_buf();
             let models = p.models.clone();
             let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
-                fourcam::project::ModelKind::Mesh(src) => Mesh::load(&dir.join(&src.file))
-                    .ok()
-                    .map(|m| m.oriented(src.axis, src.translate)),
+                fourcam::project::ModelKind::Mesh(src) => src.load(&dir).ok(),
                 _ => None,
             };
             let v = p.op_defaults(
@@ -369,11 +363,7 @@ fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
         .parent()
         .unwrap_or(Path::new("."))
         .to_path_buf();
-    let meshes = |src: &fourcam::job::MeshSource| {
-        Mesh::load(&dir.join(&src.file))
-            .ok()
-            .map(|m| m.oriented(src.axis, src.translate))
-    };
+    let meshes = |src: &fourcam::job::MeshSource| src.load(&dir).ok();
     let jobs = fourcam::project::jobs_from_any_with(&read(job_path)?, &reg.libraries(), &meshes)
         .map_err(|e| format!("{job_path}: {e}"))?;
     let mut bad = 0;

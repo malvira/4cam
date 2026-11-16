@@ -267,6 +267,40 @@ impl DropCutter3 {
     }
 }
 
+/// Stepover for a raster: from the scallop target when one is set and the tool has a
+/// curved or pointed tip (ball: 2 sqrt(h (2R - h)); V-bit: 2 h tan(half angle)), else the
+/// operation's stepover.
+pub fn raster_stepover(op: &Raster3d, c: &Cutter) -> f64 {
+    let h = op.scallop;
+    let s = match *c {
+        Cutter::Ball { radius } if h > 0.0 => 2.0 * (h * (2.0 * radius - h.min(radius))).sqrt(),
+        Cutter::Cone { half_angle, .. } if h > 0.0 => 2.0 * h * half_angle.tan(),
+        _ => op.stepover,
+    };
+    s.max(0.01)
+}
+
+/// Clip the line t*u + v*w (u, w unit, perpendicular) to the rectangle; the t range.
+fn clip_line(u: [f64; 2], w: [f64; 2], v: f64, x: [f64; 2], y: [f64; 2]) -> Option<(f64, f64)> {
+    let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
+    for (k, lim) in [(0, x), (1, y)] {
+        let p = v * w[k];
+        if u[k].abs() < 1e-12 {
+            if p < lim[0].min(lim[1]) - 1e-9 || p > lim[0].max(lim[1]) + 1e-9 {
+                return None;
+            }
+        } else {
+            let (a, b) = ((lim[0] - p) / u[k], (lim[1] - p) / u[k]);
+            t0 = t0.max(a.min(b));
+            t1 = t1.min(a.max(b));
+        }
+    }
+    (t1 >= t0 - 1e-9).then_some((t0, t1.max(t0)))
+}
+
+/// Parallel passes over the part mesh at `angle`, zigzag or one-way, in step-down levels from
+/// the top of the stock to the part (+ `leave`). Zigzag rows are linked at depth along the
+/// surface; one-way passes lift to the safe height and re-enter from above the stock.
 pub fn raster3d(
     b: &mut Builder,
     dc: &DropCutter3,
@@ -278,41 +312,89 @@ pub fn raster3d(
     let [y0, y1] = op.y_range;
     let floor = op.floor;
     let d = 2.0 * dc.cutter.radius();
-    let step = op.stepover.max(0.01);
-    let n = (((y1 - y0).abs() / step).ceil() as usize).max(1);
-    let m = (((x1 - x0).abs() / op.sample.max(0.01)).ceil() as usize).max(1);
+    let step = raster_stepover(op, &dc.cutter);
+    let one_way = match op.pattern.as_str() {
+        "zigzag" => false,
+        "one_way" => true,
+        p => return Err(format!("pattern {p:?}: use \"zigzag\" or \"one_way\"")),
+    };
+    // one-way climb (M3 spindle): the uncut side (+w, the next passes) on the tool's right,
+    // so the passes run along -u
+    let backwards = match op.direction.as_str() {
+        "climb" => true,
+        "conventional" => false,
+        p => {
+            return Err(format!(
+                "direction {p:?}: use \"climb\" or \"conventional\""
+            ))
+        }
+    };
+    let (sa, ca) = op.angle.to_radians().sin_cos();
+    let (u, w) = ([ca, sa], [-sa, ca]);
+    let corners = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
+    let ws: Vec<f64> = corners.iter().map(|c| c[0] * w[0] + c[1] * w[1]).collect();
+    let (w0, w1) = (
+        ws.iter().cloned().fold(f64::INFINITY, f64::min),
+        ws.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+    );
+    // angle 0: the rows run from y0 to y1, as given
+    let (w0, w1) = if op.angle == 0.0 { (y0, y1) } else { (w0, w1) };
+    let n = (((w1 - w0).abs() / step).ceil() as usize).max(1);
     let surf = |x: f64, y: f64| dc.z_at(x, y, floor) + op.leave;
     let top = stock.max[2];
     let feeds = [op.feed, op.plunge_feed];
     b.comment("--- 3D raster ---");
     for level in levels(top, floor + op.leave, op.step_down.max(d * 0.05)) {
         let z_of = |x: f64, y: f64| surf(x, y).max(level);
+        let mut first = true;
+        let mut emitted = 0usize;
         for k in 0..=n {
-            let y = y0 + (y1 - y0) * k as f64 / n as f64;
-            let xs: Vec<f64> = (0..=m)
-                .map(|i| x0 + (x1 - x0) * i as f64 / m as f64)
-                .collect();
-            let row: Vec<f64> = if k % 2 == 0 {
-                xs
+            let wk = w0 + (w1 - w0) * k as f64 / n as f64;
+            let row: Vec<[f64; 2]> = if op.angle == 0.0 {
+                let m = (((x1 - x0).abs() / op.sample.max(0.01)).ceil() as usize).max(1);
+                (0..=m)
+                    .map(|i| [x0 + (x1 - x0) * i as f64 / m as f64, wk])
+                    .collect()
             } else {
-                xs.into_iter().rev().collect()
+                let Some((t0, t1)) = clip_line(u, w, wk, [x0, x1], [y0, y1]) else {
+                    continue;
+                };
+                let m = (((t1 - t0) / op.sample.max(0.01)).ceil() as usize).max(1);
+                (0..=m)
+                    .map(|i| {
+                        let t = t0 + (t1 - t0) * i as f64 / m as f64;
+                        [t * u[0] + wk * w[0], t * u[1] + wk * w[1]]
+                    })
+                    .collect()
             };
-            let z0 = z_of(row[0], y);
-            if k == 0 {
-                // one entry per level, from above the uncut stock: rows are linked at depth,
-                // so the tool never drops beside material outside the raster area
-                enter(b, safe, row[0], y, top + 1.0, z0, op.plunge_feed);
+            let reverse = if one_way { backwards } else { emitted % 2 == 1 };
+            emitted += 1;
+            let row: Vec<[f64; 2]> = if reverse {
+                row.into_iter().rev().collect()
+            } else {
+                row
+            };
+            let [sx, sy] = row[0];
+            let z0 = z_of(sx, sy);
+            if first {
+                // one entry per level (per pass one-way), from above the uncut stock, so the
+                // tool never drops beside material outside the raster area
+                enter(b, safe, sx, sy, top + 1.0, z0, op.plunge_feed);
+                first = false;
+            } else if one_way {
+                leave(b, safe);
+                enter(b, safe, sx, sy, top + 1.0, z0, op.plunge_feed);
             } else {
                 let p = b.p3.expect("inside a level");
-                line_refined(b, &z_of, p, [row[0], y, z0], op.tolerance, 0, feeds);
+                line_refined(b, &z_of, p, [sx, sy, z0], op.tolerance, 0, feeds);
             }
-            for w in row.windows(2) {
+            for q in row.windows(2) {
                 // split where the surface rises above the straight move
                 line_refined(
                     b,
                     &z_of,
-                    [w[0], y, z_of(w[0], y)],
-                    [w[1], y, z_of(w[1], y)],
+                    [q[0][0], q[0][1], z_of(q[0][0], q[0][1])],
+                    [q[1][0], q[1][1], z_of(q[1][0], q[1][1])],
                     op.tolerance,
                     0,
                     feeds,

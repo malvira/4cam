@@ -106,6 +106,21 @@ goldens are still byte-identical.
 ## Next candidates
 
 - 3-axis strategies (drop-cutter raster and waterline) on the same mesh and tool code.
+- **Relief milling (part 1). Done:**
+  - `raster3d` is now "3D parallel finishing": passes at any `angle`, `zigzag` or `one_way`
+    (`climb`/`conventional` for a clockwise spindle), with the stepover set from a `scallop`
+    target for ball and V-bit tools;
+  - `rough3d`: the same raster with a flat tool in step-down levels, leaving stock;
+  - grayscale images (PNG/PGM) as relief parts, flat on a vise or wrapped on the bar (then
+    machined with `rotary_rough`/`rotary_finish`);
+  - the post slows any short move whose rounded coordinates would descend faster than the
+    plunge cap (lines the verifier would flag; the goldens have none, so they are unchanged);
+  - example `examples/plaque` (Carvera vise, relief from `plaque.png`). Tests: scallop on a
+    plane within the 0.01 mm target, one-way climb pass direction, the plaque rough (more than
+    0.2 mm left, no gouge) and finish (no gouge beyond 0.003 mm, mean 0.012 mm left), and a
+    wrapped relief roughed and finished on the rotary with no gouge.
+
+  Not yet: tapered ball tools; face selections as raster boundaries on 3-axis setups.
 - ~~Indexed 3+1: 3-axis passes at fixed A angles.~~ Done: on a rotary setup the five 3-axis
   operations take `index_a` (deg). The planner turns A there at the safe radius, runs the
   3-axis strategy around the bar (raster3d on the part turned by A), and returns to Y0. The

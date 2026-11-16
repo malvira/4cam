@@ -1,0 +1,134 @@
+{
+  "schema_version": "0.2",
+  "name": "relief plaque (Carvera vise)",
+  "models": [
+    {
+      "id": "relief",
+      "name": "plaque.png",
+      "kind": "mesh",
+      "file": "plaque.png",
+      "translate": [
+        5.0,
+        5.0,
+        0.0
+      ],
+      "image": {
+        "width": 80.0,
+        "height": 60.0,
+        "depth": 3.0,
+        "base": -4.0
+      }
+    }
+  ],
+  "tools": [
+    {
+      "number": 1,
+      "library": "makera-starter",
+      "tool": "spiral-o-metal-3.175x12"
+    },
+    {
+      "number": 3,
+      "library": "makera-starter",
+      "tool": "ball-metal-3.175x10"
+    }
+  ],
+  "setups": [
+    {
+      "id": "vise1",
+      "name": "Vise, relief face",
+      "machine": "makera-carvera-4axis",
+      "stock": {
+        "shape": "box",
+        "min": [
+          0.0,
+          0.0,
+          -15.0
+        ],
+        "max": [
+          90.0,
+          70.0,
+          0.0
+        ]
+      },
+      "clearance": 3.0,
+      "holding": {
+        "kind": "vise",
+        "tailstock": false
+      },
+      "part": [
+        "relief"
+      ],
+      "spindle_rpm": 12000,
+      "operations": [
+        {
+          "id": "op1",
+          "name": "Rough the relief",
+          "type": "rough3d",
+          "tool": 1,
+          "x_range": [
+            5.0,
+            85.0
+          ],
+          "y_range": [
+            5.0,
+            65.0
+          ],
+          "angle": 0.0,
+          "pattern": "zigzag",
+          "direction": "climb",
+          "scallop": 0.0,
+          "stepover": 1.25,
+          "sample": 0.4,
+          "step_down": 1.5,
+          "floor": -4.0,
+          "leave": 0.25,
+          "tolerance": 0.01,
+          "feed": 300.0,
+          "plunge_feed": 60.0
+        },
+        {
+          "id": "op2",
+          "name": "Finish the relief",
+          "type": "raster3d",
+          "tool": 3,
+          "x_range": [
+            5.0,
+            85.0
+          ],
+          "y_range": [
+            5.0,
+            65.0
+          ],
+          "angle": 45.0,
+          "pattern": "zigzag",
+          "direction": "climb",
+          "scallop": 0.01,
+          "stepover": 0.356,
+          "sample": 0.25,
+          "step_down": 4.0,
+          "floor": -4.0,
+          "leave": 0.0,
+          "tolerance": 0.005,
+          "feed": 600.0,
+          "plunge_feed": 60.0
+        }
+      ],
+      "outputs": [
+        {
+          "name": "plaque_1_rough",
+          "title": "Plaque: 3D roughing (T1 flat)",
+          "operations": [
+            "op1"
+          ]
+        },
+        {
+          "name": "plaque_2_finish",
+          "title": "Plaque: 45 deg parallel finish, 0.01 mm scallop (T3 ball)",
+          "operations": [
+            "op2"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -334,7 +334,7 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
   const allKinds = await js("window.__4cam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 10 && String(typesAll).split(",").length === 10, `${typesAll}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 11 && String(typesAll).split(",").length === 11, `${typesAll}`);
   const filled = [];
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
@@ -349,7 +349,7 @@ try {
     await treeAct(id, "delete");
     await settle();
   }
-  check("every operation type's new form is fully filled and applies cleanly", filled.length === 10 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
+  check("every operation type's new form is fully filled and applies cleanly", filled.length === 11 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 15000);
@@ -458,7 +458,7 @@ try {
   await settle();
   const plateMachine = await js("document.getElementById('machine').value");
   const plateTypes = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
-  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,contour,raster3d", `${plateMachine}; ${plateTypes}`);
+  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,contour,raster3d,rough3d", `${plateMachine}; ${plateTypes}`);
   await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 15000);
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
@@ -499,6 +499,22 @@ try {
   await js("document.getElementById('simClose').click(); true");
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await settle();
+
+  // 8d. relief plaque from a grayscale image: roughing + 45 deg parallel finish, simulated
+  await js("document.getElementById('example').value = 'plaque'; document.getElementById('loadExample').click(); true");
+  await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('plaque.png')"), "the plaque image", 15000);
+  await js("document.getElementById('generate').click()");
+  await waitDone("plaque generation", 240000);
+  const qtabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
+  check("plaque: roughing and finishing programs verified OK", qtabs.length === 2 && qtabs.every((t) => t.endsWith("OK")), qtabs.join(", "));
+  await js("document.getElementById('simulate').click()");
+  await waitDone("plaque simulation", 240000);
+  await js("document.querySelectorAll('#tabs button')[1].click()");
+  await sleep(1500);
+  const qsim = await js("document.getElementById('summary').innerText.split('\\n').pop()");
+  const qmean = parseFloat((qsim.match(/mean ([0-9.]+)/) || [])[1]);
+  check("plaque simulated: finished to the relief, no gouge, no rapids through stock", /deepest gouge 0\.00\d mm; 0 rapid/.test(qsim) && qmean < 0.05, qsim);
+  await shot("11_plaque_simulated");
 
   // 8c. indexed 3+1 on the knob: D-flat at A0, cross hole at A90, simulated on the bar
   await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");

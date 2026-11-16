@@ -67,7 +67,7 @@ assert.ok(lim.limits.some((i) => i.message.includes("F5209")), JSON.stringify(li
 console.log(`profiles: ${reg.machines.length} machines, ${reg.libraries[0].tools.length} starter tools, limits ${lim.limits.length}`);
 // operation registry and 0.2 projects
 const types = cam.opTypes();
-assert.deepEqual(types.map((t) => t.kind).sort(), ["contour", "drill", "face", "flank_chamfer", "helical_knurl", "pocket", "raster3d", "rotary_finish", "rotary_rough", "rotary_turning"]);
+assert.deepEqual(types.map((t) => t.kind).sort(), ["contour", "drill", "face", "flank_chamfer", "helical_knurl", "pocket", "raster3d", "rotary_finish", "rotary_rough", "rotary_turning", "rough3d"]);
 const chk = cam.checkProject(JSON.parse(readFileSync(join(root, "examples", "knob", "knob.job.json"), "utf8")));
 assert.equal(chk.upgraded, true);
 assert.deepEqual(chk.problems, []);

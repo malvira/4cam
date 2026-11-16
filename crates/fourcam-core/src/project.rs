@@ -423,6 +423,14 @@ impl Project {
                     let (lo, hi) = mesh.bounds()?;
                     Some(([lo[0], hi[0]], [lo[1], hi[1]]))
                 }),
+                part_z: model.and_then(|m| {
+                    let mesh = match &self.models.iter().find(|x| &x.id == m)?.kind {
+                        ModelKind::Mesh(_) => meshes(m)?,
+                        ModelKind::Profile(_) => return None,
+                    };
+                    let (lo, hi) = mesh.bounds()?;
+                    Some([lo[2], hi[2]])
+                }),
             },
         )?;
         if !geometry.is_empty() {

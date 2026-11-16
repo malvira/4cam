@@ -82,6 +82,34 @@ pub struct MeshSource {
     /// Translation applied after the axis mapping (mm).
     #[serde(default)]
     pub translate: [f64; 3],
+    /// The file is a grayscale image (PNG or PGM) to build a relief from, not a mesh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<crate::relief::ImageRelief>,
+}
+
+impl MeshSource {
+    /// The part from the file's bytes, placed as this source says: an STL/3MF mesh, or the
+    /// relief built from an image; then the axis mapping and translation.
+    pub fn mesh(&self, bytes: &[u8]) -> Result<crate::Mesh, crate::mesh::MeshError> {
+        let m = match &self.image {
+            Some(r) => crate::relief::relief_mesh(&crate::relief::decode_gray(bytes)?, r),
+            None => crate::Mesh::from_bytes(bytes)?,
+        };
+        Ok(m.oriented(self.axis, self.translate))
+    }
+
+    /// [`MeshSource::mesh`] from the file, relative to `dir`.
+    pub fn load(&self, dir: &std::path::Path) -> Result<crate::Mesh, crate::mesh::MeshError> {
+        let path = dir.join(&self.file);
+        let data = std::fs::read(&path)
+            .map_err(|e| crate::mesh::MeshError::Io(format!("{}: {e}", path.display())))?;
+        self.mesh(&data).map_err(|e| match e {
+            crate::mesh::MeshError::Format(s) => {
+                crate::mesh::MeshError::Format(format!("{}: {s}", path.display()))
+            }
+            other => other,
+        })
+    }
 }
 
 /// Revolved profile: `[x, r]` points in ascending x. Two consecutive points with the same x
@@ -146,6 +174,9 @@ pub enum Operation {
     Drill(Drill),
     Contour(Contour),
     Raster3d(Raster3d),
+    /// 3D roughing: the parallel raster with a flat (or ball) tool in step-down levels,
+    /// leaving stock for the finish.
+    Rough3d(Raster3d),
 }
 
 /// 3-axis: face the top of the stock down by `depth`.
@@ -239,8 +270,30 @@ pub struct Raster3d {
     pub leave: f64,
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
+    /// Pass direction, degrees from +X (0: passes along X, stepping in Y).
+    #[serde(default)]
+    pub angle: f64,
+    /// "zigzag" (back and forth, linked at depth) or "one_way" (every pass the same way,
+    /// re-entering from above the stock).
+    #[serde(default = "default_pattern")]
+    pub pattern: String,
+    /// One-way passes: "climb" or "conventional" (M3 / clockwise spindle).
+    #[serde(default = "default_direction")]
+    pub direction: String,
+    /// Target scallop height (mm). When > 0 it sets the stepover from the tool shape
+    /// (ball or V-bit); `stepover` is used otherwise.
+    #[serde(default)]
+    pub scallop: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+}
+
+fn default_pattern() -> String {
+    "zigzag".into()
+}
+
+fn default_direction() -> String {
+    "climb".into()
 }
 
 impl Operation {
@@ -251,7 +304,7 @@ impl Operation {
             Operation::Pocket(o) => Some(o.index_a),
             Operation::Drill(o) => Some(o.index_a),
             Operation::Contour(o) => Some(o.index_a),
-            Operation::Raster3d(o) => Some(o.index_a),
+            Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.index_a),
             _ => None,
         }
     }
@@ -264,7 +317,7 @@ impl Operation {
             Operation::Pocket(o) => o.tool,
             Operation::Drill(o) => o.tool,
             Operation::Contour(o) => o.tool,
-            Operation::Raster3d(o) => o.tool,
+            Operation::Raster3d(o) | Operation::Rough3d(o) => o.tool,
             Operation::RotaryTurning(o) => o.tool,
             Operation::HelicalKnurl(o) => o.tool,
             Operation::FlankChamfer(o) => o.tool,

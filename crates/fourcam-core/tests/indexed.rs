@@ -120,6 +120,7 @@ fn every_3_axis_type_defaults_and_plans_on_a_rotary_setup() {
             tool: None,
             boundary: None,
             part_xy: None,
+            part_z: None,
         };
         let mut v = defaults(t.kind, &cx).unwrap_or_else(|e| panic!("{}: {e}", t.kind));
         assert_eq!(v["index_a"], 0.0, "{}", t.kind);

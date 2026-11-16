@@ -15,6 +15,7 @@ pub mod ops;
 pub mod post;
 pub mod profiles;
 pub mod project;
+pub mod relief;
 pub mod render;
 pub mod sim;
 pub mod sim3;
@@ -105,6 +106,7 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::Drill(_) => "drill",
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
+        Operation::Rough3d(_) => "rough3d",
     }
 }
 
@@ -186,6 +188,7 @@ fn is_three_axis(op: &Operation) -> bool {
             | Operation::Drill(_)
             | Operation::Contour(_)
             | Operation::Raster3d(_)
+            | Operation::Rough3d(_)
     )
 }
 
@@ -279,7 +282,10 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 return Err(wrong("vbit"))
             }
             (
-                Operation::RotaryFinish(_) | Operation::RotaryRough(_) | Operation::Raster3d(_),
+                Operation::RotaryFinish(_)
+                | Operation::RotaryRough(_)
+                | Operation::Raster3d(_)
+                | Operation::Rough3d(_),
                 shape,
             ) => Some(cutter_for(number, shape)?),
             (
@@ -350,7 +356,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     Operation::Pocket(o) => t3::pocket(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Drill(o) => t3::drill(&mut b, sb, safe_r, o),
                     Operation::Contour(o) => t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?,
-                    Operation::Raster3d(o) => {
+                    Operation::Raster3d(o) | Operation::Rough3d(o) => {
                         let mesh: &Mesh = if three {
                             ctx.mesh.ok_or_else(|| {
                                 Error::Invalid(format!(
@@ -404,7 +410,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         Operation::Pocket(o) => Some(o.plunge_feed),
                         Operation::Drill(o) => Some(o.feed),
                         Operation::Contour(o) => Some(o.plunge_feed),
-                        Operation::Raster3d(o) => Some(o.plunge_feed),
+                        Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.plunge_feed),
                         _ => None,
                     })
                     .fold(f64::INFINITY, f64::min)
@@ -445,8 +451,10 @@ pub fn load_mesh(job: &Job, base_dir: &std::path::Path) -> Result<Option<Mesh>, 
     let Some(src) = &job.part.mesh else {
         return Ok(None);
     };
-    let mesh = Mesh::load(&base_dir.join(&src.file)).map_err(|e| Error::Invalid(e.to_string()))?;
-    Ok(Some(mesh.oriented(src.axis, src.translate)))
+    let mesh = src
+        .load(base_dir)
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    Ok(Some(mesh))
 }
 
 /// Post one toolpath to G-code for `machine`.

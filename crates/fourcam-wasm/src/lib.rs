@@ -63,11 +63,8 @@ pub mod api {
 
     /// Same, with the mesh bytes available to face selections on mesh models.
     fn job_any_mesh(text: &str, libs: &[ToolLibrary], mesh: &[u8]) -> Result<Job, String> {
-        let parsed = (!mesh.is_empty())
-            .then(|| Mesh::from_bytes(mesh).ok())
-            .flatten();
         let meshes = |src: &fourcam::job::MeshSource| {
-            parsed.clone().map(|m| m.oriented(src.axis, src.translate))
+            (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
         };
         let mut jobs = fourcam::project::jobs_from_any_with(text, libs, &meshes)?;
         if jobs.is_empty() {
@@ -162,11 +159,13 @@ pub mod api {
         if bytes.is_empty() {
             return Ok(None);
         }
-        let m = Mesh::from_bytes(bytes).map_err(|e| e.to_string())?;
-        Ok(Some(match &job.part.mesh {
-            Some(src) => m.oriented(src.axis, src.translate),
-            None => m,
-        }))
+        Ok(Some(
+            match &job.part.mesh {
+                Some(src) => src.mesh(bytes),
+                None => Mesh::from_bytes(bytes),
+            }
+            .map_err(|e| e.to_string())?,
+        ))
     }
 
     /// Tool-tip polyline, flattened `[x, r, a, kind, ...]` (kind 0 rapid, 1 feed), thinned
@@ -656,8 +655,8 @@ pub mod api {
         };
         let mesh = match &m.kind {
             fourcam::project::ModelKind::Profile(prof) => Mesh::revolve(prof, 360),
-            fourcam::project::ModelKind::Mesh(src) => match Mesh::from_bytes(mesh) {
-                Ok(x) => x.oriented(src.axis, src.translate),
+            fourcam::project::ModelKind::Mesh(src) => match src.mesh(mesh) {
+                Ok(x) => x,
                 Err(e) => return err(e),
             },
         };
@@ -701,13 +700,10 @@ pub mod api {
             Value::Object(_) => serde_json::from_value(o["machine"].clone()).ok(),
             _ => None,
         };
-        let parsed = (!mesh.is_empty())
-            .then(|| Mesh::from_bytes(mesh).ok())
-            .flatten();
         let models = p.models.clone();
         let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
             fourcam::project::ModelKind::Mesh(src) => {
-                parsed.clone().map(|m| m.oriented(src.axis, src.translate))
+                (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
             }
             _ => None,
         };
@@ -742,13 +738,10 @@ pub mod api {
                 Ok(w) => w,
                 Err(e) => return err(format!("wizard params: {e}")),
             };
-        let parsed = (!mesh.is_empty())
-            .then(|| Mesh::from_bytes(mesh).ok())
-            .flatten();
         let models = p.models.clone();
         let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
             fourcam::project::ModelKind::Mesh(src) => {
-                parsed.clone().map(|m| m.oriented(src.axis, src.translate))
+                (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
             }
             _ => None,
         };
