@@ -24,7 +24,9 @@ runtime is itself marked experimental. A minor version of `craft:plugin` 0.x may
 4. It plans and posts the project with 4cam (the same calls as `4cam run`), and checks the
    machine limits, the G-code and gouges.
 5. It writes three files to the granted folder: `<name>.nc`, `<name>.project.json` and the
-   body as `<name>.stl`. It returns a JSON summary: the files, line counts, the time
+   body as `<name>.stl`. SolidCraft refuses any single plugin file write over 1 MiB, so a
+   longer program is written gzipped as `<name>.nc.gz` (in the knob test, `raster3d`:
+   131,760 lines). Unzip it before sending it to the machine. It returns a JSON summary: the files, line counts, the time
    estimate, issues and gouge depth.
 
 Every entry has `effect: read`: it changes nothing in the design and can call only
@@ -118,8 +120,12 @@ Preferences > Plugins and the Plugins menu.
   nothing of the user's set-up is touched. In that session it:
   1. revolves a knob (the knob example's profile) about X;
   2. installs the zip with a grant on a scratch folder;
-  3. runs `rotary-rough`, `rotary-finish` and `helical-knurl` on it;
+  3. runs every entry on it;
   4. compares each `.nc` with what `4cam run` makes from the written project.
+
+  On 2026-11-16, against SolidCraft `31a14bac`, all 12 entries gave G-code byte-identical to
+  `4cam run`, about 9 s for the whole session. SolidCraft meshed the knob to 971 triangles at
+  the default tolerance.
 
   The check is skipped when `SOLIDCRAFT_CLI` is not set.
 
@@ -132,5 +138,7 @@ Preferences > Plugins and the Plugins menu.
   SolidCraft does not hand one over.
 - One operation per call. A multi-operation program means several calls; or edit the written
   project and use `4cam run`.
+- SolidCraft's 1 MiB limit on a file write is why long programs come gzipped. A larger
+  limit, or appending writes, in SolidCraft would remove that step.
 - Results are files only. Nothing is stored in the design, because SolidCraft's `storage`
   capability is not out yet.

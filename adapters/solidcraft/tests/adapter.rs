@@ -199,10 +199,27 @@ fn every_entry_matches_the_cli() {
         let nc: Vec<_> = out
             .files
             .iter()
-            .filter(|f| f.path.ends_with(".nc"))
+            .filter(|f| f.path.ends_with(".nc") || f.path.ends_with(".nc.gz"))
             .collect();
         assert_eq!(nc.len(), 1, "{entry}");
-        let text = std::str::from_utf8(&nc[0].data).unwrap();
+        assert!(
+            out.files.iter().all(|f| f.data.len() <= MAX_WRITE),
+            "{entry}"
+        );
+        let text = if nc[0].path.ends_with(".gz") {
+            let mut s = String::new();
+            let mut z = flate2::read::GzDecoder::new(&nc[0].data[..]);
+            std::io::Read::read_to_string(&mut z, &mut s).unwrap();
+            assert!(
+                s.len() > MAX_WRITE,
+                "{entry}: only long programs are compressed"
+            );
+            s
+        } else {
+            String::from_utf8(nc[0].data.clone()).unwrap()
+        };
+        let nc_name = nc[0].path.trim_end_matches(".gz").to_string();
+        assert_eq!(out.result["programs"][0]["file"], nc[0].path.as_str());
         assert!(text.lines().count() > 10, "{entry}: {text}");
         let programs = out.result["programs"].as_array().unwrap();
         assert!(
@@ -220,7 +237,7 @@ fn every_entry_matches_the_cli() {
             .arg(&cli_out)
             .output()
             .unwrap();
-        let from_cli = std::fs::read_to_string(cli_out.join(&nc[0].path)).unwrap_or_else(|e| {
+        let from_cli = std::fs::read_to_string(cli_out.join(&nc_name)).unwrap_or_else(|e| {
             panic!("{entry}: {e}\n{}", String::from_utf8_lossy(&status.stdout))
         });
         assert!(

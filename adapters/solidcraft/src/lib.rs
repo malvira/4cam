@@ -40,6 +40,17 @@ pub const STOCK_RADIAL_MARGIN: f64 = 0.5;
 pub const STOCK_GRIP: f64 = 15.0;
 /// Guest budget asked for in the manifest (fuel units, MiB, ms).
 pub const LIMITS: (u64, u32, u32) = (100_000_000_000, 128, 30_000);
+/// SolidCraft refuses a plugin file write over this many bytes; a program longer than this
+/// is written gzipped (`<name>.nc.gz`).
+pub const MAX_WRITE: usize = 1024 * 1024;
+
+fn gzip(data: &[u8]) -> Result<Vec<u8>, Error> {
+    use std::io::Write;
+    let mut z = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(data)
+        .and_then(|_| z.finish())
+        .map_err(|e| Error::Engine(format!("gzip: {e}")))
+}
 
 /// Inputs every entry takes, besides the operation's own fields.
 const COMMON: [&str; 11] = [
@@ -577,7 +588,7 @@ pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String
 pub fn run_entry(entry: &str, params: &Value, mesh_result: &Value) -> Result<Outcome, Error> {
     let stl = stl_from_mesh_result(mesh_result)?;
     let (project, name) = build_project(entry, params, &stl)?;
-    let (programs, report) = plan_and_post(&project, &stl)?;
+    let (programs, mut report) = plan_and_post(&project, &stl)?;
     let mut files = vec![
         OutFile {
             path: format!("{name}.stl"),
@@ -589,10 +600,32 @@ pub fn run_entry(entry: &str, params: &Value, mesh_result: &Value) -> Result<Out
         },
     ];
     for (prog, gcode) in programs {
-        files.push(OutFile {
-            path: format!("{prog}.nc"),
-            data: gcode.into_bytes(),
+        files.push(if gcode.len() > MAX_WRITE {
+            OutFile {
+                path: format!("{prog}.nc.gz"),
+                data: gzip(gcode.as_bytes())?,
+            }
+        } else {
+            OutFile {
+                path: format!("{prog}.nc"),
+                data: gcode.into_bytes(),
+            }
         });
+    }
+    if let Some(f) = files.iter().find(|f| f.data.len() > MAX_WRITE) {
+        return Err(Error::Engine(format!(
+            "{} is {} bytes, over SolidCraft's {MAX_WRITE}-byte file write limit",
+            f.path,
+            f.data.len()
+        )));
+    }
+    // name the file actually written (`.nc.gz` for a long program)
+    for r in report.as_array_mut().into_iter().flatten() {
+        if let Some(file) = r.get("file").and_then(Value::as_str).map(str::to_string) {
+            if files.iter().any(|f| f.path == format!("{file}.gz")) {
+                r["file"] = json!(format!("{file}.gz"));
+            }
+        }
     }
     let written: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     let result = json!({

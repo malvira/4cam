@@ -99,3 +99,9 @@ The CLI covers the same features:
 - `wizard knurl`;
 - `profiles list|show|import|export`;
 - `mesh-info`.
+
+## Adapters
+
+- SolidCraft: `adapters/solidcraft` is a SolidCraft command plugin, with one entry per 4cam
+  operation. It runs on a body and writes G-code to a granted folder. See
+  `docs/adapters/solidcraft.md`.

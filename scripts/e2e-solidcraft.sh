@@ -4,8 +4,8 @@
 #   SOLIDCRAFT_CLI=/path/to/solidcraft-cli scripts/e2e-solidcraft.sh [entry ...]
 #
 # Builds the plugin, then in one solidcraft-cli session: revolves a knob, installs the plugin
-# with a write grant on a scratch folder, and runs each entry (default: rotary-rough,
-# rotary-finish, helical-knurl) on the knob. Then runs `4cam run` on the project each entry
+# with a write grant on a scratch folder, and runs each entry (default: all of them) on the
+# knob. Then runs `4cam run` on the project each entry
 # wrote and requires the G-code to be byte-identical. SolidCraft's plugin folder is pointed
 # at a scratch directory (LOCALAPPDATA / XDG_DATA_HOME / HOME), so nothing of the user's
 # SolidCraft set-up is touched. Skips (exit 0) when SOLIDCRAFT_CLI is not set.
@@ -15,7 +15,7 @@ if [ -z "$SOLIDCRAFT_CLI" ]; then
   echo "SOLIDCRAFT_CLI not set: skipping the SolidCraft end-to-end check"
   exit 0
 fi
-ENTRIES=${*:-"rotary-rough rotary-finish helical-knurl"}
+ENTRIES=${*:-"rotary-rough rotary-finish helical-knurl flank-chamfer face pocket drill contour raster3d rough3d engrave vcarve"}
 
 sh scripts/build-solidcraft-plugin.sh >/dev/null
 cargo build -q --release -p fourcam-cli
@@ -63,12 +63,17 @@ fail=0
 for e in $ENTRIES; do
   kind=$(echo "$e" | tr - _)
   base="knob_$kind"
+  # programs over SolidCraft's 1 MiB file-write limit come gzipped
+  note=""
+  if [ -f "$WORK/out/$base.nc.gz" ]; then
+    gzip -dc "$WORK/out/$base.nc.gz" > "$WORK/out/$base.nc"; note=" (written gzipped)"
+  fi
   if [ ! -f "$WORK/out/$base.nc" ]; then
     echo "FAIL $e: the plugin wrote no $base.nc"; fail=1; continue
   fi
   "$FOURCAM" run "$WORK/out/$base.project.json" --out "$WORK/cli-$kind" > "$WORK/cli-$kind.log"
   if cmp -s "$WORK/out/$base.nc" "$WORK/cli-$kind/$base.nc"; then
-    echo "ok   $e: $(wc -l < "$WORK/out/$base.nc") lines, identical to 4cam run"
+    echo "ok   $e: $(wc -l < "$WORK/out/$base.nc") lines$note, identical to 4cam run"
   else
     echo "FAIL $e: plugin G-code differs from 4cam run"; fail=1
   fi
