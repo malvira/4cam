@@ -173,7 +173,20 @@ goldens are still byte-identical.
     wrapped. Tests check groove depth and wall slope, text placement, V-carve depth against
     distance (flat floors, nothing past the outline), and the same wrapped on the rotary.
 
-  Not yet: V-carving outline fonts (only SVG shapes); the part model does not include
+  - **Outline letters for `vcarve`** (`text`, `text_height`, `text_at`, `text_rotate`,
+    `text_weight`):
+    - The font is 4cam's own single-stroke font inked with a round pen: by default 0.12
+      of the cap height wide. No third-party font is bundled. Like the rest of 4cam it is
+      original work under the repository's Apache-2.0 licence.
+    - Each glyph's outline, and the outlines of its holes (O, A, B, 0 ...), are the zero
+      loops of the distance field "half pen width minus distance to the strokes", traced
+      with marching squares. They are carved like any closed paths, flat or wrapped.
+    - Tests: outlines lie a half pen width from the strokes (with 1, 2 and 3 loops for I,
+      O and 8), and a simulated V-carve of "4CAM" is at least as deep as the distance to
+      the outline allows inside the letters, untouched outside. Text also wraps round the
+      bar.
+
+  Not yet: other typefaces (an outline font file reader); the part model does not include
   engraved or indexed features, so the simulation summary counts them as gouges.
 - **Machining time estimates. Done:** `estimate.rs` reads G-code with the machine
   profile:

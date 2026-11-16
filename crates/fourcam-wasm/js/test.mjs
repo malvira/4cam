@@ -158,6 +158,17 @@ console.log(`3-axis plate: ${pl.programs.map((p) => `${p.name} ${p.lines} lines`
   assert.ok(!ps.error && ps.stocks[1].rapid_hits === 0, ps.error);
   console.log(`dome cap only: raster within ${far.toFixed(2)} mm of the axis; meshTriangles and simulate resolve the selection`);
 }
+// V-carved outline letters on the plate (4cam's own font, inked with a round pen)
+{
+  const lettered = JSON.parse(JSON.stringify(plate));
+  lettered.setups[0].operations.push({ id: "op9", type: "vcarve", tool: 4, text: "4CAM", text_height: 8, text_at: [5, 2],
+    max_depth: 1.0, stepover: 0.1, sample: 0.1, feed: 300, plunge_feed: 60 });
+  lettered.setups[0].outputs[0].operations.push("op9");
+  const r = cam.planAndPost(lettered, "", dome, { max_points: 1000 });
+  assert.ok(!r.error, r.error);
+  assert.deepEqual(r.programs.map((p) => p.issues.length), [0, 0]);
+  console.log(`outline text: plate_1_flat now ${r.programs[0].lines} lines`);
+}
 // a pocket of any shape: an L with a round island, from paths instead of the rectangle
 {
   const shaped = JSON.parse(JSON.stringify(plate));

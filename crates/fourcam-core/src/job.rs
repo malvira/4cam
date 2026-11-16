@@ -369,6 +369,10 @@ pub struct Engrave {
     pub plunge_feed: f64,
 }
 
+fn default_text_weight() -> f64 {
+    crate::engrave::OUTLINE_WEIGHT
+}
+
 fn default_text_height() -> f64 {
     5.0
 }
@@ -378,7 +382,25 @@ fn default_text_height() -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Vcarve {
     pub tool: u32,
+    /// Closed outlines (even-odd).
+    #[serde(default)]
     pub paths: Vec<Vec<[f64; 2]>>,
+    /// Text in outline letters (4cam's own font, see [`crate::engrave::outline_text`]),
+    /// carved with the paths.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    /// Cap height of the text (mm).
+    #[serde(default = "default_text_height")]
+    pub text_height: f64,
+    /// Start of the text's first baseline.
+    #[serde(default)]
+    pub text_at: [f64; 2],
+    /// Turn the text by this many degrees about `text_at`.
+    #[serde(default)]
+    pub text_rotate: f64,
+    /// Letter weight: the pen's width as a fraction of the cap height.
+    #[serde(default = "default_text_weight")]
+    pub text_weight: f64,
     pub max_depth: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<f64>,

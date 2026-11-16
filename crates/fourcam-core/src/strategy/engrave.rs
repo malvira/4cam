@@ -123,9 +123,19 @@ pub fn vcarve(
         return Err("vcarve needs a V-bit with an angle".into());
     }
     let reach = op.max_depth * tan;
-    let region = Region::new(&op.paths, reach);
+    let mut paths = op.paths.clone();
+    if !op.text.is_empty() {
+        paths.extend(crate::engrave::outline_text(
+            &op.text,
+            op.text_height,
+            op.text_at,
+            op.text_rotate,
+            op.text_weight,
+        )?);
+    }
+    let region = Region::new(&paths, reach);
     if region.is_empty() {
-        return Err("vcarve needs closed paths (3 or more points each)".into());
+        return Err("vcarve needs closed paths (3 or more points each) or text".into());
     }
     let depth_at = |p: [f64; 2]| (region.distance(p, reach) / tan).min(op.max_depth);
     let step = op.stepover.max(0.005);

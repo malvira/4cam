@@ -350,7 +350,8 @@ try {
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
     await waitFor(() => js(`!!document.getElementById('opForm') && !!window.__4cam.state.tree.draft && window.__4cam.state.tree.draft.op.type === '${kind}'`), `the ${kind} form`, 15000);
-    const blanks = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && e.value.trim() === '').map(e => e.name).join(',')");
+    // blank fields, but text whose registry default is "" (none: e.g. a V-carve's text)
+    const blanks = await js(`(() => { const ty = window.__4cam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '').map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
     const before = await js("document.querySelectorAll('#tree .tree-op').length");
     await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${before + 1}`), `${kind} to be added`, 15000);

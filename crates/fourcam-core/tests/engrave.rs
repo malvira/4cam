@@ -294,3 +294,111 @@ fn ring_grooves_text_and_diamonds_wrapped_on_the_z1() {
         .fold(f64::INFINITY, f64::min);
     assert!(cut < 11.76, "{cut}");
 }
+
+// ------------------------------------------------------------------ outline text
+
+/// Distance from `p` to the nearest stroke of the single-stroke text.
+fn to_strokes(strokes: &[Vec<[f64; 2]>], p: [f64; 2]) -> f64 {
+    let mut best = f64::INFINITY;
+    for s in strokes {
+        let segs: Vec<[[f64; 2]; 2]> = if s.len() == 1 {
+            vec![[s[0], s[0]]]
+        } else {
+            s.windows(2).map(|w| [w[0], w[1]]).collect()
+        };
+        for [a, b] in segs {
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 0.0 {
+                (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            best = best.min((p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy));
+        }
+    }
+    best
+}
+
+#[test]
+fn outline_letters_trace_the_inked_strokes_with_their_holes() {
+    use fourcam::engrave::{outline_text, text_paths};
+    let (h, w) = (10.0, 0.12);
+    let r = 0.5 * w * h;
+    for (text, loops) in [("I", 1), ("O", 2), ("8", 3), ("A", 2), ("4CAM", 6)] {
+        let out = outline_text(text, h, [0.0, 0.0], 0.0, w).unwrap();
+        assert_eq!(out.len(), loops, "{text}: {} loops", out.len());
+        // every outline point is the pen's half width from the strokes
+        let strokes = text_paths(text, h, [0.0, 0.0], 0.0).unwrap();
+        for q in out.iter().flatten() {
+            let d = to_strokes(&strokes, *q);
+            assert!((d - r).abs() < 0.02, "{text}: {d} vs {r} at {q:?}");
+        }
+    }
+    // placed and turned like the single-stroke text
+    let a = outline_text("L", 6.0, [10.0, 5.0], 90.0, w).unwrap();
+    let xs: Vec<f64> = a.iter().flatten().map(|q| q[0]).collect();
+    assert!(
+        xs.iter().all(|&x| x < 10.0 + 0.5 * w * 6.0 + 1e-6),
+        "turned 90: the L runs along +Y, left of X 10"
+    );
+    assert!(outline_text("I", 6.0, [0.0, 0.0], 0.0, 0.0).is_err());
+    assert!(outline_text("é", 6.0, [0.0, 0.0], 0.0, 0.1).is_err());
+}
+
+#[test]
+fn v_carved_outline_text_is_cut_inside_the_letters_only() {
+    let (h, w, max_depth) = (8.0, 0.14, 2.0);
+    let r = 0.5 * w * h;
+    let at = [3.0, 6.0];
+    let (job, hm) = vise(
+        json!([{"type": "vcarve", "tool": 2, "text": "4CAM", "text_height": h,
+        "text_at": at, "text_weight": w, "max_depth": max_depth, "stepover": 0.05,
+        "sample": 0.05, "feed": 300.0, "plunge_feed": 60.0}]),
+    );
+    let _ = job;
+    let strokes = fourcam::engrave::text_paths("4CAM", h, at, 0.0).unwrap();
+    let tan = 45f64.to_radians().tan(); // 90 deg V-bit
+    let (mut inside, mut outside) = (0, 0);
+    for j in 0..hm.ny {
+        for i in 0..hm.nx {
+            let (x, y) = hm.centre(i, j);
+            let d = to_strokes(&strokes, [x, y]);
+            let z = hm.z[j * hm.nx + i];
+            if d < r - 0.1 {
+                // at least as deep as the distance to the outline allows, never past max
+                let want = ((r - d) / tan).min(max_depth);
+                assert!(
+                    -z >= want - 0.06,
+                    "too shallow at ({x:.2}, {y:.2}): {} < {want}",
+                    -z
+                );
+                assert!(-z <= max_depth + 1e-6);
+                inside += 1;
+            } else if d > r + 1.2 + 0.1 {
+                // beyond the outline by more than the bit's radius (2.4 mm V): untouched
+                assert_eq!(z, 0.0, "cut at ({x:.2}, {y:.2})");
+                outside += 1;
+            } else if d > r + 0.06 {
+                // just outside: only the bit's cone, never below the letter's edge depth
+                assert!(-z < 0.06, "outside the outline at ({x:.2}, {y:.2}): {}", -z);
+            }
+        }
+    }
+    assert!(inside > 5000 && outside > 50_000, "{inside} {outside}");
+}
+
+#[test]
+fn outline_text_wraps_round_the_bar() {
+    let job = project(
+        json!({"shape": "cylinder", "radius": 12.0, "length": 40.0}),
+        json!([{"type": "vcarve", "tool": 2, "text": "OK", "text_height": 6.0, "text_at": [-20.0, -3.0],
+                "max_depth": 1.0, "stepover": 0.1, "sample": 0.1, "feed": 300.0, "plunge_feed": 60.0}]),
+        "makera-z1-4axis",
+    );
+    let tps = clean(&job, "makera-z1-4axis");
+    let res = simulate_job(&job, &tps, None, 0.05, 1440, 0.02).unwrap();
+    let (_, st, _) = &res.programs[0];
+    assert!(st.rapid_hits.is_empty());
+    assert!(st.cells_cut > 2000, "{} cells cut", st.cells_cut);
+}

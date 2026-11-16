@@ -150,7 +150,7 @@ pub fn pocket_loops(
     let mut loops: Vec<(f64, Vec<[f64; 2]>)> = Vec::new();
     for &level in &levels {
         for lp in field.loops(level) {
-            let lp = simplify(&lp, POCKET_LOOP_TOL);
+            let lp = crate::offset::simplify(&lp, POCKET_LOOP_TOL);
             if lp.len() >= 4 {
                 loops.push((level, lp));
             }
@@ -182,7 +182,7 @@ pub fn pocket_loops(
                         .any(|q| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= 4.0 * r * r)
                 });
                 if near {
-                    let lp = simplify(&lp, POCKET_LOOP_TOL);
+                    let lp = crate::offset::simplify(&lp, POCKET_LOOP_TOL);
                     if lp.len() >= 4 {
                         added.push((mid, lp));
                     }
@@ -197,56 +197,6 @@ pub fn pocket_loops(
     // innermost first; the walls' laps last
     loops.sort_by(|a, b| b.0.total_cmp(&a.0));
     Ok(loops.into_iter().map(|(_, l)| l).collect())
-}
-
-/// Douglas-Peucker on a closed loop (first point repeated at the end).
-fn simplify(p: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
-    fn rec(p: &[[f64; 2]], tol: f64, keep: &mut [bool], a: usize, b: usize) {
-        if b <= a + 1 {
-            return;
-        }
-        let (pa, pb) = (p[a], p[b]);
-        let (dx, dy) = (pb[0] - pa[0], pb[1] - pa[1]);
-        let len = (dx * dx + dy * dy).sqrt();
-        let mut best = (0.0, a);
-        for (k, q) in p.iter().enumerate().take(b).skip(a + 1) {
-            let d = if len < 1e-12 {
-                ((q[0] - pa[0]).powi(2) + (q[1] - pa[1]).powi(2)).sqrt()
-            } else {
-                ((q[0] - pa[0]) * dy - (q[1] - pa[1]) * dx).abs() / len
-            };
-            if d > best.0 {
-                best = (d, k);
-            }
-        }
-        if best.0 > tol {
-            keep[best.1] = true;
-            rec(p, tol, keep, a, best.1);
-            rec(p, tol, keep, best.1, b);
-        }
-    }
-    if p.len() < 4 {
-        return p.to_vec();
-    }
-    let mut keep = vec![false; p.len()];
-    let n = p.len() - 1;
-    // split the loop at its first point and the point farthest from it
-    let far = (1..n)
-        .max_by(|&i, &j| {
-            let d = |k: usize| (p[k][0] - p[0][0]).powi(2) + (p[k][1] - p[0][1]).powi(2);
-            d(i).total_cmp(&d(j))
-        })
-        .unwrap_or(1);
-    keep[0] = true;
-    keep[far] = true;
-    keep[n] = true;
-    rec(p, tol, &mut keep, 0, far);
-    rec(p, tol, &mut keep, far, n);
-    p.iter()
-        .zip(&keep)
-        .filter(|(_, k)| **k)
-        .map(|(q, _)| *q)
-        .collect()
 }
 
 /// A pocket of any shape: at each depth, the offset loops from the middle out, each entered

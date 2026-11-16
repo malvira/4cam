@@ -47,6 +47,44 @@ impl DistanceField {
         }
     }
 
+    /// Polylines (open strokes) swept by a round pen of radius `r`: `r` minus the distance to
+    /// the nearest stroke, sampled every `h` mm. Its zero loops are the outlines of the inked
+    /// shape (outer ones counter-clockwise, round holes clockwise).
+    pub fn from_strokes(paths: &[Path2], r: f64, h: f64) -> DistanceField {
+        let refs: Vec<&[[f64; 2]]> = paths.iter().map(|p| p.as_slice()).collect();
+        let reach = r + 3.0 * h;
+        let index = SegIndex::new(&refs, reach);
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for q in paths.iter().flatten() {
+            for k in 0..2 {
+                lo[k] = lo[k].min(q[k]);
+                hi[k] = hi[k].max(q[k]);
+            }
+        }
+        if !lo[0].is_finite() {
+            lo = [0.0; 2];
+            hi = [0.0; 2];
+        }
+        let (x0, y0) = (lo[0] - reach, lo[1] - reach);
+        let nx = (((hi[0] + reach - x0) / h).ceil() as usize + 1).max(2);
+        let ny = (((hi[1] + reach - y0) / h).ceil() as usize + 1).max(2);
+        let mut d = vec![0.0; nx * ny];
+        for j in 0..ny {
+            for i in 0..nx {
+                let p = [x0 + i as f64 * h, y0 + j as f64 * h];
+                d[j * nx + i] = r - index.nearest(p);
+            }
+        }
+        DistanceField {
+            x0,
+            y0,
+            h,
+            nx,
+            ny,
+            d,
+        }
+    }
+
     pub fn max(&self) -> f64 {
         self.d.iter().copied().fold(f64::NEG_INFINITY, f64::max)
     }
@@ -176,7 +214,13 @@ impl SegIndex {
     pub fn new(paths: &[&[[f64; 2]]], cell: f64) -> SegIndex {
         let segs: Vec<[[f64; 2]; 2]> = paths
             .iter()
-            .flat_map(|p| p.windows(2).map(|w| [w[0], w[1]]))
+            .flat_map(|p| {
+                let mut s: Vec<[[f64; 2]; 2]> = p.windows(2).map(|w| [w[0], w[1]]).collect();
+                if p.len() == 1 {
+                    s.push([p[0], p[0]]); // a dot
+                }
+                s
+            })
             .collect();
         let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
         for s in &segs {
@@ -265,4 +309,54 @@ impl DistanceField {
         }
         out
     }
+}
+
+/// Douglas-Peucker on a closed loop (first point repeated at the end).
+pub fn simplify(p: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
+    fn rec(p: &[[f64; 2]], tol: f64, keep: &mut [bool], a: usize, b: usize) {
+        if b <= a + 1 {
+            return;
+        }
+        let (pa, pb) = (p[a], p[b]);
+        let (dx, dy) = (pb[0] - pa[0], pb[1] - pa[1]);
+        let len = (dx * dx + dy * dy).sqrt();
+        let mut best = (0.0, a);
+        for (k, q) in p.iter().enumerate().take(b).skip(a + 1) {
+            let d = if len < 1e-12 {
+                ((q[0] - pa[0]).powi(2) + (q[1] - pa[1]).powi(2)).sqrt()
+            } else {
+                ((q[0] - pa[0]) * dy - (q[1] - pa[1]) * dx).abs() / len
+            };
+            if d > best.0 {
+                best = (d, k);
+            }
+        }
+        if best.0 > tol {
+            keep[best.1] = true;
+            rec(p, tol, keep, a, best.1);
+            rec(p, tol, keep, best.1, b);
+        }
+    }
+    if p.len() < 4 {
+        return p.to_vec();
+    }
+    let mut keep = vec![false; p.len()];
+    let n = p.len() - 1;
+    // split the loop at its first point and the point farthest from it
+    let far = (1..n)
+        .max_by(|&i, &j| {
+            let d = |k: usize| (p[k][0] - p[0][0]).powi(2) + (p[k][1] - p[0][1]).powi(2);
+            d(i).total_cmp(&d(j))
+        })
+        .unwrap_or(1);
+    keep[0] = true;
+    keep[far] = true;
+    keep[n] = true;
+    rec(p, tol, &mut keep, 0, far);
+    rec(p, tol, &mut keep, far, n);
+    p.iter()
+        .zip(&keep)
+        .filter(|(_, k)| **k)
+        .map(|(q, _)| *q)
+        .collect()
 }

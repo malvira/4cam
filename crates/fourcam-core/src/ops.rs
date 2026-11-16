@@ -361,7 +361,12 @@ pub fn registry() -> Vec<OperationType> {
             group: "feature",
             params: vec![
                 tool(),
-                p("paths", "paths", "mm", "Closed outlines (even-odd fill), e.g. imported from an SVG."),
+                p("paths", "paths", "mm", "Closed outlines (even-odd fill), e.g. imported from an SVG.").opt(json!([])),
+                p("text", "string", "", "Text in outline letters (4cam's own font: A-Z, 0-9, - . , / : ! ? + = ( ) '), carved with the paths.").opt(json!("")),
+                p("text_height", "number", "mm", "Cap height of the text.").opt(json!(5.0)).min(0.1),
+                p("text_at", "vec2", "mm", "Start of the text's baseline.").opt(json!([0.0, 0.0])),
+                p("text_rotate", "number", "deg", "Turn the text.").opt(json!(0.0)),
+                p("text_weight", "number", "", "Letter weight: pen width as a fraction of the cap height.").opt(json!(crate::engrave::OUTLINE_WEIGHT)).min(0.01).max(0.45),
                 p("max_depth", "number", "mm", "Deepest cut (wide areas get a flat floor).").min(0.01),
                 p("top", "number", "mm", "Surface: Z on a vise (default: stock top), radius on a rotary setup (default: stock radius).").opt(Value::Null),
                 p("stepover", "number", "mm", "Distance between rows.").min(0.005),

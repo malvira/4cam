@@ -303,6 +303,40 @@ pub fn text_paths(
     Ok(out)
 }
 
+/// Default stroke weight of outline text: the pen's width as a fraction of the cap height.
+pub const OUTLINE_WEIGHT: f64 = 0.12;
+
+/// Text as closed outlines, for V-carving: 4cam's own single-stroke font (see
+/// [`text_paths`]) inked with a round pen `weight` x `height` wide. Each glyph becomes its
+/// outline and the outlines of its holes (O, A, B, 0, ...), traced from a distance field to
+/// within about a twentieth of the pen. Even-odd, like any closed paths.
+pub fn outline_text(
+    text: &str,
+    height: f64,
+    at: [f64; 2],
+    rotate: f64,
+    weight: f64,
+) -> Result<Vec<Path2>, String> {
+    if !(weight > 0.0 && weight < 0.5) {
+        return Err(format!(
+            "text_weight {weight}: use 0 < weight < 0.5 (a fraction of the height)"
+        ));
+    }
+    let strokes = text_paths(text, height, at, rotate)?;
+    if strokes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let r = 0.5 * weight * height;
+    let h = (r / 10.0).clamp(0.002, 0.05);
+    let field = crate::offset::DistanceField::from_strokes(&strokes, r, h);
+    Ok(field
+        .loops(0.0)
+        .into_iter()
+        .map(|lp| crate::offset::simplify(&lp, 0.1 * h))
+        .filter(|lp| lp.len() >= 4)
+        .collect())
+}
+
 // ------------------------------------------------------------------ SVG import
 
 /// Affine transform [a b c d e f]: (x, y) -> (a x + c y + e, b x + d y + f).
