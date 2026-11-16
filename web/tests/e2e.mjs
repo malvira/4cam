@@ -53,8 +53,15 @@ function findBrowser() {
 class Cdp {
   constructor(ws) {
     this.ws = ws; this.id = 0; this.waiters = new Map(); this.events = [];
+    // page dialogs (confirm, prompt, beforeunload) are answered here: OK by default, the
+    // prompt's own default text; set dialogAnswer = false to decline
+    this.dialogs = []; this.dialogAnswer = true;
     ws.onmessage = (m) => {
       const msg = JSON.parse(m.data);
+      if (msg.method === "Page.javascriptDialogOpening") {
+        this.dialogs.push(msg.params);
+        this.send("Page.handleJavaScriptDialog", { accept: this.dialogAnswer, promptText: msg.params.defaultPrompt ?? "" }, msg.sessionId);
+      }
       if (msg.id && this.waiters.has(msg.id)) {
         const { resolve, reject } = this.waiters.get(msg.id);
         this.waiters.delete(msg.id);
@@ -328,7 +335,7 @@ try {
     return js("({ lines: window.__4cam.state.result.programs.map(p => p.lines), knurl: (window.__4cam.state.result.programs.find(p => p.name === 'knob_2_knurl') || {}).gcode || '' })");
   };
   const treeAct = (op, act) => js(`document.querySelector('#tree .tree-op[data-op="${op}"] [data-act="${act}"]').click(); true`);
-  const settle = () => waitFor(() => js("!!window.__4cam.state.tree.doc"), "tree", 5000).then(() => sleep(400));
+  const settle = () => waitFor(() => js("!!window.__4cam.state.tree.doc && document.body.dataset.state !== 'busy'"), "tree", 30000).then(() => sleep(400));
   await treeAct("op3", "enable");
   await settle();
   const off = await gen();
@@ -743,6 +750,162 @@ try {
   await sleep(300);
   const reset = [(await rect("left"))[2], (await rect("side"))[3]];
   check("double-click resets bars to the default layout", reset[0] === L0 && reset[1] === s0, `left ${reset[0]} (default ${L0}), side ${reset[1]} (default ${s0})`);
+
+  // 8j. project workflow: New -> Import STL (binary, ASCII by drag-and-drop, inch) -> every
+  // view refreshed, stock sized, defaults filled -> Generate -> Save -> New -> Open the saved
+  // file -> the same G-code; unsaved-changes warnings; bad files; a vise import
+  {
+    await S("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
+    const knobStl = readFileSync(join(root, "examples", "knob", "knob.stl"));
+    // the same triangles as ASCII, and scaled to inches (binary)
+    const n = knobStl.readUInt32LE(80);
+    let ascii = "solid knob\n";
+    const inch = Buffer.alloc(84 + 50 * n);
+    inch.writeUInt32LE(n, 80);
+    for (let t = 0; t < n; t++) {
+      const o = 84 + 50 * t;
+      ascii += " facet normal 0 0 0\n  outer loop\n";
+      for (let k = 0; k < 3; k++) {
+        const v = [0, 1, 2].map((c) => knobStl.readFloatLE(o + 12 + 12 * k + 4 * c));
+        ascii += `   vertex ${v.join(" ")}\n`;
+        v.forEach((x, c) => inch.writeFloatLE(x / 25.4, o + 12 + 12 * k + 4 * c));
+      }
+      ascii += "  endloop\n endfacet\n";
+    }
+    ascii += "endsolid knob\n";
+    const fileJs = (name, buf) => `new File([Uint8Array.from(atob("${Buffer.from(buf).toString("base64")}"), (c) => c.charCodeAt(0))], ${JSON.stringify(name)})`;
+    const setFile = (input, name, buf) => js(`(() => { const dt = new DataTransfer(); dt.items.add(${fileJs(name, buf)}); const i = document.getElementById('${input}'); i.files = dt.files; i.dispatchEvent(new Event('change')); return true; })()`);
+    const drop = (name, buf) => js(`(() => { const dt = new DataTransfer(); dt.items.add(${fileJs(name, buf)}); document.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })); document.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); return true; })()`);
+    const dialogs = () => cdp.dialogs.map((d) => `${d.type}: ${d.message}`);
+    const allGcode = () => js("window.__4cam.state.result.programs.map((p) => p.name + '\\n' + p.gcode).join('\\n')");
+    const viewsOk = () => js(`(() => { const v = window.__4cam.state.three; const s = document.getElementById('side'); const px = s.getContext('2d').getImageData(0, 0, s.width, s.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++;
+      return { part: v.groups.part.children.length, stock: v.groups.stock.children.length, path: v.groups.path.children.length, side: ink, tabs: [...document.querySelectorAll('#tabs button')].map((b) => b.textContent), ops: document.querySelectorAll('#tree .tree-op').length, stale: document.body.classList.contains('stale') }; })()`);
+
+    // New, from a project with unsaved edits: asked first; declining keeps it
+    await js("document.getElementById('job').dispatchEvent(new Event('input')); true");
+    const dirty0 = await js("!document.getElementById('projectDirty').classList.contains('hidden')");
+    cdp.dialogAnswer = false;
+    await js("document.getElementById('projectNew').click(); true");
+    await sleep(300);
+    const kept = await js("document.querySelectorAll('#tree .tree-op').length");
+    cdp.dialogAnswer = true;
+    check("unsaved changes are marked, and New asks before discarding them (declined: nothing lost)", dirty0 && /unsaved changes/.test(dialogs().pop() || "") && kept > 0, `${dialogs().slice(-1)}; ${kept} operations kept`);
+    await js("document.getElementById('projectNew').click(); true");
+    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
+    const empty = await js("({ name: document.getElementById('projectName').textContent, ops: document.querySelectorAll('#tree .tree-op').length, tabs: document.querySelectorAll('#tabs button').length, gcode: document.getElementById('gcode').value.length, cta: document.getElementById('emptyState').textContent })");
+    await js("document.getElementById('generate').click(); true");
+    const nothing = await js("document.getElementById('error').textContent");
+    check("New: an empty project with a call to action, no operations, no results", empty.name === "untitled" && empty.ops === 0 && empty.tabs === 0 && empty.gcode === 0 && /Import an STL/i.test(empty.cta) && /Nothing to generate/.test(nothing), JSON.stringify(empty));
+    await shot("14a_new_project");
+
+    // Import a binary STL: placed, stock sized, starter operations, generated, views refreshed
+    await setFile("importStlFile", "knob.stl", knobStl);
+    await waitDone("generation after the STL import", 240000);
+    const info1 = await js("document.getElementById('meshInfo').textContent");
+    const doc1 = JSON.parse(await js("document.getElementById('job').value"));
+    const v1 = await viewsOk();
+    check("Import STL (binary): part size shown, bar stock sized round it, the part on the axis with its front at X0",
+      /binary STL, 10080 triangles/.test(info1) && /21\.70 x 20\.00 x 20\.00 mm/.test(info1) && JSON.stringify(doc1.setups[0].stock) === '{"shape":"cylinder","radius":10.5,"length":37}' && doc1.models[0].axis === "x" && Math.abs(doc1.models[0].translate[0]) < 1e-6, `${info1}; ${JSON.stringify(doc1.setups[0].stock)}`);
+    check("Import STL: starter roughing and finishing filled by the engine's defaults, generated, every view refreshed",
+      v1.ops === 2 && v1.tabs.length === 2 && v1.tabs.every((t) => t.endsWith("OK")) && v1.part > 0 && v1.stock > 0 && v1.path > 0 && v1.side > 1000 && !v1.stale && doc1.setups[0].operations.every((o) => o.type && o.feed > 0),
+      JSON.stringify(v1));
+    const pickRegions = await js("(await window.__4cam.engine('faceRegions', JSON.parse(document.getElementById('job').value), 'part', window.__4cam.state.mesh)).result.regions.length");
+    check("Import STL: the new part's faces are there to pick", pickRegions === 8, `${pickRegions} face regions`);
+    await shot("14b_imported_stl");
+    const gcode1 = await allGcode();
+    const name1 = await js("document.getElementById('projectName').textContent");
+
+    // an edit marks the results stale until the next Generate
+    await js("const f = document.querySelector('#quick input'); if (f) { f.value = String(+f.value + 0.01); f.dispatchEvent(new Event('change')); } true");
+    await sleep(300);
+    const stale = await js("({ body: document.body.classList.contains('stale'), banner: !!document.getElementById('staleBanner') })");
+    check("an edit marks the results out of date (banner, dimmed views) until Generate", stale.body && stale.banner, JSON.stringify(stale));
+    await shot("14c_stale_results");
+    await js("document.getElementById('staleRegen').click(); true");
+    await waitDone("regeneration", 240000);
+    check("Generate again clears the stale mark", !(await js("document.body.classList.contains('stale')")));
+    const gcode2 = await allGcode();
+
+    // Save (asks for a name, downloads one file with the mesh in it), then New, then Open it
+    const before = new Set(readdirSync(downloads));
+    await js("document.getElementById('projectSave').click(); true");
+    const saved = await waitFor(() => readdirSync(downloads).find((f) => !before.has(f) && f.endsWith(".4cam.json")), "the saved project", 15000);
+    const savedText = readFileSync(join(downloads, saved), "utf8");
+    const savedObj = JSON.parse(savedText);
+    const clean1 = await js("document.getElementById('projectDirty').classList.contains('hidden')");
+    check("Save: one .4cam.json with the project and its STL embedded; the unsaved mark goes",
+      saved === `${name1}.4cam.json` && savedObj.format === "4cam-project" && Object.keys(savedObj.meshes)[0] === "knob.stl" && Buffer.from(savedObj.meshes["knob.stl"], "base64").length === 84 + 50 * 10080 && clean1,
+      `${saved}; ${Object.keys(savedObj.meshes || {})}`);
+    await js("document.getElementById('projectNew').click(); true");
+    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
+    const dialogsBefore = cdp.dialogs.length;
+    await setFile("projectOpenFile", saved, Buffer.from(savedText));
+    await waitDone("generation after opening the project", 240000);
+    const reopened = await allGcode();
+    const v2 = await viewsOk();
+    check("Open: the saved project comes back whole (no question asked, it was saved) and its G-code is byte-identical",
+      reopened === gcode2 && v2.ops === 2 && v2.part > 0 && cdp.dialogs.length === dialogsBefore && (await js("document.getElementById('projectName').textContent")) === name1,
+      `${reopened.length} chars vs ${gcode2.length}; dialogs ${cdp.dialogs.length - dialogsBefore}`);
+    await shot("14d_reopened");
+
+    // ASCII STL dropped on the page, and an inch STL: the same part
+    await js("document.getElementById('projectNew').click(); true");
+    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
+    await drop("knob_ascii.stl", Buffer.from(ascii));
+    await waitDone("generation after dropping an ASCII STL", 240000);
+    const infoA = await js("document.getElementById('meshInfo').textContent");
+    const gA = await allGcode();
+    check("drag-and-drop an ASCII STL: imported and generated like the binary one", /ASCII STL, 10080 triangles/.test(infoA) && /21\.70 x 20\.00 x 20\.00 mm/.test(infoA) && gA.replace(/knob_ascii/g, "knob") === gcode1, infoA);
+    await shot("14e_ascii_dropped");
+    await js("document.getElementById('projectNew').click(); true");
+    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
+    await js("document.getElementById('importUnits').value = 'inch'; true");
+    await setFile("importStlFile", "knob_inch.stl", inch);
+    await waitDone("generation after an inch STL", 240000);
+    const infoI = await js("document.getElementById('meshInfo').textContent");
+    await js("document.getElementById('importUnits').value = 'mm'; true");
+    check("an inch STL with units = inch comes in at the same size in mm", /inch/.test(infoI) && /21\.70 x 20\.00 x 20\.00 mm/.test(infoI), infoI);
+
+    // a second STL into a project with a part: replace or add
+    cdp.dialogAnswer = true;
+    await setFile("importStlFile", "knob.stl", knobStl);
+    await waitDone("generation after replacing the part", 240000);
+    const asked = dialogs().pop() || "";
+    check("importing into a project with a part asks: replace (OK) or add (Cancel)", /Replace the part with knob\.stl/.test(asked), asked);
+
+    // a vise import: Z up, block sized, 3-axis starter operations
+    await js("document.getElementById('projectNew').click(); true");
+    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
+    await js("const h = document.getElementById('importHolding'); h.value = 'vise'; h.dispatchEvent(new Event('change')); true");
+    await setFile("importStlFile", "dome.stl", readFileSync(join(root, "examples", "plate", "dome.stl")));
+    await waitDone("generation after a vise import", 240000);
+    const docV = JSON.parse(await js("document.getElementById('job').value"));
+    const vV = await viewsOk();
+    check("vise import: block sized round the part (Z0 its top), 3-axis roughing and finishing generated",
+      docV.setups[0].stock.shape === "box" && docV.setups[0].stock.max[2] === 0 && docV.setups[0].operations.map((o) => o.type).join() === "rough3d,raster3d" && vV.tabs.length === 2 && vV.tabs.every((t) => t.endsWith("OK")),
+      `${JSON.stringify(docV.setups[0].stock)}; ${vV.tabs}`);
+    await shot("14f_vise_import");
+    await js("const h = document.getElementById('importHolding'); h.value = 'rotary'; h.dispatchEvent(new Event('change')); true");
+
+    // bad files: a clear error, nothing replaced
+    const opsBefore = await js("document.querySelectorAll('#tree .tree-op').length");
+    await setFile("importStlFile", "notes.stl", Buffer.from("these are not triangles"));
+    await sleep(500);
+    const badStl = await js("document.getElementById('error').textContent");
+    await setFile("projectOpenFile", "broken.4cam.json", Buffer.from("{ not json"));
+    await sleep(500);
+    const badJson = await js("document.getElementById('error').textContent");
+    check("bad files: a clear error and the project left as it was",
+      /notes\.stl: not an STL file/.test(badStl) && /broken\.4cam\.json: not a 4cam project/.test(badJson) && (await js("document.querySelectorAll('#tree .tree-op').length")) === opsBefore,
+      `${badStl} | ${badJson}`);
+    await shot("14g_bad_file");
+
+    // leaving with unsaved changes: the browser asks
+    await js("document.getElementById('job').dispatchEvent(new Event('input')); true");
+    await S("Page.reload");
+    await waitFor(() => js("document.body.dataset.state === 'ready'"), "the page after reload", 30000);
+    check("leaving with unsaved changes: the browser asks first", cdp.dialogs.some((d) => d.type === "beforeunload"), dialogs().slice(-1).join());
+  }
 
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

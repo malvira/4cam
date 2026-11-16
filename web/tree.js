@@ -58,6 +58,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const box = $("tree");
     if (!t.doc) return;
     const s = setup();
+    if (!s) {
+      box.innerHTML = '<div class="muted small" id="treeEmpty">No part yet: Import STL (or drop one on the page) to get a setup with a roughing and a finishing operation.</div>';
+      return;
+    }
     const setupSel = t.doc.setups
       .map((x) => `<option value="${esc(x.id)}" ${x.id === t.setup ? "selected" : ""}>${esc(x.name || x.id)}</option>`)
       .join("");

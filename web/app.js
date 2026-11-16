@@ -5,6 +5,7 @@ import { gpuDevice, simulateOnGpu } from "./gpu/gpusim.js";
 import { setupMachining } from "./machining.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
+import { setupProject } from "./project.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -59,8 +60,57 @@ function readJob() {
   }
 }
 
-function writeJob(job) {
+/** Write the project into the editor. An edit (the default) marks the project unsaved and
+ *  its results stale; `{ load: true }` is a project being opened or reset. */
+function writeJob(job, opts = {}) {
   $("job").value = JSON.stringify(job, null, 2);
+  if (!opts.load) window.__4cam.project?.changed();
+}
+
+/** The results no longer match the project: say so on them until the next Generate. */
+function markStale() {
+  if (!state.result || state.stale) return;
+  state.stale = true;
+  document.body.classList.add("stale");
+  selectTab(state.tab);
+}
+
+/** No results (a new or just opened project); `msg`, if given, says what to do. */
+function clearResults(msg) {
+  state.result = null;
+  state.sim = null;
+  state.job = null;
+  state.stale = false;
+  document.body.classList.remove("stale");
+  $("tabs").innerHTML = "";
+  $("summary").innerHTML = msg
+    ? `<div class="empty-state" id="emptyState">${msg}<br><button type="button" data-empty="import" class="primary">Import STL...</button><button type="button" data-empty="open">Open project...</button></div>`
+    : "";
+  $("gcode").value = "";
+  $("codeInfo").textContent = "";
+  $("download").disabled = true;
+  $("scrub").max = 0;
+  $("scrub").value = 0;
+  $("scrub").disabled = true;
+  $("scrubLabel").textContent = "";
+  const v = state.three;
+  if (v && !v.failed) {
+    for (const g of Object.values(v.groups)) clear(g);
+    v.key = null;
+    v.simKey = null;
+    v.fitted = null;
+    v.renderer.render(v.scene, v.camera);
+  }
+  const ctx = $("side").getContext("2d");
+  ctx.clearRect(0, 0, $("side").width, $("side").height);
+}
+
+/** Everything that shows the project, again: quick settings, tools, the tree, the grid. */
+async function refreshAll() {
+  renderQuick();
+  renderTools();
+  await window.__4cam.tree?.refresh();
+  updateSimResInfo();
 }
 
 /** Quick fields for the common parameters; they write straight into the JSON. */
@@ -130,9 +180,20 @@ function renderQuick() {
 
 async function loadExample(name) {
   showError("");
+  // busy until it is in: Generate meanwhile would plan the project being replaced
+  if (state.registry) setStatus(`Loading the ${name} example...`, "busy");
+  $("generate").disabled = $("simulate").disabled = true;
+  try {
+    await loadExampleInto(name);
+  } finally {
+    if (state.registry) $("generate").disabled = $("simulate").disabled = false;
+  }
+}
+
+async function loadExampleInto(name) {
   if (name === "knob") {
     const { result } = await engine("exampleJob");
-    writeJob(result);
+    writeJob(result, { load: true });
     setMesh(null, "");
   } else {
     const [file, mesh] = {
@@ -148,7 +209,7 @@ async function loadExample(name) {
       }),
       mesh ? fetch(`../examples/${mesh}`).then((r) => (r.ok ? r.arrayBuffer() : null)) : null,
     ]);
-    writeJob(job);
+    writeJob(job, { load: true });
     const meshName = mesh?.split("/")[1];
     setMesh(stl ? new Uint8Array(stl) : null, stl ? `${meshName} (example)` : "");
   }
@@ -158,8 +219,14 @@ async function loadExample(name) {
   if (jm) renderMachines(jm);
   renderQuick();
   renderTools();
+  if (window.__4cam.project) {
+    window.__4cam.project.state.fileName = null;
+    window.__4cam.project.clean(loaded.name || `example: ${name}`);
+  }
+  clearResults("");
   await window.__4cam.tree?.refresh();
   updateSimResInfo();
+  if (state.registry) setStatus(`Loaded the ${name} example: Generate to plan it`, "ready");
 }
 
 function setMesh(bytes, name) {
@@ -201,6 +268,10 @@ async function generate() {
     showError(e.message);
     return;
   }
+  if (job.schema_version === "0.2" && !job.setups?.some((s) => s.operations?.some((o) => o.enabled !== false))) {
+    showError("Nothing to generate yet: import an STL (it adds a starter roughing and finishing) or add an operation in the project tree.");
+    return;
+  }
   if (job.part?.mesh && !state.mesh) {
     showError(`This job uses the mesh "${job.part.mesh.file}". Choose it under "Part mesh".`);
     return;
@@ -213,13 +284,17 @@ async function generate() {
     state.result = result;
     state.sim = null;
     state.job = job;
+    state.stale = false;
+    document.body.classList.remove("stale");
     renderTabs();
     selectTab(0);
     const issues = result.programs.reduce((n, p) => n + p.issues.length, 0);
-    setStatus(`Generated ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s, ${issues} issue(s); estimated machining time ${fmtTime(result.time_total_s)}`, "done");
     // the tree shows each operation's and file's estimated time
     await window.__4cam.tree?.refresh();
     updateSimResInfo();
+    // done only once everything is shown and the buttons work again
+    $("generate").disabled = $("simulate").disabled = false;
+    setStatus(`Generated ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s, ${issues} issue(s); estimated machining time ${fmtTime(result.time_total_s)}`, "done");
   } catch (e) {
     showError(e.message);
     setStatus("Failed", "error");
@@ -392,6 +467,7 @@ function selectTab(i) {
   const sim = state.sim?.stocks?.[i];
   const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
   $("summary").innerHTML = `
+    ${state.stale ? '<div class="stale-banner" id="staleBanner">Out of date: the project changed since these results were made. <button type="button" id="staleRegen">Generate again</button></div>' : ""}
     <div><strong>${esc(p.title)}</strong> &middot; <span id="lineCount">${p.lines.toLocaleString("en")}</span> lines
       &middot; ${state.result.machine}${p.tool ? ` &middot; T${p.tool[0]} ${esc(p.tool[1])}` : ""}</div>
     <div class="issues ${p.issues.length ? "bad" : "ok"}">${
@@ -729,7 +805,19 @@ function simMesh(THREE, sim, s) {
 }
 
 // ---------------------------------------------------------------- wiring
-$("loadExample").addEventListener("click", () => loadExample($("example").value).catch((e) => showError(e.message)));
+$("loadExample").addEventListener("click", () => {
+  if (!window.__4cam.project.mayDiscard("Load the example")) return;
+  loadExample($("example").value).catch((e) => {
+    showError(e.message);
+    setStatus("Loading failed", "error");
+  });
+});
+$("job").addEventListener("input", () => window.__4cam.project.changed());
+$("summary").addEventListener("click", (ev) => {
+  if (ev.target.id === "staleRegen") generate();
+  if (ev.target.dataset?.empty === "import") $("importStl").click();
+  if (ev.target.dataset?.empty === "open") $("projectOpen").click();
+});
 $("generate").addEventListener("click", generate);
 $("simulate").addEventListener("click", simulate);
 $("download").addEventListener("click", download);
@@ -743,10 +831,26 @@ $("machine").addEventListener("change", () => {
   }
   store("4cam.machineSel", $("machine").value);
   renderMachineInfo();
+  // the project remembers a built-in machine on its setup
+  try {
+    const doc = readJob();
+    const id = $("machine").value;
+    const s = doc.setups?.find((x) => x.id === state.tree?.setup) ?? doc.setups?.[0];
+    if (s && state.registry.machines.some((m) => m.id === id) && s.machine !== id) {
+      s.machine = id;
+      writeJob(doc);
+      window.__4cam.tree?.refresh();
+    } else window.__4cam.project?.changed();
+  } catch {
+    window.__4cam.project?.changed();
+  }
 });
 $("mesh").addEventListener("change", async () => {
   const f = $("mesh").files[0];
-  if (f) setMesh(new Uint8Array(await f.arrayBuffer()), f.name);
+  if (f) {
+    setMesh(new Uint8Array(await f.arrayBuffer()), f.name);
+    window.__4cam.project.changed();
+  }
 });
 $("scrub").addEventListener("input", () => {
   updateScrubLabel();
@@ -1084,6 +1188,12 @@ window.__4cam.tree = setupTree({
   onChange: () => { renderQuick(); renderTools(); },
 });
 $("job").addEventListener("change", () => window.__4cam.tree.refresh());
+
+// ---------------------------------------------------------------- project workflow
+window.__4cam.project = setupProject({
+  $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, markStale,
+  machineArg, currentMachine, selectMachine: (id) => renderMachines(id),
+});
 
 // ---------------------------------------------------------------- machining simulation
 window.__4cam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend });

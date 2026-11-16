@@ -27,5 +27,6 @@ sh scripts/build-wasm.sh
 node crates/fourcam-wasm/js/test.mjs
 sh scripts/test-python.sh
 node web/tests/meshes.test.mjs
+node web/tests/project.test.mjs
 node web/tests/e2e.mjs
 echo "ALL CHECKS PASSED"

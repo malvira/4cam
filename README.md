@@ -127,11 +127,25 @@ powershell -File web/serve.ps1
 Then open <http://localhost:8000/web/>. Nothing is uploaded: the engine runs in your
 browser.
 
+- **Project bar** (top):
+  - **New**: an empty project.
+  - **Open**: a `.4cam.json` project file, or a `.project.json` / `.job.json`; or drop the
+    file on the page.
+  - **Save** / **Save as**: one `.4cam.json` file with the part mesh embedded, so it opens
+    whole anywhere.
+  - **Import STL** (or drop one), binary or ASCII, mm or inch:
+    - The part is placed: on the rotary axis, its front at X0; or Z up on the vise.
+    - Bar or block stock is sized round it, and the part size is shown.
+    - A new part gets a roughing and a finishing operation from the engine's defaults; an
+      existing project's operations are recomputed for it. Then it is generated.
+  - The project's name, with an "unsaved" mark. New, Open and examples ask before
+    discarding changes. Results the project no longer matches are marked out of date until
+    Generate.
+  - The example picker.
 - **Left panel:**
-  - an example picker;
   - the machine (built-in Makera Z1, Carvera, Carvera Air, LinuxCNC, imported profiles, or custom JSON), with a summary of its limits;
   - a tool library panel: view, add, edit and remove tools, import a file or URL (Fusion 360 `.tools`/`.json`/`.mch`/`.f3d` or 4cam JSON), export JSON, and "use as T#" to put a tool in the job (kept in browser storage);
-  - a part mesh upload (STL or 3MF);
+  - "Attach mesh file": the mesh an opened project names (STL or 3MF), as it is;
   - quick settings that write into the job JSON (stock, tool sizes, feeds, steps);
   - the job JSON editor.
 - **Generate:** shows one tab per program with:
