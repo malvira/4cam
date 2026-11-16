@@ -229,6 +229,17 @@ pub fn part_top(hm: &Heightmap3, mesh: &Mesh) -> Vec<Option<f64>> {
 /// Material left above the part and gouges below it, over cells that have part; `tol` is
 /// the gouge threshold (mm). `gouge_at` is (x, y).
 pub fn deviation3(hm: &Heightmap3, part: &[Option<f64>], tol: f64) -> Deviation {
+    deviation3_with(hm, part, tol, &|_| false)
+}
+
+/// [`deviation3`], leaving out cells cut below the part on purpose (see
+/// [`crate::sim::deviation_with`]).
+pub fn deviation3_with(
+    hm: &Heightmap3,
+    part: &[Option<f64>],
+    tol: f64,
+    intended: &dyn Fn(u16) -> bool,
+) -> Deviation {
     let mut d = Deviation {
         cells: 0,
         max_left: 0.0,
@@ -236,11 +247,16 @@ pub fn deviation3(hm: &Heightmap3, part: &[Option<f64>], tol: f64) -> Deviation 
         max_gouge: 0.0,
         gouge_at: None,
         gouge_cells: 0,
+        feature_cells: 0,
     };
     let mut sum = 0.0;
     for (k, p) in part.iter().enumerate() {
         let Some(p) = *p else { continue };
         let diff = hm.z[k] - p;
+        if diff < -tol && intended(hm.op[k]) {
+            d.feature_cells += 1;
+            continue;
+        }
         d.cells += 1;
         if diff >= 0.0 {
             d.max_left = d.max_left.max(diff);

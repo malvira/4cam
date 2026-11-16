@@ -664,6 +664,27 @@ pub fn gouge_check(
     Ok(out)
 }
 
+/// Operation tags (id + 1, as the simulations record them) of operations meant to cut
+/// below the part model: those the registry marks as shaping the part (knurls, chamfers,
+/// engraving, V-carving) and, on a rotary setup, indexed 3-axis features.
+pub fn intended_tags(job: &Job, tps: &[Toolpath]) -> std::collections::HashSet<u16> {
+    let mut out = std::collections::HashSet::new();
+    for tp in tps {
+        for m in &tp.moves {
+            if let Move::Operation { id, kind } = m {
+                let t = ops::find(kind);
+                let feature = t.is_some_and(|t| {
+                    t.shapes_part || (job.stock_box.is_none() && t.machine_needs.contains(&"xyz"))
+                });
+                if feature {
+                    out.insert((id + 1).min(u16::MAX as u32) as u16);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Simulation of a whole job on a radial heightmap, programs in order on the same stock.
 #[derive(Debug, Clone)]
 pub struct JobSim {
@@ -713,10 +734,11 @@ pub fn simulate_job(
     let part = part_fn(grid);
     let mut stock = sim::RadialMap::filled(grid, job.stock.radius);
     let cutters = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
+    let intended = intended_tags(job, tps);
     let mut programs = Vec::new();
     for tp in tps {
         let st = sim::simulate(&mut stock, tp, &cutters, (dx * 2.0).min(0.1));
-        let dev = sim::deviation(&stock, &part, x_lo, x_hi, tol);
+        let dev = sim::deviation_with(&stock, &part, x_lo, x_hi, tol, &|t| intended.contains(&t));
         programs.push((tp.name.clone(), st, dev));
     }
     Ok(JobSim {

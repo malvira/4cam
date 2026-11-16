@@ -323,6 +323,7 @@ pub mod api {
                 "mean_left": dev.mean_left,
                 "max_gouge": dev.max_gouge,
                 "gouge_cells": dev.gouge_cells,
+                "feature_cells": dev.feature_cells,
                 "r": stock.r,
             }));
         }
@@ -411,10 +412,11 @@ pub mod api {
             .unwrap_or_else(|| vec![None; hm.z.len()]);
         let cutters = cutters_of(job);
         let step = (hm.cell * 0.5).min(0.1);
+        let intended = fourcam::intended_tags(job, tps);
         let mut stocks = Vec::new();
         for tp in tps {
             let st = sim3::simulate3(&mut hm, tp, &cutters, step);
-            let dev = sim3::deviation3(&hm, &part, 0.02);
+            let dev = sim3::deviation3_with(&hm, &part, 0.02, &|t| intended.contains(&t));
             stocks.push(json!({
                 "name": tp.name,
                 "samples": st.samples,
@@ -424,6 +426,7 @@ pub mod api {
                 "mean_left": dev.mean_left,
                 "max_gouge": dev.max_gouge,
                 "gouge_cells": dev.gouge_cells,
+                "feature_cells": dev.feature_cells,
                 "z": hm.z.iter().map(|&v| v as f32).collect::<Vec<f32>>(),
             }));
         }

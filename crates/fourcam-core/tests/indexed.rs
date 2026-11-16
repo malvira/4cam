@@ -62,6 +62,11 @@ fn simulation_shows_the_flat_and_the_hole_at_their_angles() {
         }
         assert!(st.rapid_hits.is_empty(), "{name}: rapids through stock");
     }
+    // the flat and the hole cut below the turned profile on purpose: reported as feature
+    // cells, not gouges (the knurl program's grooves likewise)
+    let (_, _, dev) = &res.programs[2];
+    assert_eq!(dev.gouge_cells, 0, "{dev:?}");
+    assert!(dev.feature_cells > 100, "{dev:?}");
     let g = res.stock.grid;
     let r_at = |x: f64, phi_deg: f64| {
         let i = ((x - g.x0) / g.dx) as usize;

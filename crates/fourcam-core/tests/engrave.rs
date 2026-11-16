@@ -262,6 +262,9 @@ fn ring_grooves_text_and_diamonds_wrapped_on_the_z1() {
     assert!(errors.is_empty(), "{errors:?}");
     let res = simulate_job(&job, &tps, None, 0.1, 720, 0.02).unwrap();
     assert!(res.programs[0].1.rapid_hits.is_empty());
+    // the engraving cuts below the plain bar on purpose: features, not gouges
+    let dev = &res.programs[0].2;
+    assert!(dev.gouge_cells == 0 && dev.feature_cells > 1000, "{dev:?}");
     // grooves all the way round at X -40 and -5
     for phi in [0.0, 90.0, 180.0, 270.0, 45.0] {
         for x in [-40.0, -5.0] {

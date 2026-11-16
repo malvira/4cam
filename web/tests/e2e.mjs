@@ -536,6 +536,8 @@ try {
   await waitDone("ring simulation", 240000);
   const rcut = await js("(() => { const s = window.__4cam.state.sim; const g = s.grid; const r = s.stocks[0].r; const at = (x, deg) => r[Math.floor((x - g.x0) / g.dx) * g.na + Math.floor(deg / 360 * g.na) % g.na]; return [at(-31, 90), at(-40, 200), at(-25, 90)].map(v => v.toFixed(2)).join(','); })()");
   check("ring: wrapped engraving verified and simulated (diamond floor, groove all round, bar elsewhere)", rtabs.length === 1 && rtabs[0].endsWith("OK") && /^10\.6\d,11\.7\d,12\.00$/.test(rcut), `${rtabs.join(", ")}; ${rcut}`);
+  const rsum = await js("document.getElementById('summary').innerText.split('\\n').pop()");
+  check("ring: intended engraving is not reported as a gouge", /deepest gouge 0\.0\d\d mm/.test(rsum) && /cut below the part on purpose/.test(rsum), rsum);
   await sleep(1000);
   await shot("12_ring_engraved");
 

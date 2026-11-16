@@ -721,12 +721,28 @@ pub struct Deviation {
     pub gouge_at: Option<(f64, f64)>,
     /// Cells more than `tol` below the part.
     pub gouge_cells: usize,
+    /// Cells more than `tol` below the part that were last cut by an operation meant to
+    /// cut into it (engraving, knurls, chamfers, indexed features): not counted above.
+    pub feature_cells: usize,
 }
 
 /// Compare `stock` with `part` over cells whose x lies in `[x_lo, x_hi]` and where the part
 /// exists. Material left is measured from the highest part radius in each cell, gouges from
 /// the lowest, so a cell that straddles a wall counts as neither.
 pub fn deviation(stock: &RadialMap, part: &Part, x_lo: f64, x_hi: f64, tol: f64) -> Deviation {
+    deviation_with(stock, part, x_lo, x_hi, tol, &|_| false)
+}
+
+/// [`deviation`], leaving out cells below the part whose last cut came from an operation
+/// tag for which `intended` is true (counted in `feature_cells` instead).
+pub fn deviation_with(
+    stock: &RadialMap,
+    part: &Part,
+    x_lo: f64,
+    x_hi: f64,
+    tol: f64,
+    intended: &dyn Fn(u16) -> bool,
+) -> Deviation {
     assert_eq!(stock.grid, part.center.grid);
     let g = stock.grid;
     let mut d = Deviation {
@@ -736,6 +752,7 @@ pub fn deviation(stock: &RadialMap, part: &Part, x_lo: f64, x_hi: f64, tol: f64)
         max_gouge: 0.0,
         gouge_at: None,
         gouge_cells: 0,
+        feature_cells: 0,
     };
     let mut sum = 0.0;
     for i in 0..g.nx {
@@ -749,6 +766,10 @@ pub fn deviation(stock: &RadialMap, part: &Part, x_lo: f64, x_hi: f64, tol: f64)
                 continue;
             }
             let s = stock.at(i, j);
+            if lo - s > tol && intended(stock.op[i * g.na + j]) {
+                d.feature_cells += 1;
+                continue;
+            }
             let left = s - hi;
             d.cells += 1;
             sum += left.max(0.0);
