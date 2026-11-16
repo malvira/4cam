@@ -59,9 +59,11 @@ All calls take and return JSON. No wasm-bindgen is needed.
   - `faceRegions(doc, model, mesh)` returns the model's faces with stable ids;
   - `wizardKnurl(doc, params, mesh)` runs the knurl wizard.
 - **Simulation:**
-  - `simulate(doc, {dx, na}, mesh)` simulates material removal for the whole job (rotary
-    setups only for now; box setups return an error);
-  - `simOpen(doc, {setup, dx, na}, mesh)` and `simSeek(n)` play it back move by move.
+  - `simulate(doc, {dx, na, cell}, mesh)` simulates material removal for the whole job.
+    Box setups return `"kind": "xyz"`, an X/Y `grid` (`cell` mm, default about 240 cells
+    along the longer side), the part top per cell and the block tops `z` after each program;
+  - `simOpen(doc, {setup, dx, na, cell}, mesh)` and `simSeek(n)` play it back move by move
+    (for box setups the changed rows are Y rows, with `z` and the operation tags).
 - **Profiles:**
   - `profileList()` lists the built-in machines and tool libraries;
   - `importProfile(bytes, name)` reads a 4cam or Fusion 360 profile file.

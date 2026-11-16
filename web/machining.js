@@ -1,9 +1,11 @@
 // Solid machining simulation: the stock as a closed solid that the tool cuts as the job plays.
 // The engine (WebAssembly, in the worker) keeps the stock heightmap and the cut-by-operation
 // tags; this module plays it back, updates the GPU buffers in place for the rows that changed,
-// and colours each cut surface by the operation that cut it.
+// and colours each cut surface by the operation that cut it. Rotary setups play on a bar
+// (rows = X cells, A turns the work); 3-axis (vise) setups on a block (rows = Y cells, the
+// tool moves in XYZ).
 
-import { heightmapSolid } from "./meshes.js";
+import { blockSolid, heightmapSolid } from "./meshes.js";
 
 const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"];
 const UNCUT = [0.62, 0.64, 0.68];
@@ -17,7 +19,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   const m = {
     open: false,
     session: null, // sim_open result (+ decoded arrays)
-    r: null, // Float32Array radii (mirror of the engine stock)
+    r: null, // Float32Array radii, or block tops for 3-axis (mirror of the engine stock)
+    xyz: false,
     op: null, // Uint16Array cut-by tags
     pos: 0,
     playing: false,
@@ -80,7 +83,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       c.material?.dispose();
     }
     const s = m.session;
-    const mesh = heightmapSolid(s.grid, m.r, (k) => colorOf(m.op[k]));
+    const mesh = m.xyz ? blockSolid(s.grid, m.r, s.stock_box.min[2], (k) => colorOf(m.op[k])) : heightmapSolid(s.grid, m.r, (k) => colorOf(m.op[k]));
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
     g.setAttribute("color", new THREE.BufferAttribute(mesh.colors, 3));
@@ -88,12 +91,17 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     g.computeVertexNormals();
     m.stockMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.15 }));
     work.add(m.stockMesh);
-    // ghost of the original bar: shows how much has been removed
-    const { x0, dx, nx } = s.grid;
-    const ghost = new THREE.Mesh(
-      new THREE.CylinderGeometry(s.stock_radius, s.stock_radius, nx * dx, 64, 1, false).rotateZ(-Math.PI / 2).translate(x0 + (nx * dx) / 2, 0, 0),
-      new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.12, depthWrite: false }),
-    );
+    // ghost of the original bar or block: shows how much has been removed
+    const ghostMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.12, depthWrite: false });
+    let ghost;
+    if (m.xyz) {
+      const { min, max } = s.stock_box;
+      ghost = new THREE.Mesh(new THREE.BoxGeometry(max[0] - min[0], max[1] - min[1], max[2] - min[2]), ghostMat);
+      ghost.position.set((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
+    } else {
+      const { x0, dx, nx } = s.grid;
+      ghost = new THREE.Mesh(new THREE.CylinderGeometry(s.stock_radius, s.stock_radius, nx * dx, 64, 1, false).rotateZ(-Math.PI / 2).translate(x0 + (nx * dx) / 2, 0, 0), ghostMat);
+    }
     ghost.visible = $("simGhost").checked;
     m.ghost = ghost;
     work.add(ghost);
@@ -157,18 +165,40 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       tm.add(toolModel(v.THREE, s.tools.find((t) => t.number === toolNo)));
       m.toolNumber = toolNo;
     }
-    // the part turns: rotate the work by A (right-handed about +X), tool fixed above the axis
-    v.groups.work.rotation.x = (a * Math.PI) / 180;
-    v.groups.toolModel.position.set(x, 0, r);
     const opTag = p[6 * k + 5];
     const op = s.ops.find((o) => o.tag === opTag);
-    $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · A${a.toFixed(1)}`;
+    const where = m.xyz ? `X${x.toFixed(1)} Y${r.toFixed(1)} Z${a.toFixed(2)}` : `A${a.toFixed(1)}`;
+    if (m.xyz) {
+      // 3-axis: the block stays put, the tool moves to the tip position (x, y, z)
+      v.groups.work.rotation.x = 0;
+      v.groups.toolModel.position.set(x, r, a);
+    } else {
+      // the part turns: rotate the work by A (right-handed about +X), tool fixed above the axis
+      v.groups.work.rotation.x = (a * Math.PI) / 180;
+      v.groups.toolModel.position.set(x, 0, r);
+    }
+    $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where}`;
   }
 
   /** Apply a sim_seek result: rows changed -> update vertices and colours in place. */
   function applyRows(res) {
     m.pos = res.pos;
-    if (res.rows && m.stockMesh) {
+    if (res.rows && m.stockMesh && m.xyz) {
+      // rows are Y indices of nx cells; vertex k is cell k (the walls share those vertices)
+      const [j0, j1] = res.rows;
+      const { nx } = m.session.grid;
+      m.r.set(f32(res.z), j0 * nx);
+      m.op.set(u16(res.op), j0 * nx);
+      const pos = m.stockMesh.geometry.attributes.position.array;
+      const col = m.stockMesh.geometry.attributes.color.array;
+      for (let k = j0 * nx; k < (j1 + 1) * nx; k++) {
+        pos[3 * k + 2] = m.r[k];
+        col.set(colorOf(m.op[k]), 3 * k);
+      }
+      m.stockMesh.geometry.attributes.position.needsUpdate = true;
+      m.stockMesh.geometry.attributes.color.needsUpdate = true;
+      m.stockMesh.geometry.computeVertexNormals();
+    } else if (res.rows && m.stockMesh) {
       const [i0, i1] = res.rows;
       const { na, nx } = m.session.grid;
       m.r.set(f32(res.r), i0 * na);
@@ -228,8 +258,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       const { result } = await engine("simOpen", job, { dx: 0.1, na: 240, libraries: libraries(), setup }, state.mesh);
       result.path = f32(result.path);
       m.session = result;
-      const n = result.grid.nx * result.grid.na;
-      m.r = new Float32Array(n).fill(result.stock_radius);
+      m.xyz = result.kind === "xyz";
+      const n = m.xyz ? result.grid.nx * result.grid.ny : result.grid.nx * result.grid.na;
+      m.r = new Float32Array(n).fill(m.xyz ? result.stock_box.max[2] : result.stock_radius);
       m.op = new Uint16Array(n);
       m.pos = 0;
       await engine("simSeek", 0);
@@ -300,7 +331,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       localStorage.setItem("4cam.opColors", JSON.stringify(saved));
     } catch {}
     // recolour every vertex from the tag mirror
-    if (m.stockMesh) {
+    if (m.stockMesh && m.xyz) {
+      const col = m.stockMesh.geometry.attributes.color.array;
+      for (let k = 0; k < m.op.length; k++) col.set(colorOf(m.op[k]), 3 * k);
+      m.stockMesh.geometry.attributes.color.needsUpdate = true;
+    } else if (m.stockMesh) {
       const { na, nx } = m.session.grid;
       const col = m.stockMesh.geometry.attributes.color.array;
       const paint = (vi, k) => col.set(colorOf(m.op[k]), 3 * vi);

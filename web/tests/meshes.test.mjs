@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkClosed, cylinder, heightmapSolid, revolveProfile } from "../meshes.js";
+import { blockSolid, checkClosed, cylinder, heightmapSolid, revolveProfile } from "../meshes.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const job = JSON.parse(readFileSync(join(root, "examples", "knob", "knob.job.json"), "utf8"));
@@ -54,6 +54,22 @@ for (const seg of [24, 120]) {
   ok("simulated stock heightmap: closed", c.closed, `${c.triangles} triangles, ${c.badEdges} bad edges`);
   ok("simulated stock heightmap: outward (positive volume)", c.volume > 0, `${c.volume.toFixed(1)} mm^3`);
   ok("simulated stock heightmap: one colour per vertex", m.colors.length === m.positions.length, `${m.colors.length}`);
+}
+
+// 3-axis block heightmap: a pocket and a hole cut into a 30 x 20 x 10 block
+{
+  const grid = { x0: 0, y0: 0, cell: 0.5, nx: 60, ny: 40 };
+  const z = new Float32Array(grid.nx * grid.ny).fill(0);
+  for (let j = 10; j < 30; j++) for (let i = 5; i < 25; i++) z[j * grid.nx + i] = -3;
+  z[20 * grid.nx + 45] = -6;
+  const m = blockSolid(grid, z, -10, () => [0, 1, 0]);
+  const c = checkClosed(m);
+  ok("block heightmap: closed", c.closed, `${c.triangles} triangles, ${c.badEdges} bad edges`);
+  // volume: the block over the cell-centre footprint (29.5 x 19.5) minus the cuts; on this
+  // triangulation each lowered interior vertex removes depth x cell^2
+  const want = 29.5 * 19.5 * 10 - 3 * 400 * 0.25 - 6 * 0.25;
+  ok("block heightmap: outward, with the cuts' volume removed", Math.abs(c.volume - want) < 1e-3, `${c.volume.toFixed(1)} vs ${want.toFixed(1)} mm^3`);
+  ok("block heightmap: vertex k is cell k", m.positions[3 * (20 * grid.nx + 45) + 2] === -6 && m.colors.length === m.positions.length, "");
 }
 
 // the checker itself catches open and flipped shells

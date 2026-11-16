@@ -5,11 +5,11 @@
 //! The [`api`] functions are plain Rust so they are tested natively.
 
 pub mod api {
-    use fourcam::job::Job;
+    use fourcam::job::{Job, StockBox};
     use fourcam::profiles::{self, MachineProfile, ToolLibrary};
     use fourcam::{
-        gouge_check, limits_for, plan_with_mesh, post, render, sim, simulate_job, verify_gcode,
-        Machine, Mesh, Toolpath,
+        gouge_check, limits_for, plan_with_mesh, post, render, sim, sim3, simulate_job,
+        verify_gcode, Machine, Mesh, Toolpath,
     };
     use serde_json::{json, Value};
 
@@ -300,6 +300,9 @@ pub mod api {
             Ok(t) => t,
             Err(e) => return err(e),
         };
+        if let Some(sb) = job.stock_box {
+            return simulate_xyz(&job, &tps, mesh.as_ref(), &sb, &opts);
+        }
         let res = match simulate_job(&job, &tps, mesh.as_ref(), dx, na, 0.02) {
             Ok(r) => r,
             Err(e) => return err(e),
@@ -361,8 +364,124 @@ pub mod api {
 
     // ------------------------------------------------------------ playback sessions
 
-    struct Session {
-        pb: sim::Playback,
+    enum Session {
+        Rotary(sim::Playback),
+        Xyz(sim3::Playback3),
+    }
+
+    /// Cell size for a block: `opts.cell`, else about 240 cells along its longer side.
+    fn cell_for(sb: &StockBox, opts: &Value) -> f64 {
+        let span = (sb.max[0] - sb.min[0]).max(sb.max[1] - sb.min[1]);
+        opts["cell"].as_f64().unwrap_or(span / 240.0).max(0.05)
+    }
+
+    fn grid_xyz(hm: &sim3::Heightmap3) -> Value {
+        json!({"x0": hm.x0, "y0": hm.y0, "cell": hm.cell, "nx": hm.nx, "ny": hm.ny})
+    }
+
+    /// The operation markers of planned programs, as the playback legend lists them.
+    fn ops_of(tps: &[Toolpath]) -> Vec<Value> {
+        let mut ops = Vec::new();
+        for (p, tp) in tps.iter().enumerate() {
+            for m in &tp.moves {
+                if let fourcam::Move::Operation { id, kind } = m {
+                    ops.push(json!({"id": id, "tag": id + 1, "kind": kind, "program": tp.name, "program_index": p}));
+                }
+            }
+        }
+        ops
+    }
+
+    fn cutters_of(job: &Job) -> impl Fn(u32) -> Option<fourcam::dropcutter::Cutter> + '_ {
+        move |t| {
+            job.tool(t)
+                .and_then(|d| fourcam::cutter_for(t, d.shape).ok())
+        }
+    }
+
+    /// Batch simulation of a 3-axis (box stock) job: the block after each program.
+    fn simulate_xyz(
+        job: &Job,
+        tps: &[Toolpath],
+        mesh: Option<&Mesh>,
+        sb: &StockBox,
+        opts: &Value,
+    ) -> Value {
+        let mut hm = sim3::Heightmap3::new(sb, cell_for(sb, opts));
+        let part = mesh
+            .map(|m| sim3::part_top(&hm, m))
+            .unwrap_or_else(|| vec![None; hm.z.len()]);
+        let cutters = cutters_of(job);
+        let step = (hm.cell * 0.5).min(0.1);
+        let mut stocks = Vec::new();
+        for tp in tps {
+            let st = sim3::simulate3(&mut hm, tp, &cutters, step);
+            let dev = sim3::deviation3(&hm, &part, 0.02);
+            stocks.push(json!({
+                "name": tp.name,
+                "samples": st.samples,
+                "cells_cut": st.cells_cut,
+                "rapid_hits": st.rapid_hits.len(),
+                "max_left": dev.max_left,
+                "mean_left": dev.mean_left,
+                "max_gouge": dev.max_gouge,
+                "gouge_cells": dev.gouge_cells,
+                "z": hm.z.iter().map(|&v| v as f32).collect::<Vec<f32>>(),
+            }));
+        }
+        json!({
+            "kind": "xyz",
+            "grid": grid_xyz(&hm),
+            "stock_box": sb,
+            "part": part.iter().map(|p| p.map(|v| v as f32)).collect::<Vec<_>>(),
+            "stocks": stocks,
+        })
+    }
+
+    /// Open a 3-axis playback: like [`sim_open`], with `path` as f32 [x, y, z, rapid, tool, op].
+    fn sim_open_xyz(
+        job: &Job,
+        tps: &[Toolpath],
+        sb: &StockBox,
+        opts: &Value,
+        job_json: &str,
+    ) -> Value {
+        let hm = sim3::Heightmap3::new(sb, cell_for(sb, opts));
+        let grid = grid_xyz(&hm);
+        let step = (hm.cell * 0.5).min(0.1);
+        let pb = sim3::Playback3::new(hm, tps, &cutters_of(job), step);
+        let mut path = Vec::with_capacity(pb.len() * 6);
+        for sg in &pb.segments {
+            path.extend_from_slice(&[
+                sg.to[0] as f32,
+                sg.to[1] as f32,
+                sg.to[2] as f32,
+                f32::from(u8::from(sg.rapid)),
+                sg.tool.unwrap_or(0) as f32,
+                sg.op as f32,
+            ]);
+        }
+        let first_seg_of_program: Vec<usize> = (0..tps.len())
+            .map(|p| {
+                pb.segments
+                    .iter()
+                    .position(|s| s.program as usize == p)
+                    .unwrap_or(pb.len())
+            })
+            .collect();
+        let out = json!({
+            "kind": "xyz",
+            "grid": grid,
+            "stock_box": sb,
+            "segments": pb.len(),
+            "program_starts": first_seg_of_program,
+            "path": f32s(&path),
+            "ops": ops_of(tps),
+            "project_ops": with_setup(opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| json!({"ids": ids, "colors": colors})),
+            "tools": job.tools,
+        });
+        SESSION.with(|s| *s.borrow_mut() = Some(Session::Xyz(pb)));
+        out
     }
 
     thread_local! {
@@ -420,6 +539,9 @@ pub mod api {
             Ok(t) => t,
             Err(e) => return err(e),
         };
+        if let Some(sb) = job.stock_box {
+            return sim_open_xyz(&job, &tps, &sb, &opts, job_json);
+        }
         // grid and part map exactly as the batch simulation builds them
         let res = match simulate_job(&job, &[], mesh.as_ref(), dx, na, 0.02) {
             Ok(r) => r,
@@ -474,7 +596,7 @@ pub mod api {
             "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| json!({"ids": ids, "colors": colors})),
             "tools": job.tools,
         });
-        SESSION.with(|s| *s.borrow_mut() = Some(Session { pb }));
+        SESSION.with(|s| *s.borrow_mut() = Some(Session::Rotary(pb)));
         out
     }
 
@@ -486,15 +608,34 @@ pub mod api {
             let Some(sess) = s.as_mut() else {
                 return err("no playback open (call sim_open)");
             };
-            let rows = sess.pb.seek(n);
-            let pos = sess.pb.position();
-            match rows {
-                None => json!({"pos": pos, "rows": null}),
-                Some((i0, i1)) => {
-                    let na = sess.pb.stock.grid.na;
-                    let (a, b) = (i0 * na, (i1 + 1) * na);
-                    json!({"pos": pos, "rows": [i0, i1],
-                           "r": f32s(&sess.pb.stock.r[a..b]), "op": u16s(&sess.pb.stock.op[a..b])})
+            match sess {
+                Session::Rotary(pb) => {
+                    let rows = pb.seek(n);
+                    let pos = pb.position();
+                    match rows {
+                        None => json!({"pos": pos, "rows": null}),
+                        Some((i0, i1)) => {
+                            let na = pb.stock.grid.na;
+                            let (a, b) = (i0 * na, (i1 + 1) * na);
+                            json!({"pos": pos, "rows": [i0, i1],
+                                   "r": f32s(&pb.stock.r[a..b]), "op": u16s(&pb.stock.op[a..b])})
+                        }
+                    }
+                }
+                // 3-axis: rows are Y indices of nx cells; "z" holds the tops
+                Session::Xyz(pb) => {
+                    let rows = pb.seek(n);
+                    let pos = pb.position();
+                    match rows {
+                        None => json!({"pos": pos, "rows": null}),
+                        Some((j0, j1)) => {
+                            let nx = pb.stock.nx;
+                            let (a, b) = (j0 * nx, (j1 + 1) * nx);
+                            let z: Vec<f32> = pb.stock.z[a..b].iter().map(|&v| v as f32).collect();
+                            json!({"pos": pos, "rows": [j0, j1],
+                                   "z": f32s(&z), "op": u16s(&pb.stock.op[a..b])})
+                        }
+                    }
                 }
             }
         })

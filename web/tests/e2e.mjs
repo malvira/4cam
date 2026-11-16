@@ -475,10 +475,28 @@ try {
   check("plate: two programs verified OK, machine limits OK, XYZ toolpaths", ptabs.length === 2 && ptabs.every((t) => t.endsWith("OK")) && /Machine limits: OK/.test(plimits) && pkinds === "2,3", `${ptabs.join(", ")}; kinds ${pkinds}`);
   await sleep(1500);
   await shot("07_plate");
+  // batch simulation of the block: dome finished with no gouge, no rapids through stock
   await js("document.getElementById('simulate').click()");
-  await waitFor(() => js("document.getElementById('error').textContent"), "the 3-axis simulation message", 30000);
-  const psim = await js("document.getElementById('error').textContent");
-  check("plate: the rotary simulation declines 3-axis setups with a message", /3-axis/.test(psim), psim.slice(0, 90));
+  await waitDone("plate simulation", 240000);
+  await js("document.querySelectorAll('#tabs button')[1].click()");
+  await sleep(1000);
+  const psim = await js("document.getElementById('summary').innerText.split('\\n').pop()");
+  const pleft = parseFloat((psim.match(/left max ([0-9.]+)/) || [])[1]);
+  check("plate simulated: dome finished, no gouge, no rapids through stock", /deepest gouge 0\.00\d mm; 0 rapid/.test(psim) && pleft < 0.5, psim);
+  await shot("08_plate_simulated");
+  // machining playback: to the end, every operation's colour on the block
+  await js("document.getElementById('simOpen').click()");
+  await waitFor(() => js("window.__4cam.state.machining.open && !!window.__4cam.state.machining.stockMesh"), "the plate machining view", 60000);
+  const psegs = await js("window.__4cam.state.machining.session.segments");
+  await js(`document.getElementById('simScrub').value = '${psegs}'; document.getElementById('simScrub').dispatchEvent(new Event('input')); true`);
+  await waitFor(() => js(`window.__4cam.state.machining.pos === ${psegs} && !window.__4cam.state.machining.busy`), "the plate playback to finish", 120000);
+  const ptags = await js("[...new Set(window.__4cam.state.machining.op)].sort((a, b) => a - b).join(',')");
+  const pz = await js("(() => { const m = window.__4cam.state.machining; const nx = m.session.grid.nx; const at = (x, y) => m.r[Math.floor(y / 0.25) * nx + Math.floor(x / 0.25)]; return [at(15, 20), at(40, 6), at(46, 20)].map(v => v.toFixed(2)).join(','); })()");
+  const vtx = await js("(() => { const m = window.__4cam.state.machining; const nx = m.session.grid.nx; const k = Math.floor(20 / 0.25) * nx + Math.floor(15 / 0.25); return m.stockMesh.geometry.attributes.position.array[3 * k + 2].toFixed(2); })()");
+  check("plate playback: block cut by all six operations (five + the added drill), mesh follows the engine", ptags === "1,2,3,4,5,6" && pz.startsWith("-3.50,-4.50,") && Math.abs(parseFloat(pz.split(",")[2]) + 0.5) < 0.03 && vtx === "-3.50", `tags ${ptags}; pocket, hole, dome top ${pz}; vertex ${vtx}`);
+  await sleep(800);
+  await shot("09_plate_machining");
+  await js("document.getElementById('simClose').click(); true");
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await settle();
 

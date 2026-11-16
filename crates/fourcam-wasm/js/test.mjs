@@ -103,6 +103,27 @@ for (const p of pl.programs) {
   for (let i = 3; i < p.toolpath.points.length; i += 4) kinds.add(p.toolpath.points[i]);
   assert.deepEqual([...kinds].sort(), [2, 3]);
 }
-assert.ok(cam.simulate(plate, {}, dome).error.includes("3-axis"));
+// 3-axis simulation: the block after each program, compared with the dome
+const psim = cam.simulate(plate, {}, dome);
+assert.ok(!psim.error, psim.error);
+assert.equal(psim.kind, "xyz");
+assert.deepEqual([psim.grid.nx, psim.grid.ny, psim.grid.cell], [240, 160, 0.25]);
+assert.deepEqual(psim.stocks.map((s) => s.rapid_hits), [0, 0]);
+assert.equal(psim.stocks[1].gouge_cells, 0);
+const top = (s, x, y) => s.z[Math.floor(y / 0.25) * 240 + Math.floor(x / 0.25)];
+assert.ok(Math.abs(top(psim.stocks[0], 15, 20) + 3.5) < 1e-5, "pocket floor");
+assert.ok(Math.abs(top(psim.stocks[0], 40, 6) + 4.5) < 1e-5, "hole bottom");
+// playback reaches the batch result, with every cut cell tagged by its operation
+const po = cam.simOpen(plate, {}, dome);
+assert.ok(!po.error, po.error);
+assert.equal(po.kind, "xyz");
+assert.deepEqual(po.ops.map((o) => o.kind), ["face", "pocket", "drill", "contour", "raster3d"]);
+const end = cam.simSeek(po.segments);
+assert.deepEqual(end.rows, [0, 159]);
+const zEnd = new Float32Array(Uint8Array.from(atob(end.z), (c) => c.charCodeAt(0)).buffer);
+assert.deepEqual([...zEnd], psim.stocks[1].z);
+const tags = new Uint16Array(Uint8Array.from(atob(end.op), (c) => c.charCodeAt(0)).buffer);
+assert.equal(tags[Math.floor(20 / 0.25) * 240 + Math.floor(15 / 0.25)], 2, "pocket floor cut by op 2");
+console.log(`3-axis simulation: ${po.segments} moves, ${po.ops.length} operations, dome max left ${psim.stocks[1].max_left.toFixed(3)} mm`);
 console.log(`3-axis plate: ${pl.programs.map((p) => `${p.name} ${p.lines} lines`).join(", ")}`);
 console.log("wasm OK");

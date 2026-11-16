@@ -1,6 +1,6 @@
 // 4cam web UI: job editor -> engine (WebAssembly, in a worker) -> G-code, checks, previews.
 
-import { cylinder, heightmapSolid, revolveProfile } from "./meshes.js";
+import { blockSolid, cylinder, heightmapSolid, revolveProfile } from "./meshes.js";
 import { setupMachining } from "./machining.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
@@ -490,6 +490,9 @@ async function updateView() {
     // closed solids (web/meshes.js): caps and shoulder faces, outward winding, front faces only
     const stockMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.15, depthWrite: false });
     const sb = res.stock_box;
+    $("viewNote").textContent = sb
+      ? "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. Vise setup: the block stays put and the tool moves in X, Y and Z (Z0 = top of the stock)."
+      : "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. The part turns, so the path is drawn around it (A rotates about X).";
     if (sb) {
       // vise setup: the block in work coordinates (Z up)
       const size = [0, 1, 2].map((k) => sb.max[k] - sb.min[k]);
@@ -531,7 +534,7 @@ async function updateView() {
     v.simKey = simKey;
     clear(groups.sim);
     const s = state.sim?.stocks?.[state.tab];
-    if (s) groups.sim.add(simMesh(THREE, state.sim, s.r));
+    if (s) groups.sim.add(simMesh(THREE, state.sim, s));
   }
   groups.sim.visible = $("showSim").checked;
   groups.part.visible = $("showPart").checked && !(groups.sim.children.length && groups.sim.visible);
@@ -570,10 +573,13 @@ function toGeometry(THREE, m) {
   return g;
 }
 
-/** Simulated stock -> closed solid around X, coloured by material left over the part. */
-function simMesh(THREE, sim, r) {
-  const color = (k) => (sim.part[k] > 0 ? ramp((r[k] - sim.part[k]) / 0.5) : [0.75, 0.75, 0.75]);
-  const m = heightmapSolid(sim.grid, r, color);
+/** Simulated stock -> closed solid (a bar around X, or a 3-axis block), coloured by material
+ * left over the part (grey where there is no part). */
+function simMesh(THREE, sim, s) {
+  const r = sim.kind === "xyz" ? s.z : s.r;
+  const has = (k) => (sim.kind === "xyz" ? sim.part[k] != null : sim.part[k] > 0);
+  const color = (k) => (has(k) ? ramp((r[k] - sim.part[k]) / 0.5) : [0.75, 0.75, 0.75]);
+  const m = sim.kind === "xyz" ? blockSolid(sim.grid, r, sim.stock_box.min[2], color) : heightmapSolid(sim.grid, r, color);
   return new THREE.Mesh(toGeometry(THREE, m), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }));
 }
 

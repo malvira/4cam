@@ -134,4 +134,10 @@ fn plate_cuts_what_each_operation_promises() {
     assert!(worst.0 < 0.25, "dome left {:.3} high", worst.0);
     near(38.0, 12.0, -4.5, 0.01, "raster floor beside the dome");
     near(46.0, 20.0, -0.5, 0.02, "dome top");
+    // the engine's own comparison with the part mesh agrees: no gouged cells over the dome
+    let (job, dir) = plate();
+    let mesh = load_mesh(&job, &dir).unwrap().unwrap();
+    let part = fourcam::sim3::part_top(&hm, &mesh);
+    let d = fourcam::sim3::deviation3(&hm, &part, 0.02);
+    assert!(d.cells > 1500 && d.gouge_cells == 0, "{d:?}");
 }

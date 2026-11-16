@@ -111,6 +111,45 @@ export function heightmapSolid(grid, r, color) {
 }
 
 /**
+ * Closed solid from a 3-axis block heightmap (grid {x0, y0, cell, nx, ny}, tops z[j * nx + i],
+ * flat bottom at `bottom`) with an optional per-cell colour. The top vertices sit at cell
+ * centres and come first (vertex k is cell k), and the side walls share them, so updating
+ * vertex k's Z moves the surface and the walls together.
+ */
+export function blockSolid(grid, z, bottom, color) {
+  const { x0, y0, cell, nx, ny } = grid;
+  const b = new Builder();
+  if (nx < 2 || ny < 2) return b.done();
+  const cx = (i) => x0 + (i + 0.5) * cell, cy = (j) => y0 + (j + 0.5) * cell;
+  const col = color ? (k) => color(k) : () => null;
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) b.vertex(cx(i), cy(j), z[j * nx + i], col(j * nx + i));
+  // top: counter-clockwise seen from above (normal +Z)
+  for (let j = 0; j + 1 < ny; j++)
+    for (let i = 0; i + 1 < nx; i++) {
+      const a = j * nx + i, r = a + 1, d = a + nx, c = d + 1;
+      b.tri(a, r, c);
+      b.tri(a, c, d);
+    }
+  // boundary loop, counter-clockwise seen from above
+  const loop = [];
+  for (let i = 0; i < nx - 1; i++) loop.push(i);
+  for (let j = 0; j < ny - 1; j++) loop.push(j * nx + nx - 1);
+  for (let i = nx - 1; i > 0; i--) loop.push((ny - 1) * nx + i);
+  for (let j = ny - 1; j > 0; j--) loop.push(j * nx);
+  const low = loop.map((k) => b.vertex(b.pos[3 * k], b.pos[3 * k + 1], bottom, col(k)));
+  for (let t = 0; t < loop.length; t++) {
+    const u = (t + 1) % loop.length;
+    const [p, q, P, Q] = [loop[t], loop[u], low[t], low[u]];
+    b.tri(q, p, P);
+    b.tri(q, P, Q);
+  }
+  // bottom: fan from the centre (normal -Z)
+  const mid = b.vertex(x0 + (nx * cell) / 2, y0 + (ny * cell) / 2, bottom, col(0));
+  for (let t = 0; t < low.length; t++) b.tri(mid, low[(t + 1) % low.length], low[t]);
+  return b.done();
+}
+
+/**
  * Check a mesh is a closed, consistently oriented surface: after welding equal positions,
  * every edge is used exactly twice, once in each direction. Returns { closed, volume,
  * badEdges, triangles }.

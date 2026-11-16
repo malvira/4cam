@@ -96,8 +96,12 @@ goldens are still byte-identical.
    - CLI previews (top + front view), web app: example, setup-filtered operation types, forms
      for rectangles and point lists, XYZ path and block in the 3D and side views.
 
-   Not yet: 3-axis machining simulation in the web app (the engine's is used by tests),
-   non-rectangular pockets, waterline, tool-holder checks.
+   Web machining simulation for vise setups (added after the phase): `sim3::Playback3` and
+   the WASM `simulate`/`simOpen`/`simSeek` handle box setups; the web app shows the block as a
+   closed solid, coloured by the operation that cut each cell, with the same playback
+   controls, legend and Simulate view as rotary setups.
+
+   Not yet: non-rectangular pockets, waterline, tool-holder checks.
 
 ## Next candidates
 
