@@ -9,6 +9,7 @@ pub mod engrave;
 pub mod estimate;
 pub mod geom;
 pub mod geometry;
+pub mod gpu_input;
 pub mod job;
 pub mod machine;
 pub mod mesh;

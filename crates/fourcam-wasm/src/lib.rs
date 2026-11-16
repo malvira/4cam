@@ -617,6 +617,205 @@ pub mod api {
 
     thread_local! {
         static SESSION: std::cell::RefCell<Option<Session>> = const { std::cell::RefCell::new(None) };
+        static GPU_SESSION: std::cell::RefCell<Option<GpuSession>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// What `gpu_stats` needs to turn the browser's GPU keys into a report.
+    #[allow(clippy::large_enum_variant)]
+    enum GpuSession {
+        Rotary {
+            start: sim::RadialMap,
+            part: sim::Part,
+            x_range: (f64, f64),
+            intended: std::collections::HashSet<u16>,
+        },
+        Block {
+            start: sim3::Heightmap3,
+            zbase: f64,
+            part: Vec<Option<f64>>,
+            intended: std::collections::HashSet<u16>,
+        },
+    }
+
+    fn u32s(v: &[u32]) -> String {
+        b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+    }
+
+    /// Inputs for the browser's WebGPU stock simulation (web/gpu/stamp.wgsl) at the asked-for
+    /// resolution: the tool positions (`words`, 16 u32 each), where each segment's and each
+    /// program's positions start, which segments are rapids, the starting keys, the grid and
+    /// the part map. An error means "use the CPU" (indexed 3+1 moves, more than 255
+    /// operations, too large a grid).
+    pub fn gpu_open(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+            Ok(t) => t,
+            Err(e) => return err(e),
+        };
+        let cutters = cutters_of(&job);
+        let intended = fourcam::intended_tags(&job, &tps);
+        let names: Vec<&str> = tps.iter().map(|t| t.name.as_str()).collect();
+        let pack = |input: &fourcam::gpu_input::GpuInput| {
+            json!({
+                "words": u32s(&input.words),
+                "positions": input.len(),
+                "seg_start": u32s(&input.seg_start),
+                "seg_rapid": b64(&input.seg_rapid.iter().map(|&r| u8::from(r)).collect::<Vec<u8>>()),
+                "prog_seg": input.prog_seg,
+            })
+        };
+        if let Some(sb) = job.stock_box {
+            let hm = sim3::Heightmap3::new(&sb, cell_for(&sb, &opts));
+            if hm.z.len() > sim::MAX_CELLS {
+                return err("simulation grid too fine");
+            }
+            let step = (hm.cell * 0.5).min(0.1);
+            let input = match fourcam::gpu_input::block(&hm, &tps, &cutters, step) {
+                Ok(i) => i,
+                Err(e) => return err(e),
+            };
+            let part = mesh
+                .as_ref()
+                .map(|m| sim3::part_top(&hm, m))
+                .unwrap_or_else(|| vec![None; hm.z.len()]);
+            let keys = fourcam::gpu_input::block_keys(&hm, input.zbase);
+            let out = json!({
+                "kind": "xyz",
+                "grid": grid_xyz(&hm),
+                "zbase": input.zbase,
+                "stock_box": sb,
+                "keys": u32s(&keys),
+                "input": pack(&input),
+                "programs": names,
+                "part": part.iter().map(|p| p.map(|v| v as f32)).collect::<Vec<_>>(),
+            });
+            GPU_SESSION.with(|g| {
+                *g.borrow_mut() = Some(GpuSession::Block {
+                    start: hm,
+                    zbase: input.zbase,
+                    part,
+                    intended,
+                })
+            });
+            return out;
+        }
+        let (dx, na) = rotary_res(&opts);
+        let res = match simulate_job(&job, &[], mesh.as_ref(), dx, na, 0.02) {
+            Ok(r) => r,
+            Err(e) => return err(e),
+        };
+        let grid = res.stock.grid;
+        let input = match fourcam::gpu_input::rotary(grid, &tps, &cutters, (dx * 2.0).min(0.1)) {
+            Ok(i) => i,
+            Err(e) => return err(e),
+        };
+        let start = sim::RadialMap::filled(grid, job.stock.radius);
+        let keys = fourcam::gpu_input::rotary_keys(&start);
+        let x_range = match (mesh.as_ref().and_then(|m| m.bounds()), &job.part.profile) {
+            (Some((lo, hi)), _) => (lo[0], hi[0]),
+            (None, Some(p)) => {
+                let g = fourcam::geom::RevolvedProfile::new(p, job.stock.radius);
+                (g.x_min(), g.x_max())
+            }
+            _ => (grid.x0, grid.x0 + grid.dx * grid.nx as f64),
+        };
+        let out = json!({
+            "kind": "rotary",
+            "grid": {"x0": grid.x0, "dx": grid.dx, "nx": grid.nx, "na": grid.na},
+            "stock_radius": job.stock.radius,
+            "keys": u32s(&keys),
+            "input": pack(&input),
+            "programs": names,
+            "part": res.part.center.r,
+        });
+        GPU_SESSION.with(|g| {
+            *g.borrow_mut() = Some(GpuSession::Rotary {
+                start,
+                part: res.part,
+                x_range,
+                intended,
+            })
+        });
+        out
+    }
+
+    /// The report for one program's stock as the GPU left it: `keys` (u32 little-endian, as
+    /// read back) after the program; `opts` {rapid_hits}.
+    pub fn gpu_stats(opts: &str, keys: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let keys: Vec<u32> = keys
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
+            .collect();
+        GPU_SESSION.with(|g| {
+            let g = g.borrow();
+            let Some(sess) = g.as_ref() else {
+                return err("no GPU session (call gpu_open)");
+            };
+            let dev = match sess {
+                GpuSession::Rotary {
+                    start,
+                    part,
+                    x_range,
+                    intended,
+                } => {
+                    if keys.len() != start.r.len() {
+                        return err("keys do not match the grid");
+                    }
+                    let mut st = start.clone();
+                    fourcam::gpu_input::rotary_from_keys(
+                        &mut st,
+                        &fourcam::gpu_input::rotary_keys(start),
+                        &keys,
+                    );
+                    sim::deviation_with(&st, part, x_range.0, x_range.1, 0.02, &|t| {
+                        intended.contains(&t)
+                    })
+                }
+                GpuSession::Block {
+                    start,
+                    zbase,
+                    part,
+                    intended,
+                } => {
+                    if keys.len() != start.z.len() {
+                        return err("keys do not match the grid");
+                    }
+                    let mut hm = start.clone();
+                    fourcam::gpu_input::block_from_keys(
+                        &mut hm,
+                        *zbase,
+                        &fourcam::gpu_input::block_keys(start, *zbase),
+                        &keys,
+                    );
+                    sim3::deviation3_with(&hm, part, 0.02, &|t| intended.contains(&t))
+                }
+            };
+            json!({
+                "max_left": dev.max_left,
+                "mean_left": dev.mean_left,
+                "max_gouge": dev.max_gouge,
+                "gouge_cells": dev.gouge_cells,
+                "feature_cells": dev.feature_cells,
+                "rapid_hits": opts["rapid_hits"].as_u64().unwrap_or(0),
+            })
+        })
     }
 
     /// Standard base64 of raw bytes (typed arrays travel this way: 4/3 the size of the data).
@@ -941,6 +1140,8 @@ pub mod api {
             "svg_paths" => svg_paths(&s(a), &s(b)),
             "estimate_gcode" => estimate_gcode(&s(a), &s(b)),
             "sim_grid" => sim_grid(&s(a), &s(b), c),
+            "gpu_open" => gpu_open(&s(a), &s(b), c),
+            "gpu_stats" => gpu_stats(&s(a), c),
             other => err(format!("unknown function {other:?}")),
         }
     }

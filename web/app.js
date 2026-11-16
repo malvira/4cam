@@ -1,6 +1,7 @@
 // 4cam web UI: job editor -> engine (WebAssembly, in a worker) -> G-code, checks, previews.
 
 import { blockSolid, cylinder, heightmapSolid, revolveProfile } from "./meshes.js";
+import { gpuDevice, simulateOnGpu } from "./gpu/gpusim.js";
 import { setupMachining } from "./machining.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
@@ -238,8 +239,21 @@ function simOpts() {
 
 function saveSimRes() {
   try {
-    localStorage.setItem("4cam.simRes", JSON.stringify({ v: $("simRes").value, dx: $("simDx").value, deg: $("simDeg").value, cell: $("simCell").value }));
+    localStorage.setItem("4cam.simRes", JSON.stringify({ v: $("simRes").value, dx: $("simDx").value, deg: $("simDeg").value, cell: $("simCell").value, gpu: $("simGpu").checked }));
   } catch {}
+}
+
+/** The GPU to simulate on (null: the WASM CPU simulation) and why not, for the label. */
+async function simGpu() {
+  if (!$("simGpu").checked) return { gpu: null, why: "GPU off" };
+  if (!navigator.gpu) return { gpu: null, why: "no WebGPU in this browser" };
+  const gpu = await gpuDevice();
+  return gpu ? { gpu, why: "" } : { gpu: null, why: "no GPU adapter" };
+}
+
+function showBackend(text) {
+  state.simBackend = text;
+  $("simBackend").textContent = text ? `last run: ${text}` : "";
 }
 
 function loadSimRes() {
@@ -250,6 +264,7 @@ function loadSimRes() {
       $("simDx").value = s.dx;
       $("simDeg").value = s.deg;
       $("simCell").value = s.cell;
+      if (s.gpu != null) $("simGpu").checked = s.gpu;
     }
   } catch {}
 }
@@ -294,7 +309,7 @@ async function confirmSimRes() {
   return true;
 }
 
-for (const id of ["simRes", "simDx", "simDeg", "simCell"]) {
+for (const id of ["simRes", "simDx", "simDeg", "simCell", "simGpu"]) {
   $(id).addEventListener("change", () => {
     saveSimRes();
     updateSimResInfo();
@@ -314,7 +329,23 @@ async function simulate() {
   $("generate").disabled = $("simulate").disabled = true;
   setStatus("Simulating stock...", "busy");
   try {
-    const { result, ms } = await engine("simulate", state.job, simOpts(), state.mesh);
+    const t0 = performance.now();
+    let result = null;
+    const { gpu, why } = await simGpu();
+    let backend = `CPU (${why})`;
+    if (gpu) {
+      try {
+        const { result: open } = await engine("gpuOpen", state.job, { ...simOpts(), libraries: libraries() }, state.mesh);
+        result = await simulateOnGpu(gpu, open, async (o, bytes) => (await engine("gpuStats", o, bytes)).result);
+        backend = `GPU (${gpu.name})`;
+      } catch (e) {
+        // the engine refuses some jobs on the GPU (indexed 3+1 moves): the CPU does them
+        backend = `CPU (${e.message})`;
+      }
+    }
+    if (!result) result = (await engine("simulate", state.job, simOpts(), state.mesh)).result;
+    const ms = performance.now() - t0;
+    showBackend(backend);
     state.sim = result;
     selectTab(state.tab);
     const s = result.stocks[state.tab];
@@ -1030,7 +1061,7 @@ window.__4cam.tree = setupTree({
 $("job").addEventListener("change", () => window.__4cam.tree.refresh());
 
 // ---------------------------------------------------------------- machining simulation
-window.__4cam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes });
+window.__4cam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend });
 window.__4cam.updateSimResInfo = updateSimResInfo;
 
 // ---------------------------------------------------------------- view hooks (used by the e2e test)

@@ -6,6 +6,7 @@
 // tool moves in XYZ).
 
 import { blockSolid, heightmapSolid } from "./meshes.js";
+import { GpuStock } from "./gpu/gpusim.js";
 
 const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"];
 const UNCUT = [0.62, 0.64, 0.68];
@@ -21,7 +22,7 @@ const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 2
 const DISPLAY_MAX = 1_000_000;
 const PLAY_MAX = 250_000;
 
-export function setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes }) {
+export function setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend }) {
   const m = {
     open: false,
     session: null, // sim_open result (+ decoded arrays)
@@ -225,18 +226,20 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // the work turns by A (right-handed about +X; 0 on a vise); the tool stands at its tip
     v.groups.work.rotation.x = (a * Math.PI) / 180;
     v.groups.toolModel.position.set(x, y, z);
-    $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where}`;
+    $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.gpu ? "GPU" : "CPU"}`;
   }
 
   /** Apply a sim_seek result: rows changed -> update vertices and colours in place. */
   function applyRows(res) {
     m.pos = res.pos;
     if (res.rows) {
-      // the engine mirror first (rows of C cells), then the display rows they fall in
+      // the engine mirror first (rows of C cells), then the display rows they fall in; the
+      // WASM playback sends base64, the GPU one typed arrays
       const { C } = dims();
       const [r0] = res.rows;
-      m.r.set(f32(m.xyz ? res.z : res.r), r0 * C);
-      m.op.set(u16(res.op), r0 * C);
+      const h = m.xyz ? res.z : res.r;
+      m.r.set(typeof h === "string" ? f32(h) : h, r0 * C);
+      m.op.set(typeof res.op === "string" ? u16(res.op) : res.op, r0 * C);
     }
     const k = m.stride;
     if (res.rows && m.stockMesh && m.xyz) {
@@ -289,7 +292,18 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     try {
       while (m.target !== m.pos) {
         const want = m.target;
-        const { result } = await engine("simSeek", want);
+        let result;
+        if (m.gpu) {
+          // on the GPU: run the segments, read back only the rows they touched
+          const rows = m.gpu.seek(want);
+          result = { pos: m.gpu.pos, rows: null };
+          if (rows) {
+            const { h, op } = m.gpu.decode(await m.gpu.readRows(rows[0], rows[1]));
+            result = { pos: m.gpu.pos, rows, [m.xyz ? "z" : "r"]: h, op };
+          }
+        } else {
+          result = (await engine("simSeek", want)).result;
+        }
         applyRows(result);
         if (result.pos === want || m.target === want) break;
       }
@@ -322,6 +336,27 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.op = new Uint16Array(n);
       m.pos = 0;
       m.stride = strideFor(DISPLAY_MAX);
+      // the stock on the GPU when there is one and the engine offers the job to it
+      m.gpu?.destroy();
+      m.gpu = null;
+      const { gpu, why } = simGpu ? await simGpu() : { gpu: null, why: "" };
+      let backend = `CPU (${why})`;
+      if (gpu) {
+        try {
+          const { result: g } = await engine("gpuOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup }, state.mesh);
+          const same = m.xyz ? g.grid.nx === result.grid.nx && g.grid.ny === result.grid.ny : g.grid.nx === result.grid.nx && g.grid.na === result.grid.na;
+          if (!same || g.input.seg_start.length === 0) throw new Error("grid mismatch");
+          m.gpu = new GpuStock(gpu, g);
+          if (m.gpu.segments !== result.segments) throw new Error(`segments ${m.gpu.segments} vs ${result.segments}`);
+          backend = `GPU (${gpu.name})`;
+        } catch (e) {
+          m.gpu?.destroy();
+          m.gpu = null;
+          backend = `CPU (${e.message})`;
+        }
+      }
+      m.backend = backend;
+      showBackend?.(backend);
       await engine("simSeek", 0);
       renderLegend();
       await buildScene();
@@ -340,6 +375,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function close() {
     m.playing = false;
     m.open = false;
+    m.gpu?.destroy();
+    m.gpu = null;
     $("simControls").classList.add("hidden");
     $("simPlay").textContent = "Play";
     document.body.dataset.machining = "";

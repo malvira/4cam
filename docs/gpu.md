@@ -187,3 +187,48 @@ does not yet simulate on the GPU:
 - 3-axis (block) grids;
 - playback (one tool position at a time is a poor fit; it needs batched seeks);
 - the report statistics, which still come from the CPU run.
+
+## D: WebGPU in the web app (done)
+
+**What changed.**
+- **One shader, two hosts.** `web/gpu/stamp.wgsl` is used natively (`fourcam-gpu`) and in
+  the browser. It has two modes: rotary (radial stamp) and block (3-axis heightmap).
+- **Inputs from the engine.** The tool positions come from `fourcam::gpu_input`, which has
+  no GPU dependency, so the WASM build provides them: `gpuOpen` returns the positions,
+  per-segment and per-program ranges, rapid flags, starting keys and the part map.
+- **Report numbers stay in the engine.** `gpuStats` turns a GPU stock into its report
+  (material left, gouges, intended-feature cells) with the same rules as the CPU.
+- **Rapids through stock, on the GPU too.** Each rapid segment gets a dispatch of its own,
+  after the cuts before it (WebGPU keeps dispatches in order). The shader's `atomicMin`
+  returns the old height, and a rapid that lowers a cell by more than 1 µm flags its
+  segment. A native test checks the GPU flags the same move as the CPU.
+- **Browser runner.** `web/gpu/gpusim.js` is used by Simulate and by machining playback.
+  Playback keeps the stock on the GPU, reads back only the rows a seek touched, and keeps
+  GPU-side snapshots so jumping back is a buffer copy.
+- **Fallback.** It falls back to the WASM simulation, and says why next to the grid line
+  ("last run: GPU (...)" / "CPU (...)"), in these cases:
+  - no WebGPU in the browser;
+  - no adapter;
+  - "use the GPU" unticked;
+  - jobs the engine keeps on the CPU: indexed 3+1 moves, more than 255 operations.
+
+**Why indexed moves stay on the CPU.** Their stamp cuts a cell only when its surface point
+is already inside the tool. That depends on the order cuts arrive in, which concurrent GPU
+threads can't reproduce.
+
+**Checks.** Native, against the CPU: knob, ring, plate and plaque all within 1 µm, with
+identical tags and the same rapids through stock. Browser e2e (headless Chrome with
+`--enable-unsafe-webgpu`; on this PC it gets the RTX 5080):
+
+| Check | Result |
+| --- | --- |
+| Simulate, knob (rotary): GPU vs CPU | within 0.001 mm, identical report numbers |
+| Simulate, plate (3-axis): GPU vs CPU | within 0.001 mm, identical report numbers |
+| Playback to the end on the GPU vs the CPU's batch stock | within 0.001 mm, label "GPU" |
+| Indexed knob with the GPU on | falls back: "CPU (indexed 3+1 moves are simulated on the CPU)" |
+
+Where there is no WebGPU, as on CI, the same checks assert the labelled fallback.
+
+**Speed in the browser.** Knob at Ultra (1.6M cells), machining playback on the GPU: to the
+last of 36 898 moves in 0.26 s; back to the middle in 0.16 s.
+

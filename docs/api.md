@@ -64,6 +64,9 @@ All calls take and return JSON. No wasm-bindgen is needed.
   - `faceRegions(doc, model, mesh)` returns the model's faces with stable ids;
   - `wizardKnurl(doc, params, mesh)` runs the knurl wizard.
 - **Simulation:**
+  - `gpuOpen(doc, {res, dx, na, cell, setup}, mesh)` / `gpuStats(opts, keyBytes)`: inputs
+    for the WebGPU stock simulation (`web/gpu/stamp.wgsl`, run by `web/gpu/gpusim.js`) and
+    the report for a stock it produced; an error means "simulate on the CPU";
   - `simGrid(doc, {res, dx, na, cell, setup}, mesh)` gives the grid a resolution makes
     (cells, memory) before running; `res` is coarse, normal, fine or ultra;
   - `simulate(doc, {res, dx, na, cell}, mesh)` simulates material removal for the whole job.

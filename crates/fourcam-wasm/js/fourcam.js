@@ -77,5 +77,8 @@ export async function load(source) {
     estimateGcode: (gcode, machine) => call("estimate_gcode", gcode, machine || ""),
     // simulation grid for {res: coarse|normal|fine|ultra, dx, na, cell, setup}: cells, memory
     simGrid: (job, opts, meshBytes) => call("sim_grid", job, opts || {}, meshBytes),
+    // WebGPU stock simulation: inputs for web/gpu/stamp.wgsl, then the report for a stock
+    gpuOpen: (job, opts, meshBytes) => call("gpu_open", job, opts || {}, meshBytes),
+    gpuStats: (opts, keyBytes) => call("gpu_stats", opts || {}, "", keyBytes),
   };
 }

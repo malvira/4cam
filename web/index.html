@@ -110,6 +110,10 @@
         <input id="simCell" type="number" step="0.01" min="0.01" value="0.25" size="5" title="3-axis: cell size (mm)" aria-label="3-axis cell size (mm)"> mm
       </span>
     </div>
+    <div class="row small">
+      <label><input id="simGpu" type="checkbox" checked> use the GPU (WebGPU) when there is one</label>
+      <span id="simBackend" class="muted" title="where the last simulation ran"></span>
+    </div>
     <div id="simResInfo" class="small muted"></div>
     <div id="error" class="error hidden" role="alert"></div>
   </section>

@@ -96,7 +96,10 @@ mkdirSync(downloads);
 const dport = await freePort();
 const browser = spawn(findBrowser(), [
   "--headless=new", `--remote-debugging-port=${dport}`, `--user-data-dir=${profile}`,
-  "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--window-size=1400,900", "about:blank",
+  "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--window-size=1400,900",
+  // WebGPU in headless mode, where the machine has a GPU (the GPU checks fall back otherwise)
+  "--enable-unsafe-webgpu", "--enable-gpu",
+  "about:blank",
 ], { stdio: "ignore" });
 children.push(browser);
 const version = await waitFor(() => fetch(`http://127.0.0.1:${dport}/json/version`).then((r) => r.json()), "the browser", 20000);
@@ -549,6 +552,53 @@ try {
   check("Ultra grid: display decimated to at most 1M cells, still watertight", u.cells > 1e6 && u.s >= 2 && u.disp <= 1e6 && ultraClosed === true, `${ultra}; closed ${ultraClosed}`);
   const remembered = await js("JSON.parse(localStorage.getItem('4cam.simRes')).v");
   check("the resolution setting is remembered", remembered === "normal", remembered);
+
+  // 8h. WebGPU stock simulation against the CPU (WASM): Simulate and playback, rotary and
+  // 3-axis; indexed jobs and "GPU off" fall back and say so
+  const webgpu = String(await js("const adp = navigator.gpu ? await navigator.gpu.requestAdapter() : null; String(!!adp)")) === "true";
+  const simulateWith = async (gpuOn) => {
+    await js(`document.getElementById('simGpu').checked = ${gpuOn}; window.__4cam.state.sim = null; document.getElementById('simulate').click(); true`);
+    await waitFor(() => js("!!window.__4cam.state.sim && document.body.dataset.state !== 'busy'"), "the simulation", 240000);
+    await settle();
+    return js("window.__4cam.state.simBackend");
+  };
+  const keepStocks = (name) => js(`window.__${name} = window.__4cam.state.sim.stocks.map(s => ({ h: Array.from(s.r || s.z), g: s.max_gouge, l: s.max_left, f: s.feature_cells, rh: s.rapid_hits })); true`);
+  const compareStocks = () => js("let md = 0; window.__gpuS.forEach((s, p) => s.h.forEach((v, k) => { md = Math.max(md, Math.abs(v - window.__cpuS[p].h[k])); })); JSON.stringify({ md, gpu: window.__gpuS.map(s => [s.l.toFixed(3), s.rh, s.f]), cpu: window.__cpuS.map(s => [s.l.toFixed(3), s.rh, s.f]) })");
+  for (const [ex, label] of [["knob", "rotary knob"], ["plate", "3-axis plate"]]) {
+    await js(`document.getElementById('example').value = '${ex}'; document.getElementById('loadExample').click(); true`);
+    await settle();
+    await sleep(1500);
+    await js("document.getElementById('generate').click()");
+    await waitDone(`${ex} generation for the GPU check`, 240000);
+    const bg = await simulateWith(true);
+    await keepStocks("gpuS");
+    const bc = await simulateWith(false);
+    await keepStocks("cpuS");
+    const cmp = JSON.parse(await compareStocks());
+    if (webgpu) {
+      check(`WebGPU Simulate matches the CPU within 2 um (${label})`, String(bg).startsWith("GPU") && bc === "CPU (GPU off)" && cmp.md <= 0.002 && JSON.stringify(cmp.gpu) === JSON.stringify(cmp.cpu), `${bg} vs ${bc}; max difference ${cmp.md.toFixed(4)} mm; ${JSON.stringify(cmp.gpu)}`);
+    } else {
+      check(`no WebGPU here: Simulate falls back to the CPU and says why (${label})`, String(bg).startsWith("CPU (") && cmp.md === 0, `${bg}`);
+    }
+  }
+  // playback on the GPU ends where the batch simulation does (the plate, Normal grid)
+  await js("document.getElementById('simGpu').checked = true; document.getElementById('simOpen').click(); true");
+  await waitFor(() => js("window.__4cam.state.machining.open && !!window.__4cam.state.machining.stockMesh"), "the plate machining view", 60000);
+  const pn = await js("window.__4cam.state.machining.session.segments");
+  await js(`document.getElementById('simScrub').value = '${pn}'; document.getElementById('simScrub').dispatchEvent(new Event('input')); true`);
+  await waitFor(() => js(`window.__4cam.state.machining.pos === ${pn} && !window.__4cam.state.machining.busy`), "the playback to the end", 120000);
+  const pb = JSON.parse(await js("const mm = window.__4cam.state.machining; let md2 = 0; const last = window.__cpuS[window.__cpuS.length - 1].h; mm.r.forEach((v, k) => { md2 = Math.max(md2, Math.abs(v - last[k])); }); JSON.stringify({ md: md2, backend: mm.backend, label: document.getElementById('simLabel').textContent })"));
+  await js("document.getElementById('simClose').click(); true");
+  check(webgpu ? "WebGPU playback ends at the CPU's stock within 2 um (label says GPU)" : "no WebGPU: playback runs on the CPU and says so", webgpu ? pb.backend.startsWith("GPU") && pb.label.endsWith("GPU") && pb.md <= 0.002 : pb.backend.startsWith("CPU") && pb.md <= 1e-6, `${pb.backend}; max difference ${pb.md.toFixed(4)} mm; ${pb.label}`);
+  // an indexed job: the engine keeps it on the CPU, with the reason shown
+  await js("document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");
+  await settle();
+  await sleep(1500);
+  await js("document.getElementById('generate').click()");
+  await waitDone("indexed knob generation for the GPU check", 240000);
+  const bi = await simulateWith(true);
+  check("indexed 3+1 jobs fall back to the CPU and say why", webgpu ? /^CPU \(indexed 3\+1/.test(bi) : String(bi).startsWith("CPU ("), bi);
+  await js("document.getElementById('simGpu').checked = true; document.getElementById('simGpu').dispatchEvent(new Event('change')); true");
 
   // 8d. relief plaque from a grayscale image: roughing + 45 deg parallel finish, simulated
   await js("document.getElementById('example').value = 'plaque'; document.getElementById('loadExample').click(); true");
