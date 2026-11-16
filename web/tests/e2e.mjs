@@ -334,7 +334,7 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
   const allKinds = await js("window.__4cam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers only rotary operation types", String(allKinds).split(",").length === 10 && !String(typesAll).includes("pocket"), `${typesAll} of ${allKinds}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 10 && String(typesAll).split(",").length === 10, `${typesAll}`);
   const filled = [];
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
@@ -349,7 +349,7 @@ try {
     await treeAct(id, "delete");
     await settle();
   }
-  check("every operation type's new form is fully filled and applies cleanly", filled.length === 5 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
+  check("every operation type's new form is fully filled and applies cleanly", filled.length === 10 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 15000);
@@ -497,6 +497,24 @@ try {
   await sleep(800);
   await shot("09_plate_machining");
   await js("document.getElementById('simClose').click(); true");
+  await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+  await settle();
+
+  // 8c. indexed 3+1 on the knob: D-flat at A0, cross hole at A90, simulated on the bar
+  await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");
+  await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 5"), "the indexed knob in the tree", 15000);
+  await js("document.getElementById('generate').click()");
+  await waitDone("indexed knob generation", 240000);
+  const itabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
+  const igold = await js("window.__4cam.state.result.programs.slice(0, 2).map(p => p.gcode)");
+  check("indexed knob: three programs OK, turning and knurl still the goldens", itabs.length === 3 && itabs.every((t) => t.endsWith("OK")) && igold[0] === golden("knob_1_profile") && igold[1] === golden("knob_2_knurl"), itabs.join(", "));
+  await js("document.getElementById('simulate').click()");
+  await waitDone("indexed knob simulation", 240000);
+  const iflat = await js("(() => { const s = window.__4cam.state.sim; const g = s.grid; const r = s.stocks[2].r; const at = (x, deg) => r[Math.floor((x - g.x0) / g.dx) * g.na + Math.floor(deg / 360 * g.na) % g.na]; return [at(-20.05, 90), at(-20.05, 270), at(-8.05, 0.5)].map(v => v.toFixed(2)).join(','); })()");
+  check("indexed knob simulated: flat at R2.5 on top, round below, hole to R6", iflat === "2.50,3.00,6.00", iflat);
+  await js("document.querySelectorAll('#tabs button')[2].click()");
+  await sleep(1500);
+  await shot("10_knob_indexed");
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await settle();
 

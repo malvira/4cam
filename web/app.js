@@ -134,16 +134,19 @@ async function loadExample(name) {
     writeJob(result);
     setMesh(null, "");
   } else {
-    const [file, mesh] = name === "plate" ? ["plate/plate.project.json", "plate/dome.stl"] : ["knob/knob_finish.job.json", "knob/knob.stl"];
+    const [file, mesh] = {
+      plate: ["plate/plate.project.json", "plate/dome.stl"],
+      knob_indexed: ["knob/knob_indexed.project.json", null],
+    }[name] || ["knob/knob_finish.job.json", "knob/knob.stl"];
     const [job, stl] = await Promise.all([
       fetch(`../examples/${file}`).then((r) => {
         if (!r.ok) throw new Error(`examples/${file} not found (serve the repository root)`);
         return r.json();
       }),
-      fetch(`../examples/${mesh}`).then((r) => (r.ok ? r.arrayBuffer() : null)),
+      mesh ? fetch(`../examples/${mesh}`).then((r) => (r.ok ? r.arrayBuffer() : null)) : null,
     ]);
     writeJob(job);
-    const meshName = mesh.split("/")[1];
+    const meshName = mesh?.split("/")[1];
     setMesh(stl ? new Uint8Array(stl) : null, stl ? `${meshName} (example)` : "");
   }
   // a 0.1 job names its machine; a project names one per setup

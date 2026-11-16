@@ -232,6 +232,7 @@ pub fn registry() -> Vec<OperationType> {
             group: "roughing",
             params: vec![
                 tool(),
+                p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
                 p("depth", "number", "mm", "How much to take off the top.").min(0.0),
                 p("step_down", "number", "mm", "Depth per pass.").min(0.01),
                 p("stepover", "number", "", "Stepover as a fraction of the tool diameter.").min(0.05).max(1.0),
@@ -250,6 +251,7 @@ pub fn registry() -> Vec<OperationType> {
             group: "roughing",
             params: vec![
                 tool(),
+                p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
                 p("rect", "rect", "mm", "[x0, y0, x1, y1] of the pocket."),
                 p("depth", "number", "mm", "Depth below the top.").min(0.01),
                 p("top", "number", "mm", "Top of the pocket (default: stock top).").opt(Value::Null),
@@ -270,6 +272,7 @@ pub fn registry() -> Vec<OperationType> {
             group: "feature",
             params: vec![
                 tool(),
+                p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
                 p("points", "points", "mm", "Hole centres as [[x, y], ...]."),
                 p("depth", "number", "mm", "Hole depth below the top.").min(0.01),
                 p("top", "number", "mm", "Top (default: stock top).").opt(Value::Null),
@@ -289,6 +292,7 @@ pub fn registry() -> Vec<OperationType> {
             group: "finishing",
             params: vec![
                 tool(),
+                p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
                 p("path", "points", "mm", "Closed outline as [[x, y], ...] (3 or more)."),
                 p("side", "choice", "", "Which side of the outline the tool runs on.").choices(&["outside", "inside", "on"]),
                 p("depth", "number", "mm", "Depth below the top.").min(0.01),
@@ -309,6 +313,7 @@ pub fn registry() -> Vec<OperationType> {
             group: "finishing",
             params: vec![
                 tool(),
+                p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
                 p("x_range", "vec2", "mm", "X extent of the tool centre."),
                 p("y_range", "vec2", "mm", "Y extent of the tool centre."),
                 p("stepover", "number", "mm", "Distance between passes.").min(0.01),
@@ -621,9 +626,13 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("plunge_feed".into(), json!(plunge));
         }
         "face" | "pocket" | "drill" | "contour" | "raster3d" => {
-            let sb = job
-                .stock_box
-                .ok_or(format!("{kind} needs box stock (a vise setup)"))?;
+            // the vise block, or around the bar over the part (indexed 3+1 on a rotary setup)
+            let rad = job.stock.radius;
+            let sb = job.stock_box.unwrap_or(crate::job::StockBox {
+                min: [x_range[0], -rad, -rad],
+                max: [x_range[1], rad, rad],
+            });
+            v.insert("index_a".into(), json!(0.0));
             let (w, h, hz) = (
                 sb.max[0] - sb.min[0],
                 sb.max[1] - sb.min[1],

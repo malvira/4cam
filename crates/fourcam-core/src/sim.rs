@@ -274,6 +274,9 @@ pub struct Segment {
     pub program: u16,
     /// Index of the move in its toolpath.
     pub move_index: usize,
+    /// Some(A) for a 3-axis move made with the rotary axis held at A (indexed 3+1, or A = 0
+    /// on a vise): `from`/`to` are then machine [x, y, z].
+    pub index_a: Option<f64>,
 }
 
 /// The job's motion as a flat list of segments (each program starts from an unknown position
@@ -282,9 +285,43 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
     let mut out = Vec::new();
     for (p, tp) in tps.iter().enumerate() {
         let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0f64);
+        let mut y = 0.0f64;
         let mut tool = None;
         let mut op = 0u16;
         for (idx, m) in tp.moves.iter().enumerate() {
+            // indexed 3+1 moves: machine X/Y/Z with A held
+            let xyz = match *m {
+                Move::Rapid3 {
+                    x: mx,
+                    y: my,
+                    z: mz,
+                } => Some((mx.or(x), my.unwrap_or(y), mz.or(r), true)),
+                Move::Line3 {
+                    x: mx,
+                    y: my,
+                    z: mz,
+                    ..
+                } => Some((Some(mx), my, Some(mz), false)),
+                _ => None,
+            };
+            if let Some((nx, ny, nz, rapid)) = xyz {
+                if let (Some(x1), Some(z1)) = (nx, nz) {
+                    out.push(Segment {
+                        from: x.zip(r).map(|(x0, z0)| [x0, y, z0]),
+                        to: [x1, ny, z1],
+                        rapid,
+                        tool,
+                        op,
+                        program: p as u16,
+                        move_index: idx,
+                        index_a: Some(a),
+                    });
+                }
+                x = nx;
+                y = ny;
+                r = nz;
+                continue;
+            }
             let (nx, nr, na, rapid) = match *m {
                 Move::ToolChange { tool: t, .. } => {
                     tool = Some(t);
@@ -317,11 +354,13 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
                     op,
                     program: p as u16,
                     move_index: idx,
+                    index_a: None,
                 });
             }
             x = nx;
             r = nr;
             a = na;
+            y = 0.0;
         }
     }
     out
@@ -346,6 +385,9 @@ pub fn apply_segment(
     step: f64,
 ) -> SegmentEffect {
     let mut e = SegmentEffect::default();
+    if let Some(a) = seg.index_a {
+        return apply_indexed(stock, seg, cutter, step, a);
+    }
     let (Some(c), Some([x0, r0, a0])) = (cutter, seg.from) else {
         return e;
     };
@@ -375,6 +417,109 @@ pub fn apply_segment(
         }
     }
     e
+}
+
+/// An indexed 3-axis segment: the tool (axis +Z) moves in machine X/Y/Z with A held at `a`.
+fn apply_indexed(
+    stock: &mut RadialMap,
+    seg: &Segment,
+    cutter: Option<&Cutter>,
+    step: f64,
+    a: f64,
+) -> SegmentEffect {
+    let mut e = SegmentEffect::default();
+    let (Some(c), Some(p)) = (cutter, seg.from) else {
+        return e;
+    };
+    let q = seg.to;
+    let len = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2)).sqrt();
+    let n = ((len / step).ceil() as usize).max(1);
+    for k in 0..=n {
+        let t = k as f64 / n as f64;
+        let at = [0, 1, 2].map(|i| p[i] + (q[i] - p[i]) * t);
+        let (cut, rows) = stamp_indexed(stock, c, at, a, seg.op);
+        e.samples += 1;
+        if let Some((lo, hi)) = rows {
+            e.rows = Some(e.rows.map_or((lo, hi), |(u, v)| (u.min(lo), v.max(hi))));
+        }
+        if seg.rapid && cut > 0 {
+            e.rapid_hit = true;
+        } else {
+            e.cells_cut += cut;
+        }
+    }
+    e
+}
+
+/// Lower the cells whose surface point lies inside a tool standing along machine +Z with its
+/// tip at `tip` (machine X/Y/Z), the part turned to A = `a_deg`: each cell's ray from the axis
+/// is cut back to where it enters the tool. Rays that pass through the tool below the surface
+/// (a hole the heightmap cannot hold) are left alone.
+fn stamp_indexed(
+    stock: &mut RadialMap,
+    c: &Cutter,
+    tip: [f64; 3],
+    a_deg: f64,
+    tag: u16,
+) -> (usize, Option<(usize, usize)>) {
+    let g = stock.grid;
+    let rad = c.radius();
+    let lim = rad * (1.0 - 1e-9);
+    let i0 = (((tip[0] - rad - g.x0) / g.dx - 0.5).ceil()).max(0.0) as usize;
+    let i1 = ((tip[0] + rad - g.x0) / g.dx - 0.5).floor();
+    if i1 < 0.0 || i0 >= g.nx {
+        return (0, None);
+    }
+    let i1 = (i1 as usize).min(g.nx - 1);
+    let dphi = TAU / g.na as f64;
+    let a = a_deg.to_radians();
+    let mut changed = 0;
+    let mut rows: Option<(usize, usize)> = None;
+    for i in i0..=i1 {
+        let u = g.x(i) - tip[0];
+        if u.abs() >= lim {
+            continue;
+        }
+        for j in 0..g.na {
+            // the cell's ray in the machine frame: part angle phi turned by A
+            let (s, cs) = ((j as f64 + 0.5) * dphi + a).sin_cos();
+            let inside = |rho: f64| {
+                let d = u.hypot(rho * cs - tip[1]);
+                d < lim && rho * s >= tip[2] + c.height(d)
+            };
+            let k = i * g.na + j;
+            let cur = stock.r[k] as f64;
+            if !inside(cur) {
+                continue;
+            }
+            // the tool is convex: along the ray it is one interval ending above `cur`
+            let rho = if inside(0.0) {
+                0.0
+            } else {
+                let (mut lo, mut hi) = (0.0, cur);
+                while hi - lo > 1e-5 {
+                    let mid = 0.5 * (lo + hi);
+                    if inside(mid) {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                hi
+            };
+            if rho < cur {
+                if cur - rho > 1e-3 {
+                    changed += 1;
+                }
+                if cur - rho > 1e-6 {
+                    stock.op[k] = tag;
+                    rows = Some(rows.map_or((i, i), |(p, q)| (p.min(i), q.max(i))));
+                }
+                stock.r[k] = rho as f32;
+            }
+        }
+    }
+    (changed, rows)
 }
 
 /// Remove material along a toolpath. `cutter_for(tool)` gives each tool's shape; moves made

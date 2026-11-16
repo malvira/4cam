@@ -152,6 +152,10 @@ pub enum Operation {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Face {
     pub tool: u32,
+    /// Rotary setups: the A angle (deg) the part is indexed to before this 3-axis
+    /// operation (indexed 3+1). Vise setups: must be 0.
+    #[serde(default)]
+    pub index_a: f64,
     pub depth: f64,
     pub step_down: f64,
     /// Stepover as a fraction of the tool diameter.
@@ -164,6 +168,10 @@ pub struct Face {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Pocket {
     pub tool: u32,
+    /// Rotary setups: the A angle (deg) the part is indexed to before this 3-axis
+    /// operation (indexed 3+1). Vise setups: must be 0.
+    #[serde(default)]
+    pub index_a: f64,
     pub rect: [f64; 4],
     pub depth: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,6 +187,10 @@ pub struct Pocket {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Drill {
     pub tool: u32,
+    /// Rotary setups: the A angle (deg) the part is indexed to before this 3-axis
+    /// operation (indexed 3+1). Vise setups: must be 0.
+    #[serde(default)]
+    pub index_a: f64,
     pub points: Vec<[f64; 2]>,
     pub depth: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,6 +205,10 @@ pub struct Drill {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Contour {
     pub tool: u32,
+    /// Rotary setups: the A angle (deg) the part is indexed to before this 3-axis
+    /// operation (indexed 3+1). Vise setups: must be 0.
+    #[serde(default)]
+    pub index_a: f64,
     pub path: Vec<[f64; 2]>,
     /// "outside", "inside" or "on".
     pub side: String,
@@ -209,6 +225,10 @@ pub struct Contour {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Raster3d {
     pub tool: u32,
+    /// Rotary setups: the A angle (deg) the part is indexed to before this 3-axis
+    /// operation (indexed 3+1). Vise setups: must be 0.
+    #[serde(default)]
+    pub index_a: f64,
     pub x_range: [f64; 2],
     pub y_range: [f64; 2],
     pub stepover: f64,
@@ -224,6 +244,18 @@ pub struct Raster3d {
 }
 
 impl Operation {
+    /// A angle a 3-axis operation is indexed to (None for rotary operations).
+    pub fn index_a(&self) -> Option<f64> {
+        match self {
+            Operation::Face(o) => Some(o.index_a),
+            Operation::Pocket(o) => Some(o.index_a),
+            Operation::Drill(o) => Some(o.index_a),
+            Operation::Contour(o) => Some(o.index_a),
+            Operation::Raster3d(o) => Some(o.index_a),
+            _ => None,
+        }
+    }
+
     pub fn tool(&self) -> u32 {
         match self {
             Operation::RotaryFinish(o) => o.tool,

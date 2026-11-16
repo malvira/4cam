@@ -146,6 +146,7 @@ pub fn segments3(tps: &[Toolpath]) -> Vec<Segment> {
                     op,
                     program: p as u16,
                     move_index: idx,
+                    index_a: Some(0.0),
                 });
             }
             at = to;

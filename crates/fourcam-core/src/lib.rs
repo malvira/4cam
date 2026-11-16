@@ -191,22 +191,44 @@ fn is_three_axis(op: &Operation) -> bool {
 
 fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Toolpath, Error> {
     let job = ctx.job;
-    let three = prog.operations.iter().any(is_three_axis);
+    // a vise setup (box stock) runs only 3-axis operations; a rotary setup runs both, the
+    // 3-axis ones indexed to a fixed A (3+1)
+    let three = job.stock_box.is_some();
     if three && prog.operations.iter().any(|o| !is_three_axis(o)) {
         return Err(Error::Invalid(format!(
-            "program {}: mixes 3-axis and rotary operations; put them in separate files",
+            "program {}: rotary operations need bar stock on the rotary axis, not a vise setup",
             prog.name
         )));
     }
-    let stock_box = match (three, job.stock_box) {
-        (true, None) => {
+    if three {
+        if let Some(a) = prog
+            .operations
+            .iter()
+            .filter_map(Operation::index_a)
+            .find(|a| *a != 0.0)
+        {
             return Err(Error::Invalid(format!(
-                "program {}: 3-axis operations need box stock (a vise setup)",
+                "program {}: index_a {a} on a vise setup (it has no rotary axis)",
                 prog.name
-            )))
+            )));
         }
-        (_, b) => b,
-    };
+    }
+    // the block the 3-axis strategies work in: the vise stock, or around the bar (its
+    // radius in Y and Z over the part's X range) for indexed operations
+    let stock_box = job.stock_box.or_else(|| {
+        prog.operations.iter().any(is_three_axis).then(|| {
+            let rad = job.stock.radius;
+            let (xlo, xhi) = match (&ctx.profile, ctx.mesh.and_then(Mesh::bounds)) {
+                (_, Some((lo, hi))) => (lo[0], hi[0]),
+                (Some(p), None) => (p.x_min(), p.x_max()),
+                _ => (-job.stock.length, 0.0),
+            };
+            job::StockBox {
+                min: [xlo, -rad, -rad],
+                max: [xhi, rad, rad],
+            }
+        })
+    });
     // safe radius above the rotary axis, or safe Z above the block
     let safe_r = match (three, stock_box) {
         (true, Some(b)) => b.max[2] + job.clearance,
@@ -309,7 +331,14 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 check_flute(tool, job.stock.radius, r_min)?;
             }
             (op3, shape) if is_three_axis(op3) => {
-                let sb = stock_box.as_ref().expect("checked above");
+                let sb = stock_box.as_ref().expect("set above");
+                let index = op3.index_a().unwrap_or(0.0);
+                if !three {
+                    // indexed 3+1: up to the safe radius, turn A, then cut in X/Y/Z
+                    b.rapid_r(safe_r);
+                    b.rapid(None, None, Some(index));
+                    b.p3 = Some([b.x.unwrap_or(sb.min[0]), 0.0, safe_r]);
+                }
                 let d = match shape {
                     ToolShape::Flat { diameter } | ToolShape::Ball { diameter } => diameter,
                     ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0),
@@ -322,16 +351,31 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     Operation::Drill(o) => t3::drill(&mut b, sb, safe_r, o),
                     Operation::Contour(o) => t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Raster3d(o) => {
-                        let mesh = ctx.mesh.ok_or_else(|| {
-                            Error::Invalid(format!(
-                                "program {}: raster3d needs part.mesh",
-                                prog.name
-                            ))
-                        })?;
-                        let dc = t3::DropCutter3::new(mesh, cutter.expect("set above"));
+                        let mesh: &Mesh = if three {
+                            ctx.mesh.ok_or_else(|| {
+                                Error::Invalid(format!(
+                                    "program {}: raster3d needs part.mesh",
+                                    prog.name
+                                ))
+                            })?
+                        } else {
+                            ctx.surface(&prog.name)?
+                        };
+                        let turned = (index != 0.0).then(|| mesh.rotated_x(index));
+                        let dc = t3::DropCutter3::new(
+                            turned.as_ref().unwrap_or(mesh),
+                            cutter.expect("set above"),
+                        );
                         t3::raster3d(&mut b, &dc, sb, safe_r, o).map_err(err)?
                     }
                     _ => unreachable!(),
+                }
+                if !three {
+                    // back on the axis centreline before any rotary move
+                    b.rapid3(None, None, Some(safe_r));
+                    b.rapid3(None, Some(0.0), None);
+                    b.x = b.p3.map(|p| p[0]);
+                    b.r = Some(safe_r);
                 }
             }
             _ => unreachable!("tool shape validated above"),
@@ -348,7 +392,10 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
         origin_comment: three.then(|| {
             "Zero: the setup's work coordinates, Z up (Z0 = top of the stock)".to_string()
         }),
-        plunge_limit: three
+        plunge_limit: prog
+            .operations
+            .iter()
+            .any(is_three_axis)
             .then(|| {
                 prog.operations
                     .iter()

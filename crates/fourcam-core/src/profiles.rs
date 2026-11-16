@@ -707,7 +707,7 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
     let a = m.kinematics.rotary("A");
     for tp in tps {
         let name = Some(tp.name.as_str());
-        if crate::render::is_xyz(tp) {
+        if job.stock_box.is_some() {
             // 3-axis: spans of X, Y and Z against the travels, feeds against the cap
             let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
             let mut p: [Option<f64>; 3] = [None; 3];
@@ -756,6 +756,7 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
         let (mut alo, mut ahi) = (f64::INFINITY, f64::NEG_INFINITY);
         let mut fmax = 0.0f64;
         let mut amax_rate = 0.0f64;
+        let (mut ylo, mut yhi) = (0.0f64, 0.0f64);
         let (mut px, mut pr, mut pa) = (None::<f64>, None::<f64>, 0.0f64);
         for mv in &tp.moves {
             match *mv {
@@ -801,6 +802,32 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
                     pr = Some(nr);
                     pa = na;
                 }
+                // indexed 3+1: machine X/Y/Z with A held
+                Move::Rapid3 {
+                    x: nx,
+                    y: ny,
+                    z: nz,
+                } => {
+                    px = nx.or(px);
+                    pr = nz.or(pr);
+                    if let Some(v) = ny {
+                        ylo = ylo.min(v);
+                        yhi = yhi.max(v);
+                    }
+                }
+                Move::Line3 {
+                    x: nx,
+                    y: ny,
+                    z: nz,
+                    feed,
+                    ..
+                } => {
+                    px = Some(nx);
+                    pr = Some(nz);
+                    ylo = ylo.min(ny);
+                    yhi = yhi.max(ny);
+                    fmax = fmax.max(feed);
+                }
                 _ => continue,
             }
             if let Some(v) = px {
@@ -821,6 +848,21 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
                     format!("uses {:.1} mm of X; the machine has {t} mm", xhi - xlo),
                 );
             }
+        }
+        if let Some(t) = m.kinematics.linear("Y").and_then(LinearAxis::travel) {
+            if yhi - ylo > t {
+                push(
+                    "error",
+                    name,
+                    format!("uses {:.1} mm of Y; the machine has {t} mm", yhi - ylo),
+                );
+            }
+        } else if yhi - ylo > 1e-9 {
+            push(
+                "error",
+                name,
+                "indexed 3-axis operations move Y; this machine has no Y axis".into(),
+            );
         }
         if let Some(t) = z.and_then(LinearAxis::travel) {
             if rhi > t {

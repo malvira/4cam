@@ -126,4 +126,18 @@ const tags = new Uint16Array(Uint8Array.from(atob(end.op), (c) => c.charCodeAt(0
 assert.equal(tags[Math.floor(20 / 0.25) * 240 + Math.floor(15 / 0.25)], 2, "pocket floor cut by op 2");
 console.log(`3-axis simulation: ${po.segments} moves, ${po.ops.length} operations, dome max left ${psim.stocks[1].max_left.toFixed(3)} mm`);
 console.log(`3-axis plate: ${pl.programs.map((p) => `${p.name} ${p.lines} lines`).join(", ")}`);
+// indexed 3+1 on the knob: plans clean, playback path carries Y and A for every segment
+const kidx = JSON.parse(readFileSync(join(root, "examples", "knob", "knob_indexed.project.json"), "utf8"));
+const ki = cam.planAndPost(kidx, "makera-z1");
+assert.ok(!ki.error, ki.error);
+assert.deepEqual(ki.programs.map((p) => p.issues.length), [0, 0, 0]);
+assert.ok(ki.programs[2].gcode.includes("G0 A90.000"));
+const kio = cam.simOpen(kidx, { na: 120 });
+assert.ok(!kio.error, kio.error);
+const kpath = new Float32Array(Uint8Array.from(atob(kio.path), (c) => c.charCodeAt(0)).buffer);
+assert.equal(kpath.length, 7 * kio.segments);
+const ys = new Set();
+for (let i = 0; i < kio.segments; i++) if (kpath[7 * i + 1] !== 0) ys.add(kpath[7 * i + 3]);
+assert.deepEqual([...ys].sort((a, b) => a - b), [0], "Y moves only in the A0 D-flat (the hole is on the centreline)");
+console.log(`indexed 3+1: ${ki.programs[2].lines} lines, playback ${kio.segments} moves`);
 console.log("wasm OK");

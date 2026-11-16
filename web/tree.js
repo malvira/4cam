@@ -48,9 +48,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   const opById = (id) => (t.draft && t.draft.op.id === id ? t.draft.op : setup().operations.find((o) => o.id === id));
   const typeOf = (kind) => t.types.find((x) => x.kind === kind);
   const colorOf = (op, i) => op.color || PALETTE[i % PALETTE.length];
-  // 3-axis types need box stock (a vise setup); rotary types need bar stock
+  // a vise setup (box stock) takes the 3-axis types; a rotary setup takes everything, the
+  // 3-axis types indexed to a fixed A (3+1)
   const isBox = (s) => s?.stock?.shape === "box";
-  const fits = (ty, s) => ty.machine_needs.includes("xyz") === isBox(s);
+  const fits = (ty, s) => !isBox(s) || ty.machine_needs.includes("xyz");
   const pointsText = (v) => v.map((q) => q.join(" ")).join("; ");
 
   function render() {
@@ -112,6 +113,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       // rotary_finish uses one stepover or the other, depending on the pattern
       if (p.name === "stepover_deg" && op.pattern === "around") continue;
       if (p.name === "stepover_mm" && op.pattern === "along" && op.stepover_deg != null) continue;
+      // a vise has no rotary axis to index
+      if (p.name === "index_a" && isBox(setup())) continue;
       const label = `${p.name.replace(/_/g, " ")}${p.unit ? ` (${p.unit})` : ""}`;
       if (p.name === "tool") {
         html += `<label>${label}<select name="tool">${tools.map((n) => `<option ${n === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>`;

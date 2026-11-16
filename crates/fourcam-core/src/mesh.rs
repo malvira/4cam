@@ -103,6 +103,19 @@ impl Mesh {
         self
     }
 
+    /// The mesh turned by `a_deg` about +X (right-handed): where the part sits in machine
+    /// coordinates with the rotary axis at A = `a_deg`.
+    pub fn rotated_x(&self, a_deg: f64) -> Mesh {
+        let (s, c) = a_deg.to_radians().sin_cos();
+        Mesh {
+            triangles: self
+                .triangles
+                .iter()
+                .map(|t| t.map(|p| [p[0], c * p[1] - s * p[2], s * p[1] + c * p[2]]))
+                .collect(),
+        }
+    }
+
     /// Binary STL bytes.
     pub fn to_stl(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(84 + 50 * self.triangles.len());

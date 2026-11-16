@@ -158,25 +158,19 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const s = m.session;
     const k = Math.max(0, Math.min(m.pos, s.segments) - 1);
     const p = s.path;
-    const [x, r, a, , toolNo] = [p[6 * k], p[6 * k + 1], p[6 * k + 2], p[6 * k + 3], p[6 * k + 4]];
+    // machine tool tip, A, rapid, tool, operation tag
+    const [x, y, z, a, , toolNo, opTag] = p.subarray(7 * k, 7 * k + 7);
     if (toolNo !== m.toolNumber) {
       const tm = v.groups.toolModel;
       for (const c of [...tm.children]) tm.remove(c);
       tm.add(toolModel(v.THREE, s.tools.find((t) => t.number === toolNo)));
       m.toolNumber = toolNo;
     }
-    const opTag = p[6 * k + 5];
     const op = s.ops.find((o) => o.tag === opTag);
-    const where = m.xyz ? `X${x.toFixed(1)} Y${r.toFixed(1)} Z${a.toFixed(2)}` : `A${a.toFixed(1)}`;
-    if (m.xyz) {
-      // 3-axis: the block stays put, the tool moves to the tip position (x, y, z)
-      v.groups.work.rotation.x = 0;
-      v.groups.toolModel.position.set(x, r, a);
-    } else {
-      // the part turns: rotate the work by A (right-handed about +X), tool fixed above the axis
-      v.groups.work.rotation.x = (a * Math.PI) / 180;
-      v.groups.toolModel.position.set(x, 0, r);
-    }
+    const where = m.xyz ? `X${x.toFixed(1)} Y${y.toFixed(1)} Z${z.toFixed(2)}` : y ? `A${a.toFixed(1)} · Y${y.toFixed(2)} Z${z.toFixed(2)}` : `A${a.toFixed(1)}`;
+    // the work turns by A (right-handed about +X; 0 on a vise); the tool stands at its tip
+    v.groups.work.rotation.x = (a * Math.PI) / 180;
+    v.groups.toolModel.position.set(x, y, z);
     $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where}`;
   }
 

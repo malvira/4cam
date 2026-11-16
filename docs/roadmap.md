@@ -106,7 +106,14 @@ goldens are still byte-identical.
 ## Next candidates
 
 - 3-axis strategies (drop-cutter raster and waterline) on the same mesh and tool code.
-- Indexed 3+1: 3-axis passes at fixed A angles.
+- ~~Indexed 3+1: 3-axis passes at fixed A angles.~~ Done: on a rotary setup the five 3-axis
+  operations take `index_a` (deg). The planner turns A there at the safe radius, runs the
+  3-axis strategy around the bar (raster3d on the part turned by A), and returns to Y0. The
+  rotary simulation cuts with the tool offset in Y (`sim::stamp_indexed`). Example
+  `examples/knob/knob_indexed.project.json`: a D-flat on the shaft at A0 and a cross hole at
+  A90 after the knob's turning and knurl, whose G-code stays identical to the goldens. Tests
+  check the flat's chord shape, the hole's depth and width, 0 rapids through stock, the
+  verifier and the machine limits (Y travel included).
 - General moves and kinematics-aware posts. After that come simultaneous 4-axis wrapping and
   5-axis.
 - Tool-holder collision checks against the stock model.

@@ -16,7 +16,8 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
   result (`"from_previous"`), or a block in a vise (`{"shape": "box", "min": [x, y, z],
   "max": [x, y, z]}`, work coordinates, Z up, Z0 normally the top). Box setups take the 3-axis
   operation types (`face`, `pocket`, `drill`, `contour`, `raster3d`); bar setups take the
-  rotary ones. A program can't mix the two. Example: `examples/plate/plate.project.json`.
+  rotary ones, and also the 3-axis types with `index_a` (deg): indexed 3+1, cut with the
+  part turned to that A. A vise setup rejects a non-zero `index_a`. Example: `examples/plate/plate.project.json`.
 
 0.1 jobs upgrade automatically. Machine profiles and tool libraries are separate JSON files
 (`docs/profiles.md`).

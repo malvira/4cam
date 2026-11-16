@@ -172,8 +172,7 @@ pub mod api {
     /// Tool-tip polyline, flattened `[x, r, a, kind, ...]` (kind 0 rapid, 1 feed), thinned
     /// to about `max_points` points (rapids and direction changes between rapid and feed are
     /// always kept). 3-axis programs give `[x, y, z, kind, ...]` with kind 2 rapid, 3 feed.
-    fn polyline(tp: &Toolpath, max_points: usize) -> (Vec<f32>, usize, bool) {
-        let xyz = render::is_xyz(tp);
+    fn polyline(tp: &Toolpath, max_points: usize, xyz: bool) -> (Vec<f32>, usize, bool) {
         let pts = if xyz {
             render::polyline3(tp)
         } else {
@@ -254,7 +253,7 @@ pub mod api {
                     .map(ToString::to_string)
                     .collect();
                 let g = gouges.iter().find(|g| g.program == tp.name);
-                let (points, total, thinned) = polyline(tp, max_points);
+                let (points, total, thinned) = polyline(tp, max_points, job.stock_box.is_some());
                 json!({
                     "name": tp.name,
                     "title": tp.title,
@@ -438,7 +437,25 @@ pub mod api {
         })
     }
 
-    /// Open a 3-axis playback: like [`sim_open`], with `path` as f32 [x, y, z, rapid, tool, op].
+    /// A playback path point: machine tip [x, y, z], A, rapid, tool, operation tag. Rotary
+    /// moves have the tool on the centreline (y 0, z = radius).
+    fn path_point(sg: &sim::Segment) -> [f32; 7] {
+        let (y, z, a) = match sg.index_a {
+            Some(a) => (sg.to[1], sg.to[2], a),
+            None => (0.0, sg.to[1], sg.to[2]),
+        };
+        [
+            sg.to[0] as f32,
+            y as f32,
+            z as f32,
+            a as f32,
+            f32::from(u8::from(sg.rapid)),
+            sg.tool.unwrap_or(0) as f32,
+            sg.op as f32,
+        ]
+    }
+
+    /// Open a 3-axis playback: like [`sim_open`], on the block.
     fn sim_open_xyz(
         job: &Job,
         tps: &[Toolpath],
@@ -450,16 +467,9 @@ pub mod api {
         let grid = grid_xyz(&hm);
         let step = (hm.cell * 0.5).min(0.1);
         let pb = sim3::Playback3::new(hm, tps, &cutters_of(job), step);
-        let mut path = Vec::with_capacity(pb.len() * 6);
+        let mut path = Vec::with_capacity(pb.len() * 7);
         for sg in &pb.segments {
-            path.extend_from_slice(&[
-                sg.to[0] as f32,
-                sg.to[1] as f32,
-                sg.to[2] as f32,
-                f32::from(u8::from(sg.rapid)),
-                sg.tool.unwrap_or(0) as f32,
-                sg.op as f32,
-            ]);
+            path.extend_from_slice(&path_point(sg));
         }
         let first_seg_of_program: Vec<usize> = (0..tps.len())
             .map(|p| {
@@ -517,7 +527,7 @@ pub mod api {
 
     /// Open a material-removal playback of the whole job. `opts`: `{"dx", "na", "libraries"}`.
     /// Returns the grid, the part map, the operations, the tools and every segment's end point
-    /// (`path`: f32 [x, r, a, rapid, tool, op] per segment, base64).
+    /// (`path`: f32 [x, y, z, a, rapid, tool, op] per segment, base64: machine tool tip and A).
     pub fn sim_open(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
         let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
             .unwrap_or(Value::Null);
@@ -558,16 +568,9 @@ pub mod api {
             &cutters,
             (dx * 2.0).min(0.1),
         );
-        let mut path = Vec::with_capacity(pb.len() * 6);
+        let mut path = Vec::with_capacity(pb.len() * 7);
         for sg in &pb.segments {
-            path.extend_from_slice(&[
-                sg.to[0] as f32,
-                sg.to[1] as f32,
-                sg.to[2] as f32,
-                f32::from(u8::from(sg.rapid)),
-                sg.tool.unwrap_or(0) as f32,
-                sg.op as f32,
-            ]);
+            path.extend_from_slice(&path_point(sg));
         }
         let mut ops = Vec::new();
         for (p, tp) in tps.iter().enumerate() {

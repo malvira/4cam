@@ -267,10 +267,40 @@ fn fmt_tick(v: f64) -> String {
 }
 
 /// Tool-tip polyline of a toolpath: `(x, r, a, is_cut)` per move once X and Z are known.
+/// Indexed 3+1 moves (machine X/Y/Z with A held) come out as the part point they reach, in
+/// the same form: its radius and the A that would put it under a centred tool.
 pub fn polyline(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
-    let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0);
+    let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0f64);
+    let mut y = 0.0f64;
     let mut pts = Vec::new();
     for m in &tp.moves {
+        let xyz = match *m {
+            Move::Rapid3 {
+                x: mx,
+                y: my,
+                z: mz,
+            } => Some((mx.or(x), my.unwrap_or(y), mz.or(r), false)),
+            Move::Line3 {
+                x: mx,
+                y: my,
+                z: mz,
+                ..
+            } => Some((Some(mx), my, Some(mz), true)),
+            _ => None,
+        };
+        if let Some((nx, ny, nz, cut)) = xyz {
+            x = nx;
+            y = ny;
+            r = nz;
+            if let (Some(px), Some(pz)) = (nx, nz) {
+                // part frame = machine turned back by A
+                let (s, c) = a.to_radians().sin_cos();
+                let (yp, zp) = (ny * c + pz * s, -ny * s + pz * c);
+                let phi = zp.atan2(yp).to_degrees();
+                pts.push((px, yp.hypot(zp), 90.0 - phi, cut));
+            }
+            continue;
+        }
         let cut = match m {
             Move::Rapid {
                 x: nx,
@@ -280,6 +310,7 @@ pub fn polyline(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
                 x = nx.or(x);
                 r = nr.or(r);
                 a = na.unwrap_or(a);
+                y = 0.0;
                 false
             }
             Move::Plunge { r: nr, .. } => {
