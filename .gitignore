@@ -2,3 +2,5 @@ target/
 web/pkg/
 profiles/_downloads/
 target-prof/
+examples/embed/csharp/bin/
+examples/embed/csharp/obj/

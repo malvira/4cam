@@ -17,6 +17,8 @@ cargo test -p fourcam-solidcraft
 cargo clippy -p fourcam-solidcraft --lib --target wasm32-unknown-unknown -- -D warnings
 sh scripts/build-solidcraft-plugin.sh
 sh scripts/e2e-solidcraft.sh
+# the C ABI: its library, the C example and (with a .NET SDK) the C# example
+sh scripts/test-capi.sh
 sh scripts/build-wasm.sh
 node crates/fourcam-wasm/js/test.mjs
 sh scripts/test-python.sh
