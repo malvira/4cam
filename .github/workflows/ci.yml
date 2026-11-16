@@ -1,0 +1,60 @@
+# The whole project check (scripts/check.sh) on Linux and Windows: format, lints, Rust tests,
+# the C ABI with its C and C# examples, the SolidCraft plugin build, the WebAssembly package
+# under Node, the Python wheel, and the web app in headless Chrome. The runners have no GPU
+# (the GPU checks fall back to the CPU and say so) and no SolidCraft (its end-to-end step
+# skips unless SOLIDCRAFT_CLI is set).
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # the toolchain the project is checked with locally, so new lints arrive on purpose
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: scripts/check.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          sh scripts/check.sh 2>&1 | tee check.log
+      - name: keep the log and the web screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-${{ matrix.os }}
+          path: |
+            check.log
+            web/tests/screenshots/
+          if-no-files-found: ignore
