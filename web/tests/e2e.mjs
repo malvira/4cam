@@ -520,6 +520,36 @@ try {
   const tTree = await js("[...document.querySelectorAll('#tree .tree-time')].map(e => e.textContent).join(' | ')");
   check("time estimates: summary, files and operations in the tree", /^Estimated time: \d/.test(tSum) && String(tTree).split(" | ").length === 5, `${tSum} || ${tTree}`);
 
+  // 8g. simulation resolution: the setting changes the grid (shown before running), the
+  // machining view at that grid stays watertight, and Ultra shows a decimated display
+  // top-level await: the evaluation does not wait for a promise an async IIFE returns
+  const closedNow = async () => (await js("const { checkClosed: cc } = await import('./meshes.js'); const gg = window.__4cam.state.machining.stockMesh.geometry; String(cc({ positions: gg.attributes.position.array, indices: gg.index.array }).closed)")) === "true";
+  await js("document.getElementById('simRes').value = 'fine'; document.getElementById('simRes').dispatchEvent(new Event('change')); true");
+  await waitFor(() => js("(window.__4cam.state.simGrid?.na === 720) && document.getElementById('simResInfo').textContent.includes('cells')"), "the Fine grid info", 15000);
+  const fineInfo = await js("document.getElementById('simResInfo').textContent");
+  const fineCells = await js("window.__4cam.state.simGrid.cells");
+  await js("document.getElementById('simOpen').click(); true");
+  await waitFor(() => js("window.__4cam.state.machining.open && window.__4cam.state.machining.session?.grid.na === 720 && !!window.__4cam.state.machining.stockMesh"), "the Fine machining view", 60000);
+  await js("document.getElementById('simScrub').value = '3000'; document.getElementById('simScrub').dispatchEvent(new Event('input')); true");
+  await waitFor(() => js("window.__4cam.state.machining.pos === 3000 && !window.__4cam.state.machining.busy"), "the Fine playback", 120000);
+  const fineClosed = await closedNow();
+  const fineStride = await js("window.__4cam.state.machining.stride");
+  await js("document.getElementById('simClose').click(); true");
+  check("Fine grid: cell count shown, machining view at 720 cells round, watertight", fineInfo.includes(Number(fineCells).toLocaleString("en")) && fineClosed === true && fineStride === 1, `${fineInfo}; closed ${fineClosed}`);
+  await js("document.getElementById('simRes').value = 'ultra'; document.getElementById('simRes').dispatchEvent(new Event('change')); true");
+  await waitFor(() => js("window.__4cam.state.simGrid?.na === 1440"), "the Ultra grid info", 15000);
+  await js("document.getElementById('simOpen').click(); true");
+  await waitFor(() => js("window.__4cam.state.machining.open && window.__4cam.state.machining.session?.grid.na === 1440 && !!window.__4cam.state.machining.stockMesh"), "the Ultra machining view", 60000);
+  await js("document.getElementById('simScrub').value = '2000'; document.getElementById('simScrub').dispatchEvent(new Event('input')); true");
+  await waitFor(() => js("window.__4cam.state.machining.pos === 2000 && !window.__4cam.state.machining.busy"), "the Ultra playback", 120000);
+  const ultra = await js("JSON.stringify({ s: window.__4cam.state.machining.stride, cells: window.__4cam.state.simGrid.cells, disp: window.__4cam.state.machining.dr.length })");
+  const ultraClosed = await closedNow();
+  await js("document.getElementById('simClose').click(); document.getElementById('simRes').value = 'normal'; document.getElementById('simRes').dispatchEvent(new Event('change')); true");
+  const u = JSON.parse(ultra);
+  check("Ultra grid: display decimated to at most 1M cells, still watertight", u.cells > 1e6 && u.s >= 2 && u.disp <= 1e6 && ultraClosed === true, `${ultra}; closed ${ultraClosed}`);
+  const remembered = await js("JSON.parse(localStorage.getItem('4cam.simRes')).v");
+  check("the resolution setting is remembered", remembered === "normal", remembered);
+
   // 8d. relief plaque from a grayscale image: roughing + 45 deg parallel finish, simulated
   await js("document.getElementById('example').value = 'plaque'; document.getElementById('loadExample').click(); true");
   await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('plaque.png')"), "the plaque image", 15000);

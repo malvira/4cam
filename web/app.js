@@ -158,6 +158,7 @@ async function loadExample(name) {
   renderQuick();
   renderTools();
   await window.__4cam.tree?.refresh();
+  updateSimResInfo();
 }
 
 function setMesh(bytes, name) {
@@ -217,6 +218,7 @@ async function generate() {
     setStatus(`Generated ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s, ${issues} issue(s); estimated machining time ${fmtTime(result.time_total_s)}`, "done");
     // the tree shows each operation's and file's estimated time
     await window.__4cam.tree?.refresh();
+    updateSimResInfo();
   } catch (e) {
     showError(e.message);
     setStatus("Failed", "error");
@@ -225,13 +227,94 @@ async function generate() {
   }
 }
 
+// ---------------------------------------------------------------- simulation resolution
+/** The grid asked for: a preset, or custom cell sizes (rotary mm x degrees, 3-axis mm). */
+function simOpts() {
+  const v = $("simRes").value;
+  if (v !== "custom") return { res: v };
+  const deg = Number($("simDeg").value) || 1.5;
+  return { dx: Number($("simDx").value) || 0.1, na: Math.max(8, Math.round(360 / deg)), cell: Number($("simCell").value) || 0.25 };
+}
+
+function saveSimRes() {
+  try {
+    localStorage.setItem("4cam.simRes", JSON.stringify({ v: $("simRes").value, dx: $("simDx").value, deg: $("simDeg").value, cell: $("simCell").value }));
+  } catch {}
+}
+
+function loadSimRes() {
+  try {
+    const s = JSON.parse(localStorage.getItem("4cam.simRes") || "null");
+    if (s) {
+      $("simRes").value = s.v;
+      $("simDx").value = s.dx;
+      $("simDeg").value = s.deg;
+      $("simCell").value = s.cell;
+    }
+  } catch {}
+}
+
+/** Show the grid the setting gives for this job: cells, memory, time against Normal. */
+async function updateSimResInfo() {
+  $("simResCustom").classList.toggle("hidden", $("simRes").value !== "custom");
+  let job;
+  try {
+    job = readJob();
+  } catch {
+    return;
+  }
+  const base = { libraries: libraries(), setup: job.schema_version === "0.2" ? state.tree?.setup : undefined };
+  try {
+    const [{ result: g }, { result: n }] = await Promise.all([
+      engine("simGrid", job, { ...base, ...simOpts() }, state.mesh),
+      engine("simGrid", job, { ...base, res: "normal" }, state.mesh),
+    ]);
+    state.simGrid = g;
+    const ratio = g.cells / Math.max(1, n.cells);
+    const what = g.kind === "xyz" ? `${g.nx} x ${g.ny} cells of ${g.cell.toFixed(3)} mm` : `${g.nx} x ${g.na} cells (${g.dx} mm x ${(360 / g.na).toFixed(2)}\u00b0)`;
+    const warn = g.too_large ? " - too fine (limit 40 million cells)" : g.cells > 5e6 ? " - very large: it may take minutes and a lot of memory" : "";
+    $("simResInfo").textContent = `${what} = ${g.cells.toLocaleString("en")} cells, about ${Math.max(1, Math.round(g.engine_mb + g.display_mb))} MB, roughly ${ratio < 1.5 ? ratio.toFixed(1) : Math.round(ratio)}x the Normal time${warn}`;
+    $("simResInfo").classList.toggle("error", !!warn);
+  } catch {
+    state.simGrid = null;
+    $("simResInfo").textContent = "";
+  }
+}
+
+/** Before a simulation: refuse grids over the limit, ask about very large ones. */
+async function confirmSimRes() {
+  await updateSimResInfo();
+  const g = state.simGrid;
+  if (!g) return true;
+  if (g.too_large) {
+    showError(`The simulation grid would have ${g.cells.toLocaleString("en")} cells (limit 40 million): choose a coarser setting.`);
+    return false;
+  }
+  if (g.cells > 5e6) return window.confirm(`The simulation grid has ${g.cells.toLocaleString("en")} cells (about ${Math.round(g.engine_mb + g.display_mb)} MB). It may take minutes. Continue?`);
+  return true;
+}
+
+for (const id of ["simRes", "simDx", "simDeg", "simCell"]) {
+  $(id).addEventListener("change", () => {
+    saveSimRes();
+    updateSimResInfo();
+  });
+}
+loadSimRes();
+
 async function simulate() {
   if (!state.result) await generate();
   if (!state.result) return;
+  // busy at once (the grid check below is asynchronous)
+  setStatus("Checking the simulation grid...", "busy");
+  if (!(await confirmSimRes())) {
+    setStatus("Simulation not started", "done");
+    return;
+  }
   $("generate").disabled = $("simulate").disabled = true;
   setStatus("Simulating stock...", "busy");
   try {
-    const { result, ms } = await engine("simulate", state.job, { dx: 0.1, na: 240 }, state.mesh);
+    const { result, ms } = await engine("simulate", state.job, simOpts(), state.mesh);
     state.sim = result;
     selectTab(state.tab);
     const s = result.stocks[state.tab];
@@ -947,7 +1030,8 @@ window.__4cam.tree = setupTree({
 $("job").addEventListener("change", () => window.__4cam.tree.refresh());
 
 // ---------------------------------------------------------------- machining simulation
-window.__4cam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries });
+window.__4cam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes });
+window.__4cam.updateSimResInfo = updateSimResInfo;
 
 // ---------------------------------------------------------------- view hooks (used by the e2e test)
 /** Camera presets: "iso", "front" (looking down the axis from +X), "back" (from -X). `show`

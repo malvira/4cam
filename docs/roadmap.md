@@ -156,6 +156,20 @@ goldens are still byte-identical.
   operation tree. Hand-computed tests cover straight feeds and rapids, acceleration-limited
   moves, corners and reversals, rotary moves in each feed mode, dwells, tool changes, inch
   units and arcs.
+- **Simulation resolution. Done:**
+  - presets: Coarse, Normal, Fine and Ultra, or custom cell sizes;
+  - in the engine (`sim::Resolution`, `sim_grid`), CLI (`simulate --sim-res`), WASM
+    (`res`, `simGrid`) and the web app: a control shows cells, memory and time against
+    Normal, warns on very large grids and refuses those over 40 million cells; the setting
+    is remembered;
+  - playback snapshots are spaced to stay near 256 MB;
+  - the 3D view shows at most 1M cells at rest and 250k while playing, then refines on
+    pause.
+
+  Tests: finer grids keep known features within half a cell, playback equals batch at every
+  preset, and the web view stays watertight at Fine and Ultra.
+- **Performance (see docs/gpu.md):** exact drop-cutter index changes (plate planning 21 s ->
+  1.5 s, identical G-code).
 - ~~Indexed 3+1: 3-axis passes at fixed A angles.~~ Done: on a rotary setup the five 3-axis
   operations take `index_a` (deg). The planner turns A there at the safe radius, runs the
   3-axis strategy around the bar (raster3d on the part turned by A), and returns to Y0. The

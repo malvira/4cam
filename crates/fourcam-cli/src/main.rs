@@ -47,9 +47,11 @@ USAGE:
       Defaults: --plunge 60, --safe = highest Z reached by a G0 move.
   4cam toolpath <job.json>
       Print the machine-neutral toolpath IR as JSON.
-  4cam simulate <job.json> [--out <dir>] [--dx <mm>] [--na <cells>]
+  4cam simulate <job.json> [--out <dir>] [--sim-res coarse|normal|fine|ultra]
+                [--dx <mm>] [--na <cells>]
       Simulate material removal of all programs in order on a radial heightmap
-      (default 0.05 mm x 720 cells around), compare with the part, and write a
+      (default fine: 0.05 mm x 720 cells around; coarse 0.2 x 180, normal
+      0.1 x 240, ultra 0.025 x 1440), compare with the part, and write a
       <program>_stock.png per program. Fails on rapids through stock or gouges.
   4cam mesh-info <file.stl|file.3mf>
       Print triangle count, bounding box and largest radius about X.
@@ -353,7 +355,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             cmd_wizard_knurl(&parse(more, &["params", "out"])?)
         }
         "mesh-info" => cmd_mesh_info(&parse(rest, &[])?),
-        "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na"])?),
+        "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na", "sim-res"])?),
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
@@ -585,8 +587,15 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
                 .map_err(|_| format!("--{name}: not a number: {v}"))
         })
     };
-    let dx = num("dx", 0.05)?;
-    let na = num("na", 720.0)? as usize;
+    // --sim-res coarse|normal|fine|ultra sets both; --dx / --na override (default: fine)
+    let preset = match o.flag("sim-res") {
+        Some(name) => sim::Resolution::preset(name).ok_or(format!(
+            "--sim-res: {name:?} is not coarse, normal, fine or ultra"
+        ))?,
+        None => sim::Resolution::preset("fine").expect("built in"),
+    };
+    let dx = num("dx", preset.dx)?;
+    let na = num("na", preset.na as f64)? as usize;
     let out = PathBuf::from(o.flag("out").unwrap_or("."));
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     let (tps, mesh) = plan_job_with_mesh(&job, job_path)?;

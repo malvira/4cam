@@ -64,7 +64,9 @@ All calls take and return JSON. No wasm-bindgen is needed.
   - `faceRegions(doc, model, mesh)` returns the model's faces with stable ids;
   - `wizardKnurl(doc, params, mesh)` runs the knurl wizard.
 - **Simulation:**
-  - `simulate(doc, {dx, na, cell}, mesh)` simulates material removal for the whole job.
+  - `simGrid(doc, {res, dx, na, cell, setup}, mesh)` gives the grid a resolution makes
+    (cells, memory) before running; `res` is coarse, normal, fine or ultra;
+  - `simulate(doc, {res, dx, na, cell}, mesh)` simulates material removal for the whole job.
     Box setups return `"kind": "xyz"`, an X/Y `grid` (`cell` mm, default about 240 cells
     along the longer side), the part top per cell and the block tops `z` after each program;
   - `simOpen(doc, {setup, dx, na, cell}, mesh)` and `simSeek(n)` play it back move by move

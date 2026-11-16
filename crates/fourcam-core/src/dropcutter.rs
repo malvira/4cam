@@ -71,6 +71,9 @@ struct Tri {
     t: Triangle,
     x_min: f64,
     x_max: f64,
+    /// Largest distance of a vertex from the axis: no contact on this triangle puts the
+    /// tool tip further out.
+    r_max: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +140,7 @@ impl DropCutter {
                 t: *t,
                 x_min: t[0][0].min(t[1][0]).min(t[2][0]),
                 x_max: t[0][0].max(t[1][0]).max(t[2][0]),
+                r_max: t.iter().map(|p| len2(p[1], p[2])).fold(0.0, f64::max),
             })
             .collect();
         let (lo, hi) = tris
@@ -186,6 +190,10 @@ impl DropCutter {
                 }
             }
         }
+        // highest triangles first: a query stops at the first one that cannot beat its best
+        for b in &mut bins {
+            b.sort_by(|&p, &q| tris[q as usize].r_max.total_cmp(&tris[p as usize].r_max));
+        }
         DropCutter {
             cutter,
             tris,
@@ -217,6 +225,9 @@ impl DropCutter {
         let mut best = floor;
         for &k in &self.bins[ix as usize * self.nphi + j] {
             let tri = &self.tris[k as usize];
+            if tri.r_max <= best {
+                break;
+            }
             if tri.x_max < x - r || tri.x_min > x + r {
                 continue;
             }

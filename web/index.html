@@ -95,6 +95,22 @@
       <button id="generate" type="button" class="primary" disabled>Generate</button>
       <button id="simulate" type="button" disabled>Simulate stock</button>
     </div>
+    <div class="row small" id="simResRow">
+      <label for="simRes">Simulation grid</label>
+      <select id="simRes" aria-label="Simulation grid resolution">
+        <option value="coarse">Coarse</option>
+        <option value="normal" selected>Normal</option>
+        <option value="fine">Fine</option>
+        <option value="ultra">Ultra</option>
+        <option value="custom">Custom</option>
+      </select>
+      <span id="simResCustom" class="hidden">
+        <input id="simDx" type="number" step="0.005" min="0.005" value="0.1" size="5" title="Rotary: cell length along X (mm)" aria-label="Rotary cell along X (mm)"> mm &times;
+        <input id="simDeg" type="number" step="0.05" min="0.05" value="1.5" size="4" title="Rotary: cell angle (degrees)" aria-label="Rotary cell angle (degrees)">&deg; &middot; 3-axis
+        <input id="simCell" type="number" step="0.01" min="0.01" value="0.25" size="5" title="3-axis: cell size (mm)" aria-label="3-axis cell size (mm)"> mm
+      </span>
+    </div>
+    <div id="simResInfo" class="small muted"></div>
     <div id="error" class="error hidden" role="alert"></div>
   </section>
   <div id="splitLeft" class="splitter v" aria-label="Resize the settings panel"></div>

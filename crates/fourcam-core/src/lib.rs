@@ -686,6 +686,24 @@ pub fn intended_tags(job: &Job, tps: &[Toolpath]) -> std::collections::HashSet<u
     out
 }
 
+/// The grid [`simulate_job`] uses for this job (the part's X range plus 3 mm each side).
+pub fn sim_grid(job: &Job, mesh: Option<&Mesh>, dx: f64, na: usize) -> Result<sim::Grid, Error> {
+    let (lo, hi) = match (mesh, &job.part.profile) {
+        (Some(m), _) => {
+            let (lo, hi) = m
+                .bounds()
+                .ok_or_else(|| Error::Invalid("empty mesh".into()))?;
+            (lo[0], hi[0])
+        }
+        (None, Some(p)) => {
+            let g = RevolvedProfile::new(p, job.stock.radius);
+            (g.x_min(), g.x_max())
+        }
+        (None, None) => return Err(Error::Invalid("nothing to compare: no part".into())),
+    };
+    Ok(sim::Grid::new(lo - 3.0, hi + 3.0, dx, na))
+}
+
 /// Simulation of a whole job on a radial heightmap, programs in order on the same stock.
 #[derive(Debug, Clone)]
 pub struct JobSim {
@@ -732,6 +750,13 @@ pub fn simulate_job(
             (None, None) => return Err(Error::Invalid("nothing to compare: no part".into())),
         };
     let grid = sim::Grid::new(x_lo - 3.0, x_hi + 3.0, dx, na);
+    if grid.len() > sim::MAX_CELLS {
+        return Err(Error::Invalid(format!(
+            "simulation grid too fine: {} cells (limit {})",
+            grid.len(),
+            sim::MAX_CELLS
+        )));
+    }
     let part = part_fn(grid);
     let mut stock = sim::RadialMap::filled(grid, job.stock.radius);
     let cutters = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());

@@ -338,8 +338,7 @@ pub mod api {
         };
         let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
             .unwrap_or(Value::Null);
-        let dx = opts["dx"].as_f64().unwrap_or(0.1).max(0.01);
-        let na = (opts["na"].as_u64().unwrap_or(360) as usize).clamp(8, 4096);
+        let (dx, na) = rotary_res(&opts);
         let tps = match plan_with_mesh(&job, mesh.as_ref()) {
             Ok(t) => t,
             Err(e) => return err(e),
@@ -415,9 +414,69 @@ pub mod api {
     }
 
     /// Cell size for a block: `opts.cell`, else about 240 cells along its longer side.
+    /// The resolution asked for: a preset (`res`: coarse, normal, fine, ultra; default normal)
+    /// with `dx` / `na` / `cell` overriding it.
+    fn preset_of(opts: &Value) -> sim::Resolution {
+        opts["res"]
+            .as_str()
+            .and_then(sim::Resolution::preset)
+            .unwrap_or_else(|| sim::Resolution::preset("normal").expect("built in"))
+    }
+
+    /// Rotary grid: (dx mm, cells around).
+    fn rotary_res(opts: &Value) -> (f64, usize) {
+        let r = preset_of(opts);
+        (
+            opts["dx"].as_f64().unwrap_or(r.dx).max(0.005),
+            (opts["na"].as_u64().map_or(r.na, |v| v as usize)).clamp(8, 8192),
+        )
+    }
+
+    /// 3-axis cell size (mm) for a block.
     fn cell_for(sb: &StockBox, opts: &Value) -> f64 {
-        let span = (sb.max[0] - sb.min[0]).max(sb.max[1] - sb.min[1]);
-        opts["cell"].as_f64().unwrap_or(span / 240.0).max(0.05)
+        opts["cell"]
+            .as_f64()
+            .unwrap_or_else(|| preset_of(opts).cell_for(sb))
+            .max(0.005)
+    }
+
+    /// The simulation grid a document gets at a resolution, without running it: cells and
+    /// rough memory (engine and 3D display), so hosts can warn before very fine grids.
+    pub fn sim_grid(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let mb = |b: f64| (b / 1048576.0 * 10.0).round() / 10.0;
+        if let Some(sb) = job.stock_box {
+            let cell = cell_for(&sb, &opts);
+            let hm = sim3::Heightmap3::new(&sb, cell);
+            let cells = hm.nx * hm.ny;
+            return json!({
+                "kind": "xyz", "cell": cell, "nx": hm.nx, "ny": hm.ny, "cells": cells,
+                "engine_mb": mb(cells as f64 * 18.0), "display_mb": mb(cells as f64 * 48.0),
+                "too_large": cells > sim::MAX_CELLS, "max_cells": sim::MAX_CELLS,
+            });
+        }
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let (dx, na) = rotary_res(&opts);
+        match fourcam::sim_grid(&job, mesh.as_ref(), dx, na) {
+            Ok(g) => json!({
+                "kind": "rotary", "dx": g.dx, "na": g.na, "nx": g.nx, "cells": g.len(),
+                "engine_mb": mb(g.len() as f64 * 18.0), "display_mb": mb(g.len() as f64 * 48.0),
+                "too_large": g.len() > sim::MAX_CELLS, "max_cells": sim::MAX_CELLS,
+            }),
+            Err(e) => err(e),
+        }
     }
 
     fn grid_xyz(hm: &sim3::Heightmap3) -> Value {
@@ -453,6 +512,13 @@ pub mod api {
         opts: &Value,
     ) -> Value {
         let mut hm = sim3::Heightmap3::new(sb, cell_for(sb, opts));
+        if hm.z.len() > sim::MAX_CELLS {
+            return err(format!(
+                "simulation grid too fine: {} cells (limit {})",
+                hm.z.len(),
+                sim::MAX_CELLS
+            ));
+        }
         let part = mesh
             .map(|m| sim3::part_top(&hm, m))
             .unwrap_or_else(|| vec![None; hm.z.len()]);
@@ -512,6 +578,13 @@ pub mod api {
         job_json: &str,
     ) -> Value {
         let hm = sim3::Heightmap3::new(sb, cell_for(sb, opts));
+        if hm.z.len() > sim::MAX_CELLS {
+            return err(format!(
+                "simulation grid too fine: {} cells (limit {})",
+                hm.z.len(),
+                sim::MAX_CELLS
+            ));
+        }
         let grid = grid_xyz(&hm);
         let step = (hm.cell * 0.5).min(0.1);
         let pb = sim3::Playback3::new(hm, tps, &cutters_of(job), step);
@@ -591,8 +664,7 @@ pub mod api {
             Ok(m) => m,
             Err(e) => return err(e),
         };
-        let dx = opts["dx"].as_f64().unwrap_or(0.1).max(0.02);
-        let na = (opts["na"].as_u64().unwrap_or(240) as usize).clamp(8, 2048);
+        let (dx, na) = rotary_res(&opts);
         let tps = match plan_with_mesh(&job, mesh.as_ref()) {
             Ok(t) => t,
             Err(e) => return err(e),
@@ -868,6 +940,7 @@ pub mod api {
             "mesh_triangles" => mesh_triangles(&s(a), &s(b), c),
             "svg_paths" => svg_paths(&s(a), &s(b)),
             "estimate_gcode" => estimate_gcode(&s(a), &s(b)),
+            "sim_grid" => sim_grid(&s(a), &s(b), c),
             other => err(format!("unknown function {other:?}")),
         }
     }

@@ -75,5 +75,7 @@ export async function load(source) {
     svgPaths: (svgText, opts) => call("svg_paths", svgText, opts || {}),
     // machining time of any G-code text: {total_s, feed_s, rapid_s, other_s, ...}
     estimateGcode: (gcode, machine) => call("estimate_gcode", gcode, machine || ""),
+    // simulation grid for {res: coarse|normal|fine|ultra, dx, na, cell, setup}: cells, memory
+    simGrid: (job, opts, meshBytes) => call("sim_grid", job, opts || {}, meshBytes),
   };
 }

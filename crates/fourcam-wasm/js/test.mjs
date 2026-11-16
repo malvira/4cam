@@ -160,4 +160,13 @@ assert.deepEqual(kt.programs.map((p) => p.time.ops.map((o) => o.id)), [["op1"], 
 const eg = cam.estimateGcode("G0 X0 Y0 Z5\nG1 X100 F600\n", "makera-z1");
 assert.ok(eg.feed_s > 10 && eg.feed_s < 10.1, JSON.stringify(eg));
 console.log(`time estimates: knob ${kfiles.map((s) => (s / 60).toFixed(1)).join(" + ")} min`);
+// simulation resolution: presets and custom sizes give the grid before running
+const gN = cam.simGrid(job, { res: "normal" });
+const gF = cam.simGrid(job, { res: "fine" });
+assert.equal(gN.na, 240);
+assert.equal(gF.na, 720);
+assert.ok(gF.cells > 5 * gN.cells && !gF.too_large);
+assert.equal(cam.simGrid(plate, { cell: 0.5 }).nx, 120);
+assert.ok(cam.simGrid(job, { dx: 0.001, na: 8192 }).too_large);
+console.log(`resolution: knob normal ${gN.cells} cells, fine ${gF.cells}`);
 console.log("wasm OK");

@@ -15,7 +15,13 @@ const f32 = (s) => new Float32Array(b64ToBytes(s).buffer);
 const u16 = (s) => new Uint16Array(b64ToBytes(s).buffer);
 const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
 
-export function setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries }) {
+// The 3D display shows the engine grid every k cells (each display cell the deepest cut of
+// its block) when the grid is large: at most DISPLAY_MAX cells at rest, PLAY_MAX while playing
+// (it refines again on pause).
+const DISPLAY_MAX = 1_000_000;
+const PLAY_MAX = 250_000;
+
+export function setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes }) {
   const m = {
     open: false,
     session: null, // sim_open result (+ decoded arrays)
@@ -63,6 +69,49 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
 
   const colorOf = (tag) => (tag ? m.colors[tag] || [1, 0, 1] : UNCUT);
 
+  // the engine grid as rows x cols (rotary: X rows of na cells; 3-axis: Y rows of nx cells)
+  const dims = () => {
+    const g = m.session.grid;
+    return m.xyz ? { R: g.ny, C: g.nx } : { R: g.nx, C: g.na };
+  };
+  /** Smallest stride whose display grid has at most `limit` cells (rotary: dividing na). */
+  function strideFor(limit) {
+    const { R, C } = dims();
+    let k = 1;
+    for (;;) {
+      if ((m.xyz || C % k === 0) && Math.ceil(R / k) * Math.ceil(C / k) <= limit) return k;
+      k++;
+      if (k > 64) return 64;
+    }
+  }
+  function displayGrid(k) {
+    const g = m.session.grid;
+    return m.xyz
+      ? { x0: g.x0, y0: g.y0, cell: g.cell * k, nx: Math.ceil(g.nx / k), ny: Math.ceil(g.ny / k) }
+      : { x0: g.x0, dx: g.dx * k, nx: Math.ceil(g.nx / k), na: g.na / k };
+  }
+  /** Recompute display rows rd0..rd1 from the engine mirror (deepest cell of each block). */
+  function fillRows(rd0, rd1) {
+    const k = m.stride;
+    const { R, C } = dims();
+    const CD = Math.ceil(C / k);
+    for (let rd = rd0; rd <= rd1; rd++) {
+      for (let cd = 0; cd < CD; cd++) {
+        let best = Infinity, tag = 0;
+        for (let r = rd * k; r < Math.min(R, rd * k + k); r++)
+          for (let c = cd * k; c < Math.min(C, cd * k + k); c++) {
+            const v = m.r[r * C + c];
+            if (v < best) {
+              best = v;
+              tag = m.op[r * C + c];
+            }
+          }
+        m.dr[rd * CD + cd] = best;
+        m.dop[rd * CD + cd] = tag;
+      }
+    }
+  }
+
   /** Build the stock solid and the tool from the current arrays. */
   async function buildScene() {
     const v = await getThree();
@@ -83,7 +132,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       c.material?.dispose();
     }
     const s = m.session;
-    const mesh = m.xyz ? blockSolid(s.grid, m.r, s.stock_box.min[2], (k) => colorOf(m.op[k])) : heightmapSolid(s.grid, m.r, (k) => colorOf(m.op[k]));
+    const { R, C } = dims();
+    m.dgrid = displayGrid(m.stride);
+    m.dr = new Float32Array(Math.ceil(R / m.stride) * Math.ceil(C / m.stride));
+    m.dop = new Uint16Array(m.dr.length);
+    fillRows(0, Math.ceil(R / m.stride) - 1);
+    const mesh = m.xyz ? blockSolid(m.dgrid, m.dr, s.stock_box.min[2], (k) => colorOf(m.dop[k])) : heightmapSolid(m.dgrid, m.dr, (k) => colorOf(m.dop[k]));
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
     g.setAttribute("color", new THREE.BufferAttribute(mesh.colors, 3));
@@ -177,34 +231,40 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** Apply a sim_seek result: rows changed -> update vertices and colours in place. */
   function applyRows(res) {
     m.pos = res.pos;
+    if (res.rows) {
+      // the engine mirror first (rows of C cells), then the display rows they fall in
+      const { C } = dims();
+      const [r0] = res.rows;
+      m.r.set(f32(m.xyz ? res.z : res.r), r0 * C);
+      m.op.set(u16(res.op), r0 * C);
+    }
+    const k = m.stride;
     if (res.rows && m.stockMesh && m.xyz) {
-      // rows are Y indices of nx cells; vertex k is cell k (the walls share those vertices)
-      const [j0, j1] = res.rows;
-      const { nx } = m.session.grid;
-      m.r.set(f32(res.z), j0 * nx);
-      m.op.set(u16(res.op), j0 * nx);
+      // display rows are Y rows; vertex v is display cell v (the walls share those vertices)
+      const [j0, j1] = res.rows.map((r) => Math.floor(r / k));
+      fillRows(j0, j1);
+      const { nx } = m.dgrid;
       const pos = m.stockMesh.geometry.attributes.position.array;
       const col = m.stockMesh.geometry.attributes.color.array;
-      for (let k = j0 * nx; k < (j1 + 1) * nx; k++) {
-        pos[3 * k + 2] = m.r[k];
-        col.set(colorOf(m.op[k]), 3 * k);
+      for (let v = j0 * nx; v < (j1 + 1) * nx; v++) {
+        pos[3 * v + 2] = m.dr[v];
+        col.set(colorOf(m.dop[v]), 3 * v);
       }
       m.stockMesh.geometry.attributes.position.needsUpdate = true;
       m.stockMesh.geometry.attributes.color.needsUpdate = true;
       m.stockMesh.geometry.computeVertexNormals();
     } else if (res.rows && m.stockMesh) {
-      const [i0, i1] = res.rows;
-      const { na, nx } = m.session.grid;
-      m.r.set(f32(res.r), i0 * na);
-      m.op.set(u16(res.op), i0 * na);
+      const [i0, i1] = res.rows.map((r) => Math.floor(r / k));
+      fillRows(i0, i1);
+      const { na, nx } = m.dgrid;
       const pos = m.stockMesh.geometry.attributes.position.array;
       const col = m.stockMesh.geometry.attributes.color.array;
       const setV = (vi, i, j) => {
         const k = i * na + j;
         const phi = ((j + 0.5) * 2 * Math.PI) / na;
-        pos[3 * vi + 1] = m.r[k] * Math.cos(phi);
-        pos[3 * vi + 2] = m.r[k] * Math.sin(phi);
-        const c = colorOf(m.op[k]);
+        pos[3 * vi + 1] = m.dr[k] * Math.cos(phi);
+        pos[3 * vi + 2] = m.dr[k] * Math.sin(phi);
+        const c = colorOf(m.dop[k]);
         col[3 * vi] = c[0];
         col[3 * vi + 1] = c[1];
         col[3 * vi + 2] = c[2];
@@ -247,9 +307,13 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       return showError(e.message);
     }
     setStatus("Opening machining simulation...", "busy");
+    if (confirmSimRes && !(await confirmSimRes())) {
+      setStatus("Machining simulation not started", "done");
+      return;
+    }
     try {
       const setup = job.schema_version === "0.2" ? state.tree?.setup : undefined;
-      const { result } = await engine("simOpen", job, { dx: 0.1, na: 240, libraries: libraries(), setup }, state.mesh);
+      const { result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup }, state.mesh);
       result.path = f32(result.path);
       m.session = result;
       m.xyz = result.kind === "xyz";
@@ -257,6 +321,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.r = new Float32Array(n).fill(m.xyz ? result.stock_box.max[2] : result.stock_radius);
       m.op = new Uint16Array(n);
       m.pos = 0;
+      m.stride = strideFor(DISPLAY_MAX);
       await engine("simSeek", 0);
       renderLegend();
       await buildScene();
@@ -281,8 +346,21 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     showMachining(false);
   }
 
+  /** Rebuild the display at the stride for the current state (playing or at rest). */
+  async function restride() {
+    if (!m.session) return;
+    const want = strideFor(m.playing ? PLAY_MAX : DISPLAY_MAX);
+    if (want !== m.stride) {
+      m.stride = want;
+      await buildScene();
+    }
+  }
+
   function frame(t) {
-    if (!m.playing) return;
+    if (!m.playing) {
+      restride();
+      return;
+    }
     const dt = Math.min(0.1, (t - (m.last || t)) / 1000);
     m.last = t;
     const speed = +$("simSpeed").value;
@@ -292,6 +370,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.playing = false;
       $("simPlay").textContent = "Play";
       document.body.dataset.playing = "";
+      restride();
       return;
     }
     requestAnimationFrame(frame);
@@ -307,7 +386,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (m.playing) {
       if (m.pos >= m.session.segments) seek(0);
       m.last = 0;
-      requestAnimationFrame(frame);
+      restride().then(() => requestAnimationFrame(frame));
     }
   });
   $("simStep").addEventListener("click", () => m.session && seek(Math.min(m.session.segments, m.pos + 1)));
@@ -327,12 +406,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // recolour every vertex from the tag mirror
     if (m.stockMesh && m.xyz) {
       const col = m.stockMesh.geometry.attributes.color.array;
-      for (let k = 0; k < m.op.length; k++) col.set(colorOf(m.op[k]), 3 * k);
+      for (let k = 0; k < m.dop.length; k++) col.set(colorOf(m.dop[k]), 3 * k);
       m.stockMesh.geometry.attributes.color.needsUpdate = true;
     } else if (m.stockMesh) {
-      const { na, nx } = m.session.grid;
+      const { na, nx } = m.dgrid;
       const col = m.stockMesh.geometry.attributes.color.array;
-      const paint = (vi, k) => col.set(colorOf(m.op[k]), 3 * vi);
+      const paint = (vi, k) => col.set(colorOf(m.dop[k]), 3 * vi);
       for (let k = 0; k < nx * na; k++) paint(k, k);
       for (let j = 0; j < na; j++) {
         paint(nx * na + j, j);

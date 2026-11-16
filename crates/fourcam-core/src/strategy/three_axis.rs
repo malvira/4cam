@@ -197,6 +197,8 @@ pub fn contour(
 pub struct DropCutter3 {
     cutter: Cutter,
     tris: Vec<[[f64; 3]; 3]>,
+    /// XY box of each triangle: [x_min, y_min, x_max, y_max].
+    boxes: Vec<[f64; 4]>,
     x0: f64,
     y0: f64,
     cell: f64,
@@ -209,7 +211,9 @@ impl DropCutter3 {
     pub fn new(mesh: &Mesh, cutter: Cutter) -> DropCutter3 {
         let r = cutter.radius();
         let (lo, hi) = mesh.bounds().unwrap_or(([0.0; 3], [1.0; 3]));
-        let cell = (2.0 * r).max(0.5);
+        // bins of half the radius, each listing the triangles within the radius of it: a
+        // query looks at one bin, so small bins mean few candidates
+        let cell = (0.5 * r).max(0.25);
         let (x0, y0) = (lo[0] - r, lo[1] - r);
         let nx = (((hi[0] + r - x0) / cell).ceil() as usize).max(1);
         let ny = (((hi[1] + r - y0) / cell).ceil() as usize).max(1);
@@ -232,9 +236,30 @@ impl DropCutter3 {
                 }
             }
         }
+        // highest triangles first: a query stops at the first one that cannot beat its best
+        let top = |k: u32| {
+            let t = &mesh.triangles[k as usize];
+            t[0][2].max(t[1][2]).max(t[2][2])
+        };
+        for b in &mut bins {
+            b.sort_by(|&p, &q| top(q).total_cmp(&top(p)));
+        }
+        let boxes = mesh
+            .triangles
+            .iter()
+            .map(|t| {
+                [
+                    t[0][0].min(t[1][0]).min(t[2][0]),
+                    t[0][1].min(t[1][1]).min(t[2][1]),
+                    t[0][0].max(t[1][0]).max(t[2][0]),
+                    t[0][1].max(t[1][1]).max(t[2][1]),
+                ]
+            })
+            .collect();
         DropCutter3 {
             cutter,
             tris: mesh.triangles.clone(),
+            boxes,
             x0,
             y0,
             cell,
@@ -251,7 +276,12 @@ impl DropCutter3 {
             return floor;
         }
         let mut best = floor;
+        let r = self.cutter.radius();
         for &k in &self.bins[j as usize * self.nx + i as usize] {
+            let bb = &self.boxes[k as usize];
+            if bb[0] > x + r || bb[2] < x - r || bb[1] > y + r || bb[3] < y - r {
+                continue;
+            }
             let t = &self.tris[k as usize];
             let lt = [
                 [t[0][0] - x, t[0][1] - y, t[0][2]],
@@ -259,7 +289,8 @@ impl DropCutter3 {
                 [t[2][0] - x, t[2][1] - y, t[2][2]],
             ];
             if lt.iter().map(|p| p[2]).fold(f64::NEG_INFINITY, f64::max) <= best {
-                continue;
+                // sorted by top: no later triangle can be higher
+                break;
             }
             best = best.max(drop_triangle(&self.cutter, &lt));
         }
@@ -340,7 +371,17 @@ pub fn raster3d(
     // angle 0: the rows run from y0 to y1, as given
     let (w0, w1) = if op.angle == 0.0 { (y0, y1) } else { (w0, w1) };
     let n = (((w1 - w0).abs() / step).ceil() as usize).max(1);
-    let surf = |x: f64, y: f64| dc.z_at(x, y, floor) + op.leave;
+    // the surface under each point, once for all the levels (the same values every time)
+    let cache = std::cell::RefCell::new(std::collections::HashMap::<(u64, u64), f64>::new());
+    let surf = |x: f64, y: f64| {
+        let key = (x.to_bits(), y.to_bits());
+        if let Some(&z) = cache.borrow().get(&key) {
+            return z;
+        }
+        let z = dc.z_at(x, y, floor) + op.leave;
+        cache.borrow_mut().insert(key, z);
+        z
+    };
     let top = stock.max[2];
     let feeds = [op.feed, op.plunge_feed];
     b.comment("--- 3D raster ---");

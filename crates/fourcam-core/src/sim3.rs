@@ -301,6 +301,7 @@ impl Playback3 {
             .filter_map(|s| s.tool)
             .filter_map(|t| cutter_for(t).map(|c| (t, c)))
             .collect();
+        let every = crate::sim::checkpoint_spacing(segments.len(), initial.z.len() * 10);
         Playback3 {
             segments,
             cutters,
@@ -308,7 +309,7 @@ impl Playback3 {
             stock: initial.clone(),
             initial,
             pos: 0,
-            every: 1000,
+            every,
             checkpoints: Vec::new(),
         }
     }

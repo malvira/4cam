@@ -544,6 +544,47 @@ pub fn simulate(
     st
 }
 
+/// Simulation grid resolution: rotary cells `dx` mm along X by `na` around; 3-axis cells of
+/// the block's longer side / `xyz_cells`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct Resolution {
+    pub dx: f64,
+    pub na: usize,
+    pub xyz_cells: usize,
+}
+
+impl Resolution {
+    /// "coarse" (0.2 mm x 2 deg, 120 across), "normal" (0.1 mm x 1.5 deg, 240), "fine"
+    /// (0.05 mm x 0.5 deg, 480), "ultra" (0.025 mm x 0.25 deg, 960).
+    pub fn preset(name: &str) -> Option<Resolution> {
+        let (dx, na, xyz_cells) = match name {
+            "coarse" => (0.2, 180, 120),
+            "normal" => (0.1, 240, 240),
+            "fine" => (0.05, 720, 480),
+            "ultra" => (0.025, 1440, 960),
+            _ => return None,
+        };
+        Some(Resolution { dx, na, xyz_cells })
+    }
+
+    /// 3-axis cell size (mm) for a block.
+    pub fn cell_for(&self, stock: &crate::job::StockBox) -> f64 {
+        let span = (stock.max[0] - stock.min[0]).max(stock.max[1] - stock.min[1]);
+        (span / self.xyz_cells.max(1) as f64).max(0.01)
+    }
+}
+
+/// Largest grid the simulations accept (cells).
+pub const MAX_CELLS: usize = 40_000_000;
+
+/// Snapshot spacing for playback: every 1000 segments, wider when the grid is large so the
+/// snapshots stay under about 256 MB.
+pub fn checkpoint_spacing(segments: usize, cell_bytes: usize) -> usize {
+    let budget = 256usize << 20;
+    let fit = (budget / cell_bytes.max(1)).max(1);
+    1000usize.max(segments.div_ceil(fit))
+}
+
 /// Step through a whole job's material removal, forwards or backwards. Stock snapshots every
 /// `every` segments make jumping back cheap.
 pub struct Playback {
@@ -570,6 +611,7 @@ impl Playback {
             .filter_map(|s| s.tool)
             .filter_map(|t| cutter_for(t).map(|c| (t, c)))
             .collect();
+        let every = checkpoint_spacing(segments.len(), initial.r.len() * 6);
         Playback {
             segments,
             cutters,
@@ -577,9 +619,14 @@ impl Playback {
             stock: initial.clone(),
             initial,
             pos: 0,
-            every: 1000,
+            every,
             checkpoints: Vec::new(),
         }
+    }
+
+    /// Segments between stock snapshots.
+    pub fn checkpoint_every(&self) -> usize {
+        self.every
     }
 
     pub fn len(&self) -> usize {
