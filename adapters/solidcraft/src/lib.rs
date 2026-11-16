@@ -1,0 +1,605 @@
+//! 4cam as a SolidCraft plugin.
+//!
+//! The plugin has one entry per 4cam operation type (`ops::registry()`, `_` spelled `-`).
+//! An entry takes a SolidCraft body, meshes it with SolidCraft's read-only `model.mesh`
+//! command, builds a one-setup 4cam project round it (the body on the rotary axis, its front
+//! at X0, stock, tool and operation filled by 4cam's defaults), plans and posts it, and
+//! writes the G-code, the project and the body's STL to the folder the user granted.
+//!
+//! This file is the host-independent part (it builds and tests natively); `guest.rs` is the
+//! WebAssembly component glue and `bin/pack.rs` makes the installable zip.
+//! See `docs/adapters/solidcraft.md`.
+
+use fourcam::job::MeshSource;
+use fourcam::mesh::Axis;
+use fourcam::{gouge_check, limits_for, ops, plan_with_mesh, post, profiles, verify_gcode};
+use serde_json::{json, Map, Value};
+
+#[cfg(target_arch = "wasm32")]
+mod guest;
+
+/// Plugin id: the package folder name in SolidCraft.
+pub const PLUGIN_ID: &str = "fourcam";
+/// The named folder the plugin asks to write into.
+pub const GRANT: &str = "output";
+/// The one SolidCraft command the plugin calls.
+pub const MESH_COMMAND: &str = "model.mesh";
+/// The machine used when the entry does not name one.
+pub const DEFAULT_MACHINE: &str = "makera-z1-4axis";
+/// Tool diameter when the entry does not give one (mm).
+pub const DEFAULT_TOOL_DIAMETER: f64 = 3.175;
+/// V-bit included angle when the entry does not give one (deg).
+pub const DEFAULT_VBIT_ANGLE: f64 = 90.0;
+/// Spindle speed when the entry does not give one (rpm).
+pub const DEFAULT_RPM: u32 = 12000;
+/// SolidCraft's `model.mesh` default chordal tolerance (mm).
+pub const DEFAULT_TOLERANCE: f64 = 0.05;
+/// Default stock: the body's largest radius plus this, rounded up to 0.5 mm (mm).
+pub const STOCK_RADIAL_MARGIN: f64 = 0.5;
+/// Default stock: the body's length plus this much to hold (mm).
+pub const STOCK_GRIP: f64 = 15.0;
+/// Guest budget asked for in the manifest (fuel units, MiB, ms).
+pub const LIMITS: (u64, u32, u32) = (100_000_000_000, 128, 30_000);
+
+/// Inputs every entry takes, besides the operation's own fields.
+const COMMON: [&str; 11] = [
+    "bodies",
+    "tolerance",
+    "axis",
+    "machine",
+    "tool_kind",
+    "tool_diameter",
+    "vbit_angle",
+    "stock_radius",
+    "stock_length",
+    "spindle_rpm",
+    "name",
+];
+
+/// A failure the guest reports as `invalid-input(field, reason)` or a plain error.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Error {
+    Input { field: String, reason: String },
+    Engine(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Input { field, reason } => write!(f, "{field}: {reason}"),
+            Error::Engine(s) => f.write_str(s),
+        }
+    }
+}
+
+fn input(field: &str, reason: impl Into<String>) -> Error {
+    Error::Input {
+        field: field.into(),
+        reason: reason.into(),
+    }
+}
+
+/// The operation types offered as entries: all but those that only work from a revolved
+/// profile (`rotary_turning`), since the plugin gets the part as a mesh.
+pub fn offered() -> Vec<ops::OperationType> {
+    ops::registry()
+        .into_iter()
+        .filter(|t| t.geometry != ["profile"])
+        .collect()
+}
+
+/// Entry name for an operation type (`rotary_rough` -> `rotary-rough`).
+pub fn entry_name(kind: &str) -> String {
+    kind.replace('_', "-")
+}
+
+/// Operation type for an entry name, if the registry has it.
+pub fn entry_kind(entry: &str) -> Option<&'static str> {
+    offered()
+        .into_iter()
+        .map(|t| t.kind)
+        .find(|k| entry_name(k) == entry)
+}
+
+fn number(min: Option<f64>) -> Value {
+    let mut v = json!({"type": "number"});
+    if let Some(m) = min {
+        v["minimum"] = json!(m);
+    }
+    v
+}
+
+fn array(items: Value, len: Option<usize>) -> Value {
+    let mut v = json!({"type": "array", "items": items});
+    if let Some(n) = len {
+        v["minItems"] = json!(n);
+        v["maxItems"] = json!(n);
+    }
+    v
+}
+
+/// JSON schema of one operation field, from its registry kind. No defaults: 4cam fills
+/// every field from the tool, the machine and the part when it is left out.
+fn param_schema(p: &ops::ParamSpec) -> Value {
+    let num = json!({"type": "number"});
+    let point = array(num.clone(), Some(2));
+    match p.kind {
+        "number" => number(p.min),
+        "integer" => {
+            let mut v = json!({"type": "integer"});
+            if let Some(m) = p.min {
+                v["minimum"] = json!(m);
+            }
+            v
+        }
+        "boolean" => json!({"type": "boolean"}),
+        "vec2" => point.clone(),
+        "rect" => array(num.clone(), Some(4)),
+        "numbers" => array(num, None),
+        "integers" => array(json!({"type": "integer"}), None),
+        "points" => array(point, None),
+        "paths" => array(array(point, None), None),
+        "choice" => json!({"enum": p.choices}),
+        _ => json!({"type": "string"}),
+    }
+}
+
+/// Input schema of the entry for `t`: the common inputs, then the operation's fields.
+pub fn input_schema(t: &ops::OperationType) -> Value {
+    let machines: Vec<String> = profiles::builtin_machines()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    let mut props = Map::new();
+    props.insert(
+        "bodies".into(),
+        json!({"type": "array", "items": {"type": "string"}, "maxItems": 1}),
+    );
+    props.insert(
+        "tolerance".into(),
+        json!({"type": "number", "minimum": 0, "default": DEFAULT_TOLERANCE}),
+    );
+    props.insert(
+        "axis".into(),
+        json!({"enum": ["X", "Y", "Z"], "default": "X"}),
+    );
+    props.insert(
+        "machine".into(),
+        json!({"enum": machines, "default": DEFAULT_MACHINE}),
+    );
+    props.insert(
+        "tool_kind".into(),
+        json!({"enum": t.tool_shapes, "default": t.tool_shapes.first()}),
+    );
+    props.insert(
+        "tool_diameter".into(),
+        json!({"type": "number", "minimum": 0, "default": DEFAULT_TOOL_DIAMETER}),
+    );
+    if t.tool_shapes.contains(&"vbit") {
+        props.insert(
+            "vbit_angle".into(),
+            json!({"type": "number", "minimum": 0, "maximum": 180, "default": DEFAULT_VBIT_ANGLE}),
+        );
+    }
+    props.insert(
+        "stock_radius".into(),
+        json!({"type": "number", "minimum": 0}),
+    );
+    props.insert(
+        "stock_length".into(),
+        json!({"type": "number", "minimum": 0}),
+    );
+    props.insert(
+        "spindle_rpm".into(),
+        json!({"type": "integer", "minimum": 1, "default": DEFAULT_RPM}),
+    );
+    props.insert("name".into(), json!({"type": "string"}));
+    for p in &t.params {
+        if p.name != "tool" && !p.name.is_empty() {
+            props.insert(p.name.into(), param_schema(p));
+        }
+    }
+    json!({"type": "object", "required": ["bodies"], "properties": props})
+}
+
+/// The package manifest (`plugin.json`), generated from the operation registry.
+pub fn manifest() -> Value {
+    let entries: Vec<Value> = offered()
+        .iter()
+        .map(|t| {
+            json!({
+                "name": entry_name(t.kind),
+                "effect": "read",
+                "input_schema": input_schema(t),
+            })
+        })
+        .collect();
+    json!({
+        "id": PLUGIN_ID,
+        "name": "4cam",
+        "version": env!("CARGO_PKG_VERSION"),
+        "description": "4th-axis rotary CAM: plan one 4cam operation on a body and write its G-code to a granted folder.",
+        "capabilities": ["commands@0.1"],
+        "runtime": {
+            "module": "plugin.wasm",
+            "entries": entries,
+            "commands": [MESH_COMMAND],
+            "limits": {"fuel": LIMITS.0, "memory_mib": LIMITS.1, "deadline_ms": LIMITS.2},
+            "permissions": {"files": [{"name": GRANT, "read": false, "write": true}]},
+        },
+    })
+}
+
+/// The `model.mesh` call for an entry's parameters: `(command, args)`.
+pub fn mesh_request(params: &Value) -> Result<Value, Error> {
+    let body = params
+        .get("bodies")
+        .and_then(Value::as_array)
+        .filter(|a| a.len() == 1)
+        .and_then(|a| a[0].as_str())
+        .ok_or_else(|| input("bodies", "select one body"))?;
+    let tolerance = match params.get("tolerance") {
+        None | Some(Value::Null) => DEFAULT_TOLERANCE,
+        Some(v) => v
+            .as_f64()
+            .filter(|t| t.is_finite() && *t > 0.0)
+            .ok_or_else(|| input("tolerance", "a positive number (mm)"))?,
+    };
+    Ok(json!({"body": body, "tolerance": tolerance}))
+}
+
+/// Binary STL (f32, as any STL) of a `model.mesh` result.
+pub fn stl_from_mesh_result(r: &Value) -> Result<Vec<u8>, Error> {
+    let bad = |what: &str| Error::Engine(format!("{MESH_COMMAND} returned no valid {what}"));
+    let pos = r
+        .get("positions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad("positions"))?;
+    let tris = r
+        .get("triangles")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad("triangles"))?;
+    let mut verts = Vec::with_capacity(pos.len());
+    for p in pos {
+        let c: Vec<f64> = p
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_f64).collect())
+            .unwrap_or_default();
+        if c.len() != 3 || c.iter().any(|x| !x.is_finite()) {
+            return Err(bad("positions"));
+        }
+        verts.push([c[0] as f32, c[1] as f32, c[2] as f32]);
+    }
+    if tris.is_empty() {
+        return Err(Error::Engine("the body has no triangles".into()));
+    }
+    let mut out = Vec::with_capacity(84 + 50 * tris.len());
+    let mut header = [0u8; 80];
+    let tag = b"4cam: SolidCraft body (model.mesh, component-local mm)";
+    header[..tag.len()].copy_from_slice(tag);
+    out.extend_from_slice(&header);
+    out.extend_from_slice(&(tris.len() as u32).to_le_bytes());
+    for t in tris {
+        let idx: Vec<usize> = t
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_u64)
+                    .map(|i| i as usize)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if idx.len() != 3 || idx.iter().any(|&i| i >= verts.len()) {
+            return Err(bad("triangles"));
+        }
+        let [a, b, c] = [verts[idx[0]], verts[idx[1]], verts[idx[2]]];
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        let n = if len > 0.0 {
+            [n[0] / len, n[1] / len, n[2] / len]
+        } else {
+            [0.0; 3]
+        };
+        for f in n.iter().chain(&a).chain(&b).chain(&c) {
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+        out.extend_from_slice(&[0, 0]);
+    }
+    Ok(out)
+}
+
+/// One file the entry writes into the granted folder.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutFile {
+    pub path: String,
+    pub data: Vec<u8>,
+}
+
+/// What an entry produced: files to write, and the JSON it returns to SolidCraft.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outcome {
+    pub files: Vec<OutFile>,
+    pub result: Value,
+}
+
+fn opt_f64(params: &Value, field: &str) -> Result<Option<f64>, Error> {
+    match params.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_f64()
+            .filter(|x| x.is_finite() && *x > 0.0)
+            .map(Some)
+            .ok_or_else(|| input(field, "a positive number")),
+    }
+}
+
+fn opt_str<'a>(params: &'a Value, field: &str) -> Result<Option<&'a str>, Error> {
+    match params.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_str().map(Some).ok_or_else(|| input(field, "text")),
+    }
+}
+
+fn round_up_half(x: f64) -> f64 {
+    (x * 2.0).ceil() / 2.0
+}
+
+/// Build the project for one entry: the body (an STL in component-local mm) placed on the
+/// rotary axis, default stock and tool, and the operation filled by 4cam's defaults with
+/// the given fields on top. Returns the project JSON and the program name.
+pub fn build_project(entry: &str, params: &Value, stl: &[u8]) -> Result<(Value, String), Error> {
+    let kind =
+        entry_kind(entry).ok_or_else(|| input("entry", format!("no 4cam operation {entry:?}")))?;
+    let t = ops::find(kind).ok_or_else(|| input("entry", "unknown operation"))?;
+    if !params.is_object() {
+        return Err(input("params", "an object"));
+    }
+    for (k, _) in params.as_object().into_iter().flatten() {
+        let known =
+            COMMON.contains(&k.as_str()) || t.params.iter().any(|p| p.name == k && k != "tool");
+        if !known {
+            return Err(input(k, format!("not an input of {entry}")));
+        }
+    }
+    let axis = match opt_str(params, "axis")?.unwrap_or("X") {
+        "X" | "x" => Axis::X,
+        "Y" | "y" => Axis::Y,
+        "Z" | "z" => Axis::Z,
+        _ => return Err(input("axis", "X, Y or Z")),
+    };
+    let machine_id = opt_str(params, "machine")?.unwrap_or(DEFAULT_MACHINE);
+    let machine = profiles::builtin_machine(machine_id)
+        .ok_or_else(|| input("machine", format!("no built-in machine {machine_id:?}")))?;
+    let body = params["bodies"][0].as_str().unwrap_or("body");
+    let name = match opt_str(params, "name")? {
+        Some(n) => n.to_string(),
+        None => {
+            let clean: String = body
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            format!("{}_{kind}", clean.trim_matches('_'))
+        }
+    };
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(input("name", "1..64 letters, digits, _ or -"));
+    }
+
+    // Place the body: its axis on X, its front (largest X) at X0.
+    let axis_name = match axis {
+        Axis::X => "x",
+        Axis::Y => "y",
+        Axis::Z => "z",
+    };
+    let file = format!("{name}.stl");
+    let mut source = MeshSource {
+        file: file.clone(),
+        axis,
+        translate: [0.0; 3],
+        image: None,
+    };
+    let raw = source
+        .mesh(stl)
+        .map_err(|e| Error::Engine(format!("body mesh: {e}")))?;
+    let (lo, hi) = raw
+        .bounds()
+        .ok_or_else(|| Error::Engine("the body has no triangles".into()))?;
+    source.translate = [-hi[0], 0.0, 0.0];
+    let rmax = raw
+        .triangles
+        .iter()
+        .flatten()
+        .map(|p| p[1].hypot(p[2]))
+        .fold(0.0, f64::max);
+    let stock_radius = match opt_f64(params, "stock_radius")? {
+        Some(r) => r,
+        // (less a hair, so f32 rounding of an exact radius does not add 0.5 mm)
+        None => round_up_half(rmax + STOCK_RADIAL_MARGIN - 1e-4),
+    };
+    let stock_length = match opt_f64(params, "stock_length")? {
+        Some(l) => l,
+        None => (hi[0] - lo[0] + STOCK_GRIP).ceil(),
+    };
+
+    let tool_kind = opt_str(params, "tool_kind")?.unwrap_or(t.tool_shapes[0]);
+    if !t.tool_shapes.contains(&tool_kind) {
+        return Err(input(
+            "tool_kind",
+            format!("{kind} takes {}", t.tool_shapes.join(", ")),
+        ));
+    }
+    let diameter = opt_f64(params, "tool_diameter")?.unwrap_or(DEFAULT_TOOL_DIAMETER);
+    let tool = match tool_kind {
+        "vbit" => {
+            let angle = opt_f64(params, "vbit_angle")?.unwrap_or(DEFAULT_VBIT_ANGLE);
+            json!({"number": 1, "description": format!("{angle} deg V-bit, {diameter} mm"),
+                   "kind": "vbit", "angle": angle, "diameter": diameter})
+        }
+        k => json!({"number": 1, "description": format!("{diameter} mm {k} end mill"),
+                    "kind": k, "diameter": diameter}),
+    };
+    let rpm = match params.get("spindle_rpm") {
+        None | Some(Value::Null) => DEFAULT_RPM as u64,
+        Some(v) => v
+            .as_u64()
+            .filter(|r| *r > 0 && *r <= u32::MAX as u64)
+            .ok_or_else(|| input("spindle_rpm", "a positive whole number"))?,
+    };
+
+    let mut project = json!({
+        "schema_version": "0.2",
+        "name": name,
+        "models": [{
+            "id": "body", "name": body, "kind": "mesh", "file": file,
+            "axis": axis_name, "translate": source.translate,
+        }],
+        "tools": [tool],
+        "setups": [{
+            "id": "setup1",
+            "name": "Rotary setup",
+            "machine": machine.id,
+            "stock": {"shape": "cylinder", "radius": stock_radius, "length": stock_length},
+            "clearance": 3.0,
+            "holding": {"kind": "rotary_chuck", "tailstock": false},
+            "part": ["body"],
+            "spindle_rpm": rpm,
+            "operations": [],
+            "outputs": [],
+        }],
+    });
+
+    // The operation: 4cam's defaults, then the fields the user gave.
+    let text = project.to_string();
+    let (p, _) = fourcam::project::Project::from_json_any(&text).map_err(Error::Engine)?;
+    let placed = source.mesh(stl).map_err(|e| Error::Engine(e.to_string()))?;
+    let meshes = |_: &str| Some(placed.clone());
+    let mut op = p
+        .op_defaults(kind, "setup1", Some(1), &[], &[], Some(&machine), &meshes)
+        .map_err(Error::Engine)?;
+    for spec in &t.params {
+        if let Some(v) = params
+            .get(spec.name)
+            .filter(|v| !v.is_null() && spec.name != "tool")
+        {
+            op[spec.name] = v.clone();
+        }
+    }
+    op["id"] = json!("op1");
+    op["enabled"] = json!(true);
+    let problems = ops::check(&op, None);
+    if !problems.is_empty() {
+        return Err(input(kind, problems.join("; ")));
+    }
+    let setup = &mut project["setups"][0];
+    setup["operations"] = json!([op]);
+    setup["outputs"] = json!([{
+        "name": name,
+        "title": format!("{} on {body}", t.title),
+        "operations": ["op1"],
+    }]);
+    Ok((project, name))
+}
+
+/// Plan and post a project built by [`build_project`] the way the `4cam run` command does,
+/// with the body STL standing in for the project's mesh file.
+pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String)>, Value), Error> {
+    let text = project.to_string();
+    let meshes = |src: &MeshSource| src.mesh(stl).ok();
+    let libraries = profiles::builtin_libraries();
+    let jobs =
+        fourcam::project::jobs_from_any_with(&text, &libraries, &meshes).map_err(Error::Engine)?;
+    let mut programs = Vec::new();
+    let mut report = Vec::new();
+    for (_, job) in &jobs {
+        let wanted = job
+            .machine
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MACHINE.into());
+        let profile = profiles::builtin_machine(&wanted)
+            .ok_or_else(|| Error::Engine(format!("no built-in machine {wanted:?}")))?;
+        let mesh = job
+            .part
+            .mesh
+            .as_ref()
+            .map(|m| m.mesh(stl))
+            .transpose()
+            .map_err(|e| Error::Engine(e.to_string()))?;
+        let tps = plan_with_mesh(job, mesh.as_ref()).map_err(|e| Error::Engine(e.to_string()))?;
+        let limits: Vec<Value> = profiles::check_limits(job, &tps, &profile)
+            .into_iter()
+            .map(|i| json!({"severity": i.severity, "program": i.program, "message": i.message}))
+            .collect();
+        let gouges =
+            gouge_check(job, &tps, mesh.as_ref()).map_err(|e| Error::Engine(e.to_string()))?;
+        for tp in &tps {
+            let gcode = post(tp, &profile.post);
+            let issues: Vec<String> = verify_gcode(&gcode, &limits_for(tp, &profile.post))
+                .iter()
+                .map(|i| i.to_string())
+                .collect();
+            let time = fourcam::estimate::estimate_toolpath(tp, &profile);
+            let gouge = gouges.iter().find(|g| g.program == tp.name);
+            report.push(json!({
+                "program": tp.name,
+                "file": format!("{}.nc", tp.name),
+                "lines": gcode.lines().count(),
+                "time_s": time.estimate.total_s,
+                "issues": issues,
+                "gouge_mm": gouge.filter(|g| g.moves_checked > 0).map(|g| g.max_depth),
+            }));
+            programs.push((tp.name.clone(), gcode));
+        }
+        if !limits.is_empty() {
+            report.push(json!({"limits": limits}));
+        }
+    }
+    Ok((programs, json!(report)))
+}
+
+/// Everything one entry does after the body is meshed: the files to write and the result.
+pub fn run_entry(entry: &str, params: &Value, mesh_result: &Value) -> Result<Outcome, Error> {
+    let stl = stl_from_mesh_result(mesh_result)?;
+    let (project, name) = build_project(entry, params, &stl)?;
+    let (programs, report) = plan_and_post(&project, &stl)?;
+    let mut files = vec![
+        OutFile {
+            path: format!("{name}.stl"),
+            data: stl,
+        },
+        OutFile {
+            path: format!("{name}.project.json"),
+            data: serde_json::to_vec_pretty(&project).map_err(|e| Error::Engine(e.to_string()))?,
+        },
+    ];
+    for (prog, gcode) in programs {
+        files.push(OutFile {
+            path: format!("{prog}.nc"),
+            data: gcode.into_bytes(),
+        });
+    }
+    let written: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    let result = json!({
+        "operation": entry_kind(entry),
+        "folder": GRANT,
+        "files": written,
+        "programs": report,
+    });
+    Ok(Outcome { files, result })
+}

@@ -1,0 +1,24 @@
+[package]
+name = "fourcam-solidcraft"
+description = "4cam as a SolidCraft plugin: one entry per 4cam operation, G-code written to a granted folder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "fourcam_solidcraft"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fourcam-core = { path = "../../crates/fourcam-core" }
+serde_json = "1"
+
+# The plugin itself: a WebAssembly component for SolidCraft's `craft:plugin@0.1.0` world.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = { version = "0.63", default-features = false, features = ["macros", "realloc"] }
+
+# The packer (src/bin/pack.rs): wraps the core module as a component and zips the package.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wit-component = "0.263"
+zip = { version = "9", default-features = false, features = ["deflate"] }
