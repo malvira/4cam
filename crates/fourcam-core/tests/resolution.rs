@@ -176,3 +176,36 @@ fn playback_memory_stays_bounded_on_fine_grids() {
     assert!(every * 22 >= 1_000_000 && every >= 1000, "{every}");
     assert_eq!(sim::checkpoint_spacing(30_000, 100_000 * 6), 1000);
 }
+
+#[test]
+fn threaded_simulation_is_bit_identical() {
+    // the indexed knob: turning, knurl, chamfer, then indexed 3+1 flat and hole
+    let text = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/knob/knob_indexed.project.json"),
+    )
+    .unwrap();
+    let libs = fourcam::profiles::builtin_libraries();
+    let job = fourcam::project::jobs_from_any_with(&text, &libs, &|_| None)
+        .unwrap()
+        .remove(0)
+        .1;
+    let tps = fourcam::plan(&job).unwrap();
+    let grid = fourcam::sim_grid(&job, None, 0.1, 240).unwrap();
+    let cutter = |n: u32| fourcam::cutter_for(n, job.tool(n)?.shape).ok();
+    let run = |threads: usize| {
+        let mut st = sim::RadialMap::filled(grid, job.stock.radius);
+        let stats: Vec<_> = tps
+            .iter()
+            .map(|tp| sim::simulate_threads(&mut st, tp, &cutter, 0.1, threads))
+            .collect();
+        (st, stats)
+    };
+    let (one, s1) = run(1);
+    for threads in [3, 7] {
+        let (many, sn) = run(threads);
+        assert!(one.r == many.r, "radii differ at {threads} threads");
+        assert!(one.op == many.op, "tags differ at {threads} threads");
+        assert_eq!(s1, sn, "stats differ at {threads} threads");
+    }
+}

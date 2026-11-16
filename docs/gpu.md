@@ -118,3 +118,25 @@ so the G-code would depend on whether a GPU was present. Bit-exact `f32` emulati
 - **Never:** GPU for toolpaths, G-code, the verifier or the time estimates.
 
 Results of B and C are added below as they land.
+
+## B: threaded simulation (done)
+
+`sim::apply_banded` splits the rotary grid into bands of rows, one per thread, using
+`std::thread::scope` with no new dependency. Every band replays every tool position in order
+and stamps only its own rows. The stock, the operation tags and the statistics are identical
+to the single-threaded run; a test compares them bit for bit at 1, 3 and 7 threads on the
+indexed knob.
+
+`simulate` uses all cores natively (`FOURCAM_THREADS` overrides) and one thread on wasm.
+Playback runs long seeks the same way, between snapshots.
+
+| Stage | One thread | Threads |
+| --- | ---: | ---: |
+| knob: simulate, Normal | 1 925 ms | 262 ms |
+| knob: simulate, Fine | 22 849 ms | **1 355 ms** (17x) |
+| knob: playback to the end | 4 194 ms | 331 ms |
+| knob mesh finish: simulate, Fine | 16 980 ms | 2 324 ms |
+| ring: simulate, Fine | 13 126 ms | 3 703 ms |
+
+The ring gains less because its cutting is concentrated in a few X bands, so most threads
+finish early. Interleaving rows across threads would even that out.

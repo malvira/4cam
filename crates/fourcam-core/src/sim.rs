@@ -366,6 +366,114 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
     out
 }
 
+/// Rows `row0..row1` of a radial map, with their radii and tags: what one thread stamps.
+pub struct Band<'a> {
+    pub g: Grid,
+    pub row0: usize,
+    pub row1: usize,
+    pub r: &'a mut [f32],
+    pub op: &'a mut [u16],
+}
+
+impl RadialMap {
+    /// The whole map as one band.
+    pub fn band(&mut self) -> Band<'_> {
+        Band {
+            g: self.grid,
+            row0: 0,
+            row1: self.grid.nx,
+            r: &mut self.r,
+            op: &mut self.op,
+        }
+    }
+}
+
+/// Threads for a simulation: all cores natively (`FOURCAM_THREADS` overrides), one on wasm,
+/// and no more than one per 8 rows.
+pub fn sim_threads(rows: usize) -> usize {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = rows;
+        1
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let n = std::env::var("FOURCAM_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
+        n.min(rows / 8).clamp(1, 64)
+    }
+}
+
+/// Apply `segs` in order with `threads` bands of rows, one per thread. Each band sees every
+/// segment in the same order, so the stock, the tags and the effects equal a single pass.
+pub fn apply_banded(
+    stock: &mut RadialMap,
+    segs: &[Segment],
+    cutters: &[Option<Cutter>],
+    step: f64,
+    threads: usize,
+) -> Vec<SegmentEffect> {
+    let g = stock.grid;
+    if threads <= 1 || g.nx < 2 {
+        let mut b = stock.band();
+        return segs
+            .iter()
+            .zip(cutters)
+            .map(|(s, c)| apply_segment_band(&mut b, s, c.as_ref(), step))
+            .collect();
+    }
+    let per = g.nx.div_ceil(threads);
+    let parts: Vec<Vec<SegmentEffect>> = std::thread::scope(|sc| {
+        let handles: Vec<_> = stock
+            .r
+            .chunks_mut(per * g.na)
+            .zip(stock.op.chunks_mut(per * g.na))
+            .enumerate()
+            .map(|(t, (r, op))| {
+                let row0 = t * per;
+                let row1 = (row0 + per).min(g.nx);
+                sc.spawn(move || {
+                    let mut b = Band {
+                        g,
+                        row0,
+                        row1,
+                        r,
+                        op,
+                    };
+                    segs.iter()
+                        .zip(cutters)
+                        .map(|(s, c)| apply_segment_band(&mut b, s, c.as_ref(), step))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("simulation thread"))
+            .collect()
+    });
+    // every band sampled the same positions; cuts add up, hits and rows combine
+    (0..segs.len())
+        .map(|i| {
+            let mut e = SegmentEffect {
+                samples: parts[0][i].samples,
+                ..SegmentEffect::default()
+            };
+            for p in &parts {
+                let q = p[i];
+                e.cells_cut += q.cells_cut;
+                e.rapid_hit |= q.rapid_hit;
+                if let Some((lo, hi)) = q.rows {
+                    e.rows = Some(e.rows.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+                }
+            }
+            e
+        })
+        .collect()
+}
+
 /// What one segment did to the stock.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct SegmentEffect {
@@ -380,6 +488,16 @@ pub struct SegmentEffect {
 /// Remove material along one segment, sampling at most `step` mm apart.
 pub fn apply_segment(
     stock: &mut RadialMap,
+    seg: &Segment,
+    cutter: Option<&Cutter>,
+    step: f64,
+) -> SegmentEffect {
+    apply_segment_band(&mut stock.band(), seg, cutter, step)
+}
+
+/// [`apply_segment`] on the rows of one band.
+pub fn apply_segment_band(
+    stock: &mut Band,
     seg: &Segment,
     cutter: Option<&Cutter>,
     step: f64,
@@ -421,7 +539,7 @@ pub fn apply_segment(
 
 /// An indexed 3-axis segment: the tool (axis +Z) moves in machine X/Y/Z with A held at `a`.
 fn apply_indexed(
-    stock: &mut RadialMap,
+    stock: &mut Band,
     seg: &Segment,
     cutter: Option<&Cutter>,
     step: f64,
@@ -456,13 +574,13 @@ fn apply_indexed(
 /// is cut back to where it enters the tool. Rays that pass through the tool below the surface
 /// (a hole the heightmap cannot hold) are left alone.
 fn stamp_indexed(
-    stock: &mut RadialMap,
+    stock: &mut Band,
     c: &Cutter,
     tip: [f64; 3],
     a_deg: f64,
     tag: u16,
 ) -> (usize, Option<(usize, usize)>) {
-    let g = stock.grid;
+    let g = stock.g;
     let rad = c.radius();
     let lim = rad * (1.0 - 1e-9);
     let i0 = (((tip[0] - rad - g.x0) / g.dx - 0.5).ceil()).max(0.0) as usize;
@@ -470,7 +588,16 @@ fn stamp_indexed(
     if i1 < 0.0 || i0 >= g.nx {
         return (0, None);
     }
-    let i1 = (i1 as usize).min(g.nx - 1);
+    // only this band's rows
+    let (i0, i1) = (
+        i0.max(stock.row0),
+        (i1 as usize)
+            .min(g.nx - 1)
+            .min(stock.row1.saturating_sub(1)),
+    );
+    if stock.row1 == 0 || i0 > i1 {
+        return (0, None);
+    }
     let dphi = TAU / g.na as f64;
     let a = a_deg.to_radians();
     let mut changed = 0;
@@ -487,7 +614,7 @@ fn stamp_indexed(
                 let d = u.hypot(rho * cs - tip[1]);
                 d < lim && rho * s >= tip[2] + c.height(d)
             };
-            let k = i * g.na + j;
+            let k = (i - stock.row0) * g.na + j;
             let cur = stock.r[k] as f64;
             if !inside(cur) {
                 continue;
@@ -531,10 +658,24 @@ pub fn simulate(
     cutter_for: &dyn Fn(u32) -> Option<Cutter>,
     step: f64,
 ) -> SimStats {
+    simulate_threads(stock, tp, cutter_for, step, sim_threads(stock.grid.nx))
+}
+
+/// [`simulate`] on `threads` threads (bands of rows); the result does not depend on it.
+pub fn simulate_threads(
+    stock: &mut RadialMap,
+    tp: &Toolpath,
+    cutter_for: &dyn Fn(u32) -> Option<Cutter>,
+    step: f64,
+    threads: usize,
+) -> SimStats {
+    let segs = segments(std::slice::from_ref(tp));
+    let cutters: Vec<Option<Cutter>> = segs.iter().map(|s| s.tool.and_then(cutter_for)).collect();
     let mut st = SimStats::default();
-    for seg in segments(std::slice::from_ref(tp)) {
-        let c = seg.tool.and_then(cutter_for);
-        let e = apply_segment(stock, &seg, c.as_ref(), step);
+    for (seg, e) in segs
+        .iter()
+        .zip(apply_banded(stock, &segs, &cutters, step, threads))
+    {
         st.samples += e.samples;
         st.cells_cut += e.cells_cut;
         if e.rapid_hit {
@@ -659,13 +800,24 @@ impl Playback {
             dirty = Some((0, self.stock.grid.nx.saturating_sub(1)));
         }
         while self.pos < n {
-            let seg = self.segments[self.pos];
-            let c = seg.tool.and_then(|t| self.cutters.get(&t));
-            let e = apply_segment(&mut self.stock, &seg, c, self.step);
-            if let Some((lo, hi)) = e.rows {
-                dirty = Some(dirty.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+            // up to the next snapshot; long runs split the rows across threads
+            let stop = n.min((self.pos / self.every + 1) * self.every);
+            let segs = &self.segments[self.pos..stop];
+            let cutters: Vec<Option<Cutter>> = segs
+                .iter()
+                .map(|s| s.tool.and_then(|t| self.cutters.get(&t).copied()))
+                .collect();
+            let threads = if segs.len() >= 500 {
+                sim_threads(self.stock.grid.nx)
+            } else {
+                1
+            };
+            for e in apply_banded(&mut self.stock, segs, &cutters, self.step, threads) {
+                if let Some((lo, hi)) = e.rows {
+                    dirty = Some(dirty.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+                }
             }
-            self.pos += 1;
+            self.pos = stop;
             if self.pos.is_multiple_of(self.every)
                 && !self.checkpoints.iter().any(|(at, _)| *at == self.pos)
             {
@@ -680,14 +832,14 @@ impl Playback {
 /// Lower every cell inside the tool at tip position (x, r, a). Returns cells changed by more
 /// than 1 µm.
 fn stamp(
-    stock: &mut RadialMap,
+    stock: &mut Band,
     c: &Cutter,
     x: f64,
     r: f64,
     a_deg: f64,
     tag: u16,
 ) -> (usize, Option<(usize, usize)>) {
-    let g = stock.grid;
+    let g = stock.g;
     let rad = c.radius();
     let phi_t = (PI / 2.0 - a_deg.to_radians()).rem_euclid(TAU);
     let i0 = (((x - rad - g.x0) / g.dx - 0.5).ceil()).max(0.0) as usize;
@@ -695,7 +847,16 @@ fn stamp(
     if i1 < 0.0 || i0 >= g.nx {
         return (0, None);
     }
-    let i1 = (i1 as usize).min(g.nx - 1);
+    // only this band's rows
+    let (i0, i1) = (
+        i0.max(stock.row0),
+        (i1 as usize)
+            .min(g.nx - 1)
+            .min(stock.row1.saturating_sub(1)),
+    );
+    if stock.row1 == 0 || i0 > i1 {
+        return (0, None);
+    }
     let mut rows: Option<(usize, usize)> = None;
     let half = if r <= rad { PI / 2.0 } else { (rad / r).asin() };
     let dphi = TAU / g.na as f64;
@@ -735,7 +896,7 @@ fn stamp(
                 rho = next;
             }
             if inside {
-                let k = i * g.na + j;
+                let k = (i - stock.row0) * g.na + j;
                 let cur = stock.r[k] as f64;
                 if rho < cur {
                     if cur - rho > 1e-3 {
@@ -974,7 +1135,7 @@ mod tests {
         let mut s = RadialMap::filled(g, 10.0);
         let c = Cutter::Flat { radius: 1.0 };
         // tool at A0 sits over part angle 90 deg
-        let (n, rows) = stamp(&mut s, &c, 0.0, 8.0, 0.0, 7);
+        let (n, rows) = stamp(&mut s.band(), &c, 0.0, 8.0, 0.0, 7);
         assert!(rows.is_some());
         assert!(s.op.contains(&7));
         assert!(n > 0);
@@ -1032,7 +1193,7 @@ mod tests {
             s.r[k] = part.center.r[k];
         }
         let c = Cutter::Flat { radius: 0.5 };
-        stamp(&mut s, &c, -2.0, 5.0, 0.0, 1);
+        stamp(&mut s.band(), &c, -2.0, 5.0, 0.0, 1);
         let d = deviation(&s, &part, -10.0, 0.0, 0.02);
         assert!((d.max_gouge - 1.0).abs() < 1e-3, "{d:?}");
         assert!(d.gouge_cells > 0);
