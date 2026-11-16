@@ -85,7 +85,7 @@ goldens are still byte-identical.
      for now), posted as G0/G1 X Y Z and checked by the verifier (Y included);
    - box stock in a vise (`"stock": {"shape": "box", ...}`), with the setup's own zero
      comment and a 3-axis machine-limit check (X/Y/Z spans, feed cap; no rotary checks);
-   - `face`, `pocket` (rectangle), `drill` (pecking), `contour` (outside/inside/on a closed
+   - `face`, `pocket` (rectangle, or any closed outline with islands), `drill` (pecking), `contour` (outside/inside/on a closed
      path) and `raster3d` (drop-cutter zigzag over the mesh in step-down levels, rows linked at
      depth, descents slowed to the plunge feed) in `strategy/three_axis.rs`, with registry
      entries and engine defaults from the block;
@@ -101,7 +101,21 @@ goldens are still byte-identical.
    closed solid, coloured by the operation that cut each cell, with the same playback
    controls, legend and Simulate view as rotary setups.
 
-   Not yet: non-rectangular pockets, waterline. (Tool-holder checks: done, see below.)
+   Pockets of any shape: `paths` (closed outlines, even-odd: an outline and its islands,
+   e.g. from an SVG) instead of `rect`. The tool centre follows offsets of the outline,
+   which are iso-lines of the signed distance on a 0.05 mm grid, traced with marching
+   squares and simplified to 2 µm:
+   - the first loop is at the tool radius, then every stepover inwards, capped at 0.7
+     diameters so that sharp offset corners leave nothing;
+   - a coverage check adds half-step loops wherever a ridge between walls would be left;
+   - loops are cut from the middle out, climb milling, with the last laps along the walls.
+
+   Each loop is entered from above at the plunge feed. Tests simulate an L-shaped pocket
+   with a round island at stepovers 0.4 and 0.9: the floor is cut everywhere the tool can
+   reach, and the island and everything outside are untouched.
+
+   Not yet: waterline; linking loops without retracting. (Tool-holder checks: done, see
+   below.)
 
 ## Next candidates
 

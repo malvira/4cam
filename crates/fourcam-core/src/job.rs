@@ -233,7 +233,13 @@ pub struct Pocket {
     /// operation (indexed 3+1). Vise setups: must be 0.
     #[serde(default)]
     pub index_a: f64,
+    /// Rectangle `[x0, y0, x1, y1]`, used when `paths` is empty.
+    #[serde(default)]
     pub rect: [f64; 4],
+    /// Closed outlines (even-odd: an outline and the islands inside it, any shape), cleared
+    /// by offsets instead of the rectangle when given.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<Vec<[f64; 2]>>,
     pub depth: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<f64>,

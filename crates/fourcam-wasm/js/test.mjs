@@ -129,6 +129,21 @@ const tags = new Uint16Array(Uint8Array.from(atob(end.op), (c) => c.charCodeAt(0
 assert.equal(tags[Math.floor(20 / 0.25) * 240 + Math.floor(15 / 0.25)], 2, "pocket floor cut by op 2");
 console.log(`3-axis simulation: ${po.segments} moves, ${po.ops.length} operations, dome max left ${psim.stocks[1].max_left.toFixed(3)} mm`);
 console.log(`3-axis plate: ${pl.programs.map((p) => `${p.name} ${p.lines} lines`).join(", ")}`);
+// a pocket of any shape: an L with a round island, from paths instead of the rectangle
+{
+  const shaped = JSON.parse(JSON.stringify(plate));
+  const island = Array.from({ length: 49 }, (_, k) => [15 + 4 * Math.cos(k * Math.PI / 24), 15 + 4 * Math.sin(k * Math.PI / 24)]);
+  const pocket = shaped.setups[0].operations.find((o) => o.type === "pocket");
+  delete pocket.rect;
+  pocket.paths = [[[5, 5], [55, 5], [55, 20], [30, 20], [30, 35], [5, 35], [5, 5]], island];
+  const r = cam.planAndPost(shaped, "", dome, { max_points: 1000 });
+  assert.ok(!r.error, r.error);
+  assert.deepEqual(r.programs.map((p) => p.issues.length), [0, 0]);
+  assert.equal(r.programs[0].collisions.count, 0);
+  const ps = cam.simulate(shaped, {}, dome);
+  assert.ok(!ps.error && ps.stocks[0].rapid_hits === 0, ps.error);
+  console.log(`shaped pocket: ${r.programs[0].lines} lines, simulated without rapids through stock`);
+}
 // the plate with T1 held 2 mm out (1 mm of flute): its holder meets the block beside the pocket
 {
   const short = JSON.parse(JSON.stringify(plate));

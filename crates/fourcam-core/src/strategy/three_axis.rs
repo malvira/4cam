@@ -69,6 +69,9 @@ pub fn pocket(
     safe: f64,
     op: &Pocket,
 ) -> Result<(), String> {
+    if !op.paths.is_empty() {
+        return path_pocket(b, d, stock, safe, op);
+    }
     let r = d / 2.0;
     let [px0, py0, px1, py1] = op.rect;
     let (x0, x1, y0, y1) = (
@@ -77,6 +80,9 @@ pub fn pocket(
         py0.min(py1) + r,
         py0.max(py1) - r,
     );
+    if op.rect == [0.0; 4] {
+        return Err("a pocket needs a rect or closed paths".into());
+    }
     if x0 > x1 || y0 > y1 {
         return Err(format!(
             "pocket {:?} is narrower than the {d} mm tool",
@@ -101,6 +107,196 @@ pub fn pocket(
             b.line3(x, y, z, UP, op.feed);
         }
         leave(b, safe);
+    }
+    Ok(())
+}
+
+/// Largest spacing between a shaped pocket's offset loops, in tool diameters (see
+/// [`path_pocket`]): a larger stepover is cut at this.
+pub const MAX_LOOP_SPACING: f64 = 0.7;
+/// Grid spacing of the distance field a shaped pocket is offset on (mm).
+pub const POCKET_FIELD_CELL: f64 = 0.05;
+/// Offset loops are simplified to within this (mm).
+pub const POCKET_LOOP_TOL: f64 = 0.002;
+
+/// The tool-centre loops that clear a shaped pocket at one depth, innermost first: offsets of
+/// the outline (and round its islands) at the tool radius, then every `step` deeper in. The
+/// last loop of each region is the finishing pass along the walls.
+pub fn pocket_loops(
+    paths: &[Vec<[f64; 2]>],
+    r: f64,
+    step: f64,
+) -> Result<Vec<Vec<[f64; 2]>>, String> {
+    let field = crate::offset::DistanceField::new(paths, POCKET_FIELD_CELL, f64::INFINITY);
+    let deepest = field.max();
+    if deepest <= r + 1e-6 {
+        return Err(format!(
+            "the pocket is nowhere wide enough for the {} mm tool",
+            2.0 * r
+        ));
+    }
+    let mut levels = Vec::new();
+    let mut l = r;
+    while l < deepest {
+        levels.push(l);
+        l += step;
+    }
+    // the middle (up to `deepest`) must be within reach of the last loop
+    if let Some(&last) = levels.last() {
+        if deepest - last > 0.9 * r {
+            levels.push(deepest - 0.5 * r);
+        }
+    }
+    let mut loops: Vec<(f64, Vec<[f64; 2]>)> = Vec::new();
+    for &level in &levels {
+        for lp in field.loops(level) {
+            let lp = simplify(&lp, POCKET_LOOP_TOL);
+            if lp.len() >= 4 {
+                loops.push((level, lp));
+            }
+        }
+    }
+    // Ridges between two walls (or a wall and an island) can be less deep than the next
+    // level yet out of reach of the last: there, add loops halfway between the levels, kept
+    // only where they pass near what is left. Spacing at most 0.7 diameters makes one round
+    // enough; up to three are tried.
+    for _ in 0..3 {
+        let refs: Vec<&[[f64; 2]]> = loops.iter().map(|(_, l)| l.as_slice()).collect();
+        let left = field.uncovered(&refs, r);
+        if left.is_empty() {
+            break;
+        }
+        let mut have: Vec<f64> = loops.iter().map(|(l, _)| *l).collect();
+        have.sort_by(f64::total_cmp);
+        have.dedup();
+        let mut added = Vec::new();
+        for (k, &lo) in have.iter().enumerate() {
+            let hi = have.get(k + 1).copied().unwrap_or(deepest);
+            if !left.iter().any(|&(_, d)| d > lo && d <= hi) {
+                continue;
+            }
+            let mid = 0.5 * (lo + hi);
+            for lp in field.loops(mid) {
+                let near = left.iter().any(|&(p, _)| {
+                    lp.iter()
+                        .any(|q| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= 4.0 * r * r)
+                });
+                if near {
+                    let lp = simplify(&lp, POCKET_LOOP_TOL);
+                    if lp.len() >= 4 {
+                        added.push((mid, lp));
+                    }
+                }
+            }
+        }
+        if added.is_empty() {
+            break;
+        }
+        loops.extend(added);
+    }
+    // innermost first; the walls' laps last
+    loops.sort_by(|a, b| b.0.total_cmp(&a.0));
+    Ok(loops.into_iter().map(|(_, l)| l).collect())
+}
+
+/// Douglas-Peucker on a closed loop (first point repeated at the end).
+fn simplify(p: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
+    fn rec(p: &[[f64; 2]], tol: f64, keep: &mut [bool], a: usize, b: usize) {
+        if b <= a + 1 {
+            return;
+        }
+        let (pa, pb) = (p[a], p[b]);
+        let (dx, dy) = (pb[0] - pa[0], pb[1] - pa[1]);
+        let len = (dx * dx + dy * dy).sqrt();
+        let mut best = (0.0, a);
+        for (k, q) in p.iter().enumerate().take(b).skip(a + 1) {
+            let d = if len < 1e-12 {
+                ((q[0] - pa[0]).powi(2) + (q[1] - pa[1]).powi(2)).sqrt()
+            } else {
+                ((q[0] - pa[0]) * dy - (q[1] - pa[1]) * dx).abs() / len
+            };
+            if d > best.0 {
+                best = (d, k);
+            }
+        }
+        if best.0 > tol {
+            keep[best.1] = true;
+            rec(p, tol, keep, a, best.1);
+            rec(p, tol, keep, best.1, b);
+        }
+    }
+    if p.len() < 4 {
+        return p.to_vec();
+    }
+    let mut keep = vec![false; p.len()];
+    let n = p.len() - 1;
+    // split the loop at its first point and the point farthest from it
+    let far = (1..n)
+        .max_by(|&i, &j| {
+            let d = |k: usize| (p[k][0] - p[0][0]).powi(2) + (p[k][1] - p[0][1]).powi(2);
+            d(i).total_cmp(&d(j))
+        })
+        .unwrap_or(1);
+    keep[0] = true;
+    keep[far] = true;
+    keep[n] = true;
+    rec(p, tol, &mut keep, 0, far);
+    rec(p, tol, &mut keep, far, n);
+    p.iter()
+        .zip(&keep)
+        .filter(|(_, k)| **k)
+        .map(|(q, _)| *q)
+        .collect()
+}
+
+/// A pocket of any shape: at each depth, the offset loops from the middle out, each entered
+/// from above at the plunge feed and left to the safe height.
+fn path_pocket(
+    b: &mut Builder,
+    d: f64,
+    stock: &StockBox,
+    safe: f64,
+    op: &Pocket,
+) -> Result<(), String> {
+    let r = d / 2.0;
+    // Offset loops keep their corners sharp, so along a corner's diagonal they are √2 times
+    // the spacing apart: more than 0.7 diameters would leave material there.
+    let loops = pocket_loops(
+        &op.paths,
+        r,
+        (op.stepover * d).clamp(0.01, MAX_LOOP_SPACING * d),
+    )?;
+    let top = op.top.unwrap_or(stock.max[2]);
+    b.comment("--- pocket (outline) ---");
+    let mut at = [f64::NAN; 2];
+    for z in levels(top, top - op.depth, op.step_down) {
+        for lp in &loops {
+            // start where the last loop ended, as near as the loop allows
+            let n = lp.len() - 1;
+            let s = (0..n)
+                .min_by(|&i, &j| {
+                    let dd = |k: usize| (lp[k][0] - at[0]).powi(2) + (lp[k][1] - at[1]).powi(2);
+                    dd(i).total_cmp(&dd(j))
+                })
+                .filter(|_| at[0].is_finite())
+                .unwrap_or(0);
+            let start = lp[s];
+            enter(
+                b,
+                safe,
+                start[0],
+                start[1],
+                z + op.step_down.max(0.5),
+                z,
+                op.plunge_feed,
+            );
+            for k in 1..=n {
+                let q = lp[(s + k) % n];
+                b.line3(q[0], q[1], z, UP, op.feed);
+            }
+            leave(b, safe);
+            at = start;
+        }
     }
     Ok(())
 }

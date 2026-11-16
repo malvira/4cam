@@ -16,6 +16,7 @@ pub mod kinematics;
 pub mod machine;
 pub mod mesh;
 pub mod numeric;
+pub mod offset;
 pub mod ops;
 pub mod post;
 pub mod profiles;
