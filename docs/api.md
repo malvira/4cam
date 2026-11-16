@@ -38,6 +38,7 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
 | `profiles::check_limits` | Check a job against a machine profile's limits. |
 | `estimate::estimate_toolpath` / `estimate::estimate_gcode` | Machining time of a program (split by operation) or of any G-code text, for a machine profile. |
 | `gouge_check` | Check toolpaths against the part. |
+| `collision_check` | Tool shank and holder against the stock, per move with its G-code line (`collision::ToolBody` gives a tool's defaults). `simulate_job` reports the same per program. |
 | `ops::registry()` | Operation types and their parameters. |
 | `ops::check` | Validate an operation. |
 | `project::Project::op_defaults` / `ops::defaults` | A new operation with every field filled from the tool, spindle, machine limits and part faces. |

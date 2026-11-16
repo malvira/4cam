@@ -42,7 +42,9 @@ assert.ok(!mres.error, mres.error);
 for (const p of mres.programs) {
   assert.equal(p.issues.length, 0);
   assert.ok(p.gouge.max_depth < 0.01, `${p.name} gouges ${p.gouge.max_depth}`);
+  assert.equal(p.collisions.count, 0, `${p.name}: holder/shank collisions`);
 }
+
 console.log(`plan+post mesh job: ${Date.now() - t} ms, programs ${mres.programs.map((p) => p.name)}`);
 
 const tri = cam.meshTriangles(meshJob, { max_triangles: 5000 }, new Uint8Array(stl));
@@ -53,6 +55,7 @@ const sim = cam.simulate(job, { dx: 0.1, na: 180 });
 assert.ok(!sim.error, sim.error);
 assert.equal(sim.stocks[0].rapid_hits, 0);
 assert.equal(sim.stocks[0].gouge_cells, 0);
+assert.equal(sim.stocks[0].collisions.count, 0);
 assert.equal(sim.stocks[0].r.length, sim.grid.nx * sim.grid.na);
 console.log(`simulate knob: ${Date.now() - t} ms, max left ${sim.stocks[0].max_left.toFixed(3)} mm`);
 // profiles: built-in list, Fusion tool library import, machine limits
@@ -126,6 +129,19 @@ const tags = new Uint16Array(Uint8Array.from(atob(end.op), (c) => c.charCodeAt(0
 assert.equal(tags[Math.floor(20 / 0.25) * 240 + Math.floor(15 / 0.25)], 2, "pocket floor cut by op 2");
 console.log(`3-axis simulation: ${po.segments} moves, ${po.ops.length} operations, dome max left ${psim.stocks[1].max_left.toFixed(3)} mm`);
 console.log(`3-axis plate: ${pl.programs.map((p) => `${p.name} ${p.lines} lines`).join(", ")}`);
+// the plate with T1 held 2 mm out (1 mm of flute): its holder meets the block beside the pocket
+{
+  const short = JSON.parse(JSON.stringify(plate));
+  short.tools[0] = { number: 1, description: "stubby 3.175", kind: "flat", diameter: 3.175, flute_length: 1, stickout: 2 };
+  const r = cam.planAndPost(short, "", dome, { max_points: 1000 });
+  assert.ok(!r.error, r.error);
+  const hit = r.programs.map((p) => p.collisions).filter((c) => c.count > 0);
+  assert.ok(hit.length > 0 && hit[0].collisions[0].contact === "holder" && hit[0].collisions[0].line > 0,
+    JSON.stringify(r.programs.map((p) => p.collisions.count)));
+  const ps = cam.simulate(short, {}, dome);
+  assert.ok(ps.stocks.some((st) => st.collisions.count > 0), "the simulation reports them too");
+  console.log(`stubby tool: ${hit.map((c) => `${c.count} collisions, deepest ${c.max_depth.toFixed(2)} mm`).join("; ")}`);
+}
 // indexed 3+1 on the knob: plans clean, playback path carries Y and A for every segment
 const kidx = JSON.parse(readFileSync(join(root, "examples", "knob", "knob_indexed.project.json"), "utf8"));
 const ki = cam.planAndPost(kidx, "makera-z1");

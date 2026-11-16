@@ -82,7 +82,7 @@ impl Heightmap3 {
         for j in j0..=j1 as usize {
             for i in i0..=i1 as usize {
                 let (cx, cy) = self.centre(i, j);
-                let d = (cx - x).hypot(cy - y);
+                let d = ((cx - x).powi(2) + (cy - y).powi(2)).sqrt(); // not hypot: slow on wasm32
                 if d >= lim {
                     continue;
                 }

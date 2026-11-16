@@ -242,6 +242,7 @@ pub mod api {
             Err(e) => return err(e),
         };
         let gouges = gouge_check(&job, &tps, mesh.as_ref()).unwrap_or_default();
+        let collisions = fourcam::collision_check(&job, &tps, &machine).unwrap_or_default();
         let limits = profiles::check_limits(&job, &tps, &profile);
         // project operation ids by planning order (0.2 documents), for per-operation times
         let op_ids = with_setup(&opts_v, || op_ids_and_colors(job_json)).map(|(ids, _)| ids);
@@ -265,6 +266,7 @@ pub mod api {
                     .map(ToString::to_string)
                     .collect();
                 let g = gouges.iter().find(|g| g.program == tp.name);
+                let c = collisions.iter().find(|c| c.program == tp.name);
                 let (points, total, thinned) = polyline(tp, max_points, job.stock_box.is_some());
                 json!({
                     "name": tp.name,
@@ -274,6 +276,7 @@ pub mod api {
                     "gcode": gcode,
                     "issues": issues,
                     "gouge": g.map(|g| json!({"moves_checked": g.moves_checked, "max_depth": g.max_depth, "at": g.at})),
+                    "collisions": c,
                     "safe_r": tp.safe_r,
                     "time": {
                         "total_s": time.estimate.total_s,
@@ -357,10 +360,11 @@ pub mod api {
                 .and_then(|d| fourcam::cutter_for(t, d.shape).ok())
         };
         let mut stocks = Vec::new();
-        for (tp, (name, st, dev)) in tps.iter().zip(&res.programs) {
+        for ((tp, (name, st, dev)), coll) in tps.iter().zip(&res.programs).zip(&res.collisions) {
             sim::simulate(&mut stock, tp, &cutters, (dx * 2.0).min(0.1));
             stocks.push(json!({
                 "name": name,
+                "collisions": coll,
                 "samples": st.samples,
                 "cells_cut": st.cells_cut,
                 "rapid_hits": st.rapid_hits.len(),
@@ -525,12 +529,15 @@ pub mod api {
         let cutters = cutters_of(job);
         let step = (hm.cell * 0.5).min(0.1);
         let intended = fourcam::intended_tags(job, tps);
+        let bodies = |t: u32| job.tool(t).map(fourcam::collision::ToolBody::of);
         let mut stocks = Vec::new();
         for tp in tps {
-            let st = sim3::simulate3(&mut hm, tp, &cutters, step);
+            let (st, coll) =
+                fourcam::collision::simulate_block(&mut hm, tp, &cutters, &bodies, step, sb.max[2]);
             let dev = sim3::deviation3_with(&hm, &part, 0.02, &|t| intended.contains(&t));
             stocks.push(json!({
                 "name": tp.name,
+                "collisions": coll,
                 "samples": st.samples,
                 "cells_cut": st.cells_cut,
                 "rapid_hits": st.rapid_hits.len(),

@@ -559,6 +559,8 @@ pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String
             .collect();
         let gouges =
             gouge_check(job, &tps, mesh.as_ref()).map_err(|e| Error::Engine(e.to_string()))?;
+        let collisions = fourcam::collision_check(job, &tps, &profile.post)
+            .map_err(|e| Error::Engine(e.to_string()))?;
         for tp in &tps {
             let gcode = post(tp, &profile.post);
             let issues: Vec<String> = verify_gcode(&gcode, &limits_for(tp, &profile.post))
@@ -567,6 +569,7 @@ pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String
                 .collect();
             let time = fourcam::estimate::estimate_toolpath(tp, &profile);
             let gouge = gouges.iter().find(|g| g.program == tp.name);
+            let coll = collisions.iter().find(|c| c.program == tp.name);
             report.push(json!({
                 "program": tp.name,
                 "file": format!("{}.nc", tp.name),
@@ -574,6 +577,7 @@ pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String
                 "time_s": time.estimate.total_s,
                 "issues": issues,
                 "gouge_mm": gouge.filter(|g| g.moves_checked > 0).map(|g| g.max_depth),
+                "collisions": coll.map(|c| json!({"count": c.count, "max_depth": c.max_depth, "first": c.collisions.first()})),
             }));
             programs.push((tp.name.clone(), gcode));
         }

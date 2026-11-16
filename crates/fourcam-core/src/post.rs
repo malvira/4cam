@@ -25,7 +25,18 @@ pub fn post(tp: &Toolpath, machine: &Machine) -> String {
 /// [`post`], plus where each operation starts: (operation id, kind, index of its first
 /// line). The text is the same.
 pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, String, usize)>) {
+    let (text, marks, _) = post_lines(tp, machine);
+    (text, marks)
+}
+
+/// [`post_marked`], plus each move's G-code line: the 1-based number of the last line it
+/// wrote (the line before it if it wrote none). The text is the same.
+pub fn post_lines(
+    tp: &Toolpath,
+    machine: &Machine,
+) -> (String, Vec<(u32, String, usize)>, Vec<usize>) {
     let mut marks = Vec::new();
+    let mut before = Vec::with_capacity(tp.moves.len() + 1);
     let d = machine.decimals;
     let num = |v: f64| format!("{v:.d$}");
     // axis words as this machine names and signs them (identity for XYZ + A about +X)
@@ -61,6 +72,7 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
         y: None,
     };
     for mv in &tp.moves {
+        before.push(out.len());
         match mv {
             Move::Comment { text } => out.push(format!("({text})")),
             Move::Operation { id, kind } => marks.push((*id, kind.clone(), out.len())),
@@ -284,11 +296,12 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
             }
         }
     }
+    before.push(out.len());
     let tool = tp.tool.as_ref().map_or(0, |t| t.0);
     for line in &machine.postamble {
         out.push(fill(line, tool, 0, &safe));
     }
     let mut text = out.join("\n");
     text.push('\n');
-    (text, marks)
+    (text, marks, before[1..].to_vec())
 }

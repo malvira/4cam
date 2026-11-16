@@ -222,6 +222,11 @@ fn every_entry_matches_the_cli() {
         assert_eq!(out.result["programs"][0]["file"], nc[0].path.as_str());
         assert!(text.lines().count() > 10, "{entry}: {text}");
         let programs = out.result["programs"].as_array().unwrap();
+        assert_eq!(
+            programs[0]["collisions"]["count"], 0,
+            "{entry}: {}",
+            out.result
+        );
         assert!(
             programs[0]["issues"].as_array().unwrap().is_empty(),
             "{entry}: {}",

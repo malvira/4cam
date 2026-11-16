@@ -350,7 +350,8 @@ async function simulate() {
     selectTab(state.tab);
     const s = result.stocks[state.tab];
     setStatus(`Simulated in ${(ms / 1000).toFixed(1)} s`, "done");
-    if (s && (s.rapid_hits || s.gouge_cells)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s)`);
+    const hits = result.stocks.reduce((n, st) => n + (st.collisions?.count || 0), 0);
+    if (s && (s.rapid_hits || s.gouge_cells || hits)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s), ${hits} holder/shank collision(s)`);
   } catch (e) {
     showError(e.message);
     setStatus("Simulation failed", "error");
@@ -360,6 +361,14 @@ async function simulate() {
 }
 
 // ---------------------------------------------------------------- results
+function collisionHtml(c) {
+  if (!c) return "";
+  if (!c.count) return `<div class="small" id="holderCheck">Holder/shank check: clear</div>`;
+  const rows = c.collisions.slice(0, 20).map((k) =>
+    `<li>line ${k.line ?? "?"}: T${k.tool} ${k.contact} ${k.depth.toFixed(3)} mm into the stock${k.rapid ? " (rapid)" : ""}</li>`).join("");
+  return `<div class="issues bad" id="holderCheck">Holder/shank collision: ${c.count} move(s), deepest ${c.max_depth.toFixed(3)} mm<ul>${rows}</ul></div>`;
+}
+
 function renderTabs() {
   const tabs = $("tabs");
   tabs.innerHTML = "";
@@ -368,7 +377,7 @@ function renderTabs() {
     b.type = "button";
     b.setAttribute("role", "tab");
     b.dataset.index = i;
-    const n = p.issues.length;
+    const n = p.issues.length + (p.collisions?.count ? 1 : 0);
     b.innerHTML = `${p.name}<span class="badge ${n ? "bad" : "ok"}">${n ? `${n} issue${n > 1 ? "s" : ""}` : "OK"}</span>`;
     b.addEventListener("click", () => selectTab(i));
     tabs.appendChild(b);
@@ -392,6 +401,7 @@ function selectTab(i) {
     }</div>
     ${limitsHtml(p.name, esc)}
     ${p.time ? `<div class="small" id="timeEst">Estimated time: <strong>${fmtTime(p.time.total_s)}</strong> (cutting ${fmtTime(p.time.feed_s)}, rapids ${fmtTime(p.time.rapid_s)}, tool changes/dwells ${fmtTime(p.time.other_s)})${state.result.programs.length > 1 ? ` &middot; all files ${fmtTime(state.result.time_total_s)}` : ""}</div>` : ""}
+    ${collisionHtml(p.collisions)}
     ${g && g.moves_checked ? `<div class="small">Gouge check: ${g.moves_checked.toLocaleString("en")} cut moves, deepest ${g.max_depth.toFixed(4)} mm into the part</div>` : ""}
     ${sim && !sim.samples ? `<div class="small muted">Not simulated: its tool has no full shape (a V-bit needs a diameter). The stock shown is from the programs before it.</div>` : ""}
     ${sim ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock${sim.feature_cells ? `; ${sim.feature_cells.toLocaleString("en")} cells cut below the part on purpose (engraving, knurl, indexed features) not counted` : ""}</div>` : ""}`;

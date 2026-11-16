@@ -122,6 +122,42 @@ These are the shapes a tool can have, and how the strategies use each:
 | `tapered_ball` | `tip_diameter`, `taper_angle`, `diameter` | stored only; not usable yet |
 | `drill` | `diameter`, `point_angle` | stored only; not usable yet |
 
+### What is above the flutes: shank, stickout, holder
+
+A tool's body above the cutting edge is checked against the stock (see `4cam run`'s
+"holder/shank check"). Library and inline tools take these fields. Every one has a default:
+
+| Field | Meaning | Default |
+| --- | --- | --- |
+| `flute_length` | cutting length from the tip | 3 cutting diameters |
+| `shank_diameter` | shank above the flutes | the cutting diameter |
+| `stickout` | tip to holder | flute length + 5 mm (never less than the flute length) |
+| `holder_diameter` | holder / collet nut | 20 mm (inline tools only for now) |
+| `holder_length` | holder length above the stickout | 30 mm (inline tools only for now) |
+
+The check runs the material-removal simulation and, before each move cuts, tests every tool
+position along it against the stock as the earlier moves left it:
+
+- rotary stock: the whole bar, where the bar beyond the simulated range is taken as uncut;
+- 3-axis stock: the block heightmap.
+
+It reports each move where the shank or holder reaches into material: the program, the
+G-code line, the tool, which part touched, how deep, and where. The check covers rotary,
+indexed 3+1 and vise programs, rapids included.
+
+The check does not model chucks, tailstocks or vises.
+
+The rotary stock map stores only each ray's outer radius. A hole the tool cuts along its own
+axis therefore still reads as solid inside. To avoid false alarms there, on rotary stock the
+shank is checked only outside the cutting radius, where the flutes have not already cut.
+The cost: a shank no wider than the cut is not flagged for a slot deeper than the flutes on
+rotary stock. Planning's flute-length rule covers that for rotary operations. The 3-axis
+heightmap is exact and checks the whole shank.
+
+For rotary operations, planning already requires the flute length to be at least the radial
+depth plus 1 mm. That keeps the shank and holder above the bar there, so in practice the
+check matters for 3-axis and indexed work, where walls rise beside the tool.
+
 The library does not depend on the machine type. A job uses a library tool either inline, or
 by reference:
 

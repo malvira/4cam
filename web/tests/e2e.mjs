@@ -178,6 +178,8 @@ try {
     check(`${name}: G-code view matches the golden file byte for byte`, text === golden(name), `${text.length} chars`);
     const issues = await js("document.querySelector('#summary .issues').textContent");
     check(`${name}: verifier reports 0 issues`, issues.includes("0 issues"), issues.slice(0, 60));
+    const holder = await js("document.getElementById('holderCheck')?.textContent || ''");
+    check(`${name}: holder/shank check clear`, holder.includes("clear"), holder);
   }
   check("line counts 21,787 / 15,146", lines.join(" / ") === "21,787 / 15,146", lines.join(" / "));
 

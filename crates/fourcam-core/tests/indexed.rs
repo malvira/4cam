@@ -108,10 +108,8 @@ fn simulation_shows_the_flat_and_the_hole_at_their_angles() {
 fn every_3_axis_type_defaults_and_plans_on_a_rotary_setup() {
     let mut job = knob_indexed();
     job.tools.push(fourcam::job::Tool {
-        number: 3,
-        description: "ball 3.175".into(),
-        shape: ToolShape::Ball { diameter: 3.175 },
         flute_length: Some(12.0),
+        ..fourcam::job::Tool::new(3, "ball 3.175", ToolShape::Ball { diameter: 3.175 })
     });
     let z1 = builtin_machine("makera-z1-4axis").unwrap();
     for t in registry()

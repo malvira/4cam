@@ -130,6 +130,34 @@ pub struct Tool {
     pub shape: ToolShape,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flute_length: Option<f64>,
+    /// Shank diameter above the flutes (default: the cutting diameter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shank_diameter: Option<f64>,
+    /// Length from the tip to the holder (default: flute length + 5 mm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stickout: Option<f64>,
+    /// Holder (collet nut) diameter (default 20 mm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_diameter: Option<f64>,
+    /// Holder length above the stickout (default 30 mm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_length: Option<f64>,
+}
+
+impl Tool {
+    /// A tool with only its number, description and shape given (everything else default).
+    pub fn new(number: u32, description: &str, shape: ToolShape) -> Tool {
+        Tool {
+            number,
+            description: description.into(),
+            shape,
+            flute_length: None,
+            shank_diameter: None,
+            stickout: None,
+            holder_diameter: None,
+            holder_length: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]

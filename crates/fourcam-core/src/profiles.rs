@@ -484,6 +484,10 @@ impl LibTool {
             description: self.name.clone(),
             shape,
             flute_length: self.flute_length,
+            shank_diameter: self.shank_diameter,
+            stickout: self.stickout,
+            holder_diameter: None,
+            holder_length: None,
         })
     }
 }

@@ -611,6 +611,20 @@ fn stamp_indexed(
     }
     let dphi = TAU / g.na as f64;
     let a = a_deg.to_radians();
+    // Only rays that meet the tool's half-strip (|y - ty| < lim, z >= tip z) can be cut.
+    // With the tip above the axis those lie between the strip's two lower corners as seen
+    // from the axis: an exact bound (padded a cell), so the stock is the same.
+    let (j_lo, j_hi) = if tip[2] > 0.0 {
+        let t0 = tip[2].atan2(tip[1] + lim);
+        let t1 = tip[2].atan2(tip[1] - lim);
+        (
+            ((t0 - a) / dphi - 1.5).floor() as i64,
+            ((t1 - a) / dphi + 0.5).ceil() as i64,
+        )
+    } else {
+        (0, g.na as i64 - 1)
+    };
+    let na = g.na as i64;
     let mut changed = 0;
     let mut rows: Option<(usize, usize)> = None;
     for i in i0..=i1 {
@@ -618,11 +632,12 @@ fn stamp_indexed(
         if u.abs() >= lim {
             continue;
         }
-        for j in 0..g.na {
+        for jj in j_lo..=j_hi.min(j_lo + na - 1) {
+            let j = jj.rem_euclid(na) as usize;
             // the cell's ray in the machine frame: part angle phi turned by A
             let (s, cs) = ((j as f64 + 0.5) * dphi + a).sin_cos();
             let inside = |rho: f64| {
-                let d = u.hypot(rho * cs - tip[1]);
+                let d = (u * u + (rho * cs - tip[1]).powi(2)).sqrt(); // not hypot: slow on wasm32
                 d < lim && rho * s >= tip[2] + c.height(d)
             };
             let k = (i - stock.row0) * g.na + j;

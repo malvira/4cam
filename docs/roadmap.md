@@ -101,7 +101,7 @@ goldens are still byte-identical.
    closed solid, coloured by the operation that cut each cell, with the same playback
    controls, legend and Simulate view as rotary setups.
 
-   Not yet: non-rectangular pockets, waterline, tool-holder checks.
+   Not yet: non-rectangular pockets, waterline. (Tool-holder checks: done, see below.)
 
 ## Next candidates
 
@@ -193,4 +193,6 @@ goldens are still byte-identical.
   wrapping.
 - (older note) General moves and kinematics-aware posts. After that come simultaneous 4-axis wrapping and
   5-axis.
-- Tool-holder collision checks against the stock model.
+- ~~Tool-holder collision checks against the stock model.~~ Done: shank and holder
+  checked per move in simulation, `run`, `planAndPost` and the SolidCraft plugin. Not yet:
+  chuck, tailstock and vise jaws.

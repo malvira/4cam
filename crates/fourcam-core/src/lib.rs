@@ -4,6 +4,7 @@
 //! [`Machine`] profile -> G-code, which [`verify_gcode`] can sanity-check.
 
 pub mod archive;
+pub mod collision;
 pub mod dropcutter;
 pub mod engrave;
 pub mod estimate;
@@ -755,6 +756,8 @@ pub struct JobSim {
     pub part: sim::Part,
     /// Stock after each program, with its statistics.
     pub programs: Vec<(String, sim::SimStats, sim::Deviation)>,
+    /// Holder and shank collisions per program (G-code lines not filled in).
+    pub collisions: Vec<collision::CollisionReport>,
 }
 
 /// Simulate `tps` (from [`plan_with_mesh`]) on stock of `job.stock.radius`. The grid spans the
@@ -805,15 +808,91 @@ pub fn simulate_job(
     let mut stock = sim::RadialMap::filled(grid, job.stock.radius);
     let cutters = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
     let intended = intended_tags(job, tps);
+    let bodies = |t: u32| job.tool(t).map(collision::ToolBody::of);
+    let bar = (job.stock.radius, -job.stock.length, 0.0);
     let mut programs = Vec::new();
+    let mut collisions = Vec::new();
     for tp in tps {
-        let st = sim::simulate(&mut stock, tp, &cutters, (dx * 2.0).min(0.1));
+        let (st, rep) = collision::simulate_rotary(
+            &mut stock,
+            tp,
+            &cutters,
+            &bodies,
+            (dx * 2.0).min(0.1),
+            bar,
+            false,
+        );
         let dev = sim::deviation_with(&stock, &part, x_lo, x_hi, tol, &|t| intended.contains(&t));
         programs.push((tp.name.clone(), st, dev));
+        collisions.push(rep);
     }
     Ok(JobSim {
         stock,
         part,
         programs,
+        collisions,
     })
+}
+
+/// Holder and shank collisions of each program ([`collision`]), from a material-removal
+/// simulation of its own: rotary stock 0.3 mm by 2° over the whole bar, 3-axis stock at the
+/// "coarse" cell size, tool positions 0.4 mm apart. It is skipped when no move brings a
+/// shank or holder below the stock's top. Each collision carries its move's G-code line as
+/// `machine` posts it.
+pub fn collision_check(
+    job: &Job,
+    tps: &[Toolpath],
+    machine: &Machine,
+) -> Result<Vec<collision::CollisionReport>, Error> {
+    let res = sim::Resolution::preset("coarse").expect("built in");
+    let cutters = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
+    let bodies = |t: u32| job.tool(t).map(collision::ToolBody::of);
+    // stamps 0.4 mm apart: the cusps left between them are a few hundredths of a mm
+    let step = 0.4;
+    let mut out = Vec::new();
+    // nothing above the flutes ever gets below the stock's top: no simulation needed
+    let (segs, top) = match &job.stock_box {
+        Some(sb) => (sim3::segments3(tps), sb.max[2]),
+        None => (sim::segments(tps), job.stock.radius),
+    };
+    if !collision::can_touch(&segs, &bodies, top) {
+        return Ok(tps
+            .iter()
+            .map(|tp| collision::CollisionReport {
+                program: tp.name.clone(),
+                ..Default::default()
+            })
+            .collect());
+    }
+    if let Some(sb) = &job.stock_box {
+        let mut hm = sim3::Heightmap3::new(sb, res.cell_for(sb));
+        for tp in tps {
+            let (_, rep) =
+                collision::simulate_block(&mut hm, tp, &cutters, &bodies, step, sb.max[2]);
+            out.push(rep);
+        }
+    } else {
+        let len = job.stock.length.max(1.0);
+        // 0.3 mm by 2°: holders are tens of mm across, shanks a few
+        let grid = sim::Grid::new(-len - 1.0, 3.0, 0.3, 180);
+        if grid.len() > sim::MAX_CELLS {
+            return Err(Error::Invalid(
+                "stock too long for the collision check".into(),
+            ));
+        }
+        let mut stock = sim::RadialMap::filled(grid, job.stock.radius);
+        let bar = (job.stock.radius, -len, 0.0);
+        for (k, tp) in tps.iter().enumerate() {
+            // the last program's stock is not needed after its last move that can touch
+            let last = k + 1 == tps.len();
+            let (_, rep) =
+                collision::simulate_rotary(&mut stock, tp, &cutters, &bodies, step, bar, last);
+            out.push(rep);
+        }
+    }
+    for (rep, tp) in out.iter_mut().zip(tps) {
+        let (_, _, lines) = post::post_lines(tp, machine);
+        collision::attach_lines(rep, &lines);
+    }
+    Ok(out)
 }

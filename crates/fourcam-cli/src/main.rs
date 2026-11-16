@@ -428,6 +428,7 @@ fn run_setup(
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     let (tps, mesh) = plan_job_with_mesh(&job, job_path)?;
     let gouges = gouge_check(&job, &tps, mesh.as_ref()).map_err(|e| e.to_string())?;
+    let collisions = fourcam::collision_check(&job, &tps, &machine).map_err(|e| e.to_string())?;
     let mut bad = 0;
     for i in fourcam::profiles::check_limits(&job, &tps, &profile) {
         let at = i.program.map(|p| format!("{p}: ")).unwrap_or_default();
@@ -472,6 +473,31 @@ fn run_setup(
             println!("    op {} {kind}: {}", id + 1, fmt(*s));
         }
         seconds += e.total_s;
+        if let Some(c) = collisions.iter().find(|c| c.program == tp.name) {
+            if c.count > 0 {
+                println!(
+                    "  HOLDER/SHANK COLLISION: {} move(s), deepest {:.3} mm",
+                    c.count, c.max_depth
+                );
+                for k in c.collisions.iter().take(5) {
+                    println!(
+                        "    line {}: T{} {} {:.3} mm into the stock{} (tip X{:.3} Y{:.3} Z{:.3} A{:.3})",
+                        k.line.unwrap_or(0),
+                        k.tool,
+                        k.contact,
+                        k.depth,
+                        if k.rapid { " on a rapid" } else { "" },
+                        k.tip[0],
+                        k.tip[1],
+                        k.tip[2],
+                        k.a
+                    );
+                }
+                bad += 1;
+            } else {
+                println!("  holder/shank check: clear");
+            }
+        }
         if let Some(g) = gouges.iter().find(|g| g.program == tp.name) {
             if g.moves_checked > 0 {
                 println!(
@@ -624,7 +650,12 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
     if o.has("gpu") {
         return Err("this 4cam was built without GPU support (cargo feature `gpu`)".into());
     }
-    for ((tp, prog), (name, st, dev)) in tps.iter().zip(&job.programs).zip(&res.programs) {
+    for (((tp, prog), (name, st, dev)), coll) in tps
+        .iter()
+        .zip(&job.programs)
+        .zip(&res.programs)
+        .zip(&res.collisions)
+    {
         #[cfg(feature = "gpu")]
         {
             let used = fourcam_gpu::simulate_or_cpu(
@@ -679,8 +710,14 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
                 "  (knurl/chamfer: cuts below the turned profile on purpose, so these are not counted as gouges)"
             );
         }
+        if coll.count > 0 {
+            println!(
+                "  HOLDER/SHANK COLLISION: {} move(s), deepest {:.3} mm (first at move {})",
+                coll.count, coll.max_depth, coll.collisions[0].move_index
+            );
+        }
         println!("  preview: {}", png.display());
-        bad |= !st.rapid_hits.is_empty() || (dev.gouge_cells > 0 && !shapes_part);
+        bad |= !st.rapid_hits.is_empty() || (dev.gouge_cells > 0 && !shapes_part) || coll.count > 0;
     }
     Ok(if bad {
         ExitCode::FAILURE

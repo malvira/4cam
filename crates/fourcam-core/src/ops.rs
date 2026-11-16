@@ -1072,10 +1072,8 @@ mod tests {
         // tools on hand for every shape: the knob's flat T1 and V-bit T2, plus a ball T3
         let mut job = job;
         job.tools.push(crate::job::Tool {
-            number: 3,
-            description: "ball 3.175".into(),
-            shape: ToolShape::Ball { diameter: 3.175 },
             flute_length: Some(12.0),
+            ..crate::job::Tool::new(3, "ball 3.175", ToolShape::Ball { diameter: 3.175 })
         });
         let mut boxed = job.clone();
         boxed.stock_box = Some(crate::job::StockBox {
