@@ -99,6 +99,8 @@ const browser = spawn(findBrowser(), [
   "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--window-size=1400,900",
   // WebGPU in headless mode, where the machine has a GPU (the GPU checks fall back otherwise)
   "--enable-unsafe-webgpu", "--enable-gpu",
+  // no GPU at all (CI runners): WebGL on the CPU (SwiftShader), so the 3D view still runs
+  ...(process.env.FOURCAM_E2E_SOFTWARE_GL ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : []),
   "about:blank",
 ], { stdio: "ignore" });
 children.push(browser);

@@ -1107,6 +1107,35 @@ pub mod api {
     }
 
     /// Dispatch by name (what `fc_call` uses).
+    /// A one-setup project around a part mesh, for CAD adapters (`fourcam::body`):
+    /// `request` is `{"operation": "rotary_finish", ...inputs and the operation's fields}`,
+    /// `mesh` the body's STL/3MF bytes. Returns `{"project", "name"}`; the project's mesh
+    /// model names `<name>.stl` (save the same bytes under that name to plan it again).
+    pub fn body_project(request: &str, mesh: &[u8]) -> Value {
+        let mut req: Value = match serde_json::from_str(if request.trim().is_empty() {
+            "{}"
+        } else {
+            request
+        }) {
+            Ok(v) => v,
+            Err(e) => return err(format!("request: {e}")),
+        };
+        let Some(kind) = req
+            .as_object_mut()
+            .and_then(|o| o.remove("operation"))
+            .and_then(|v| v.as_str().map(str::to_string))
+        else {
+            return err("request needs \"operation\": an operation type");
+        };
+        match fourcam::body::body_project(&kind, &req, mesh, &[]) {
+            Ok((project, name)) => json!({"project": project, "name": name}),
+            Err(fourcam::body::BodyError::Input { field, reason }) => {
+                json!({"error": format!("{field}: {reason}"), "field": field})
+            }
+            Err(e) => err(e),
+        }
+    }
+
     pub fn call(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Value {
         let s = |v: &[u8]| String::from_utf8_lossy(v).into_owned();
         match name {
@@ -1128,6 +1157,7 @@ pub mod api {
             "profile_list" => profile_list(),
             "face_regions" => face_regions(&s(a), &s(b), c),
             "wizard_knurl" => wizard_knurl(&s(a), &s(b), c),
+            "body_project" => body_project(&s(a), b),
             "op_defaults" => op_defaults(&s(a), &s(b), c),
             "op_types" => serde_json::to_value(fourcam::ops::registry()).unwrap_or(Value::Null),
             "check_project" => match fourcam::project::Project::from_json_any(&s(a)) {

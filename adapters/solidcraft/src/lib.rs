@@ -11,7 +11,6 @@
 //! See `docs/adapters/solidcraft.md`.
 
 use fourcam::job::MeshSource;
-use fourcam::mesh::Axis;
 use fourcam::{gouge_check, limits_for, ops, plan_with_mesh, post, profiles, verify_gcode};
 use serde_json::{json, Map, Value};
 
@@ -24,20 +23,10 @@ pub const PLUGIN_ID: &str = "fourcam";
 pub const GRANT: &str = "output";
 /// The one SolidCraft command the plugin calls.
 pub const MESH_COMMAND: &str = "model.mesh";
-/// The machine used when the entry does not name one.
-pub const DEFAULT_MACHINE: &str = "makera-z1-4axis";
-/// Tool diameter when the entry does not give one (mm).
-pub const DEFAULT_TOOL_DIAMETER: f64 = 3.175;
-/// V-bit included angle when the entry does not give one (deg).
-pub const DEFAULT_VBIT_ANGLE: f64 = 90.0;
-/// Spindle speed when the entry does not give one (rpm).
-pub const DEFAULT_RPM: u32 = 12000;
+pub use fourcam::body::{DEFAULT_MACHINE, DEFAULT_RPM, DEFAULT_TOOL_DIAMETER, DEFAULT_VBIT_ANGLE};
 /// SolidCraft's `model.mesh` default chordal tolerance (mm).
 pub const DEFAULT_TOLERANCE: f64 = 0.05;
-/// Default stock: the body's largest radius plus this, rounded up to 0.5 mm (mm).
-pub const STOCK_RADIAL_MARGIN: f64 = 0.5;
-/// Default stock: the body's length plus this much to hold (mm).
-pub const STOCK_GRIP: f64 = 15.0;
+pub use fourcam::body::{STOCK_GRIP, STOCK_RADIAL_MARGIN};
 /// Guest budget asked for in the manifest (fuel units, MiB, ms).
 pub const LIMITS: (u64, u32, u32) = (100_000_000_000, 128, 30_000);
 /// SolidCraft refuses a plugin file write over this many bytes; a program longer than this
@@ -51,21 +40,6 @@ fn gzip(data: &[u8]) -> Result<Vec<u8>, Error> {
         .and_then(|_| z.finish())
         .map_err(|e| Error::Engine(format!("gzip: {e}")))
 }
-
-/// Inputs every entry takes, besides the operation's own fields.
-const COMMON: [&str; 11] = [
-    "bodies",
-    "tolerance",
-    "axis",
-    "machine",
-    "tool_kind",
-    "tool_diameter",
-    "vbit_angle",
-    "stock_radius",
-    "stock_length",
-    "spindle_rpm",
-    "name",
-];
 
 /// A failure the guest reports as `invalid-input(field, reason)` or a plain error.
 #[derive(Debug, Clone, PartialEq)]
@@ -349,193 +323,45 @@ pub struct Outcome {
     pub result: Value,
 }
 
-fn opt_f64(params: &Value, field: &str) -> Result<Option<f64>, Error> {
-    match params.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => v
-            .as_f64()
-            .filter(|x| x.is_finite() && *x > 0.0)
-            .map(Some)
-            .ok_or_else(|| input(field, "a positive number")),
-    }
-}
-
-fn opt_str<'a>(params: &'a Value, field: &str) -> Result<Option<&'a str>, Error> {
-    match params.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => v.as_str().map(Some).ok_or_else(|| input(field, "text")),
-    }
-}
-
-fn round_up_half(x: f64) -> f64 {
-    (x * 2.0).ceil() / 2.0
-}
-
 /// Build the project for one entry: the body (an STL in component-local mm) placed on the
 /// rotary axis, default stock and tool, and the operation filled by 4cam's defaults with
-/// the given fields on top. Returns the project JSON and the program name.
+/// the given fields on top ([`fourcam::body::body_project`], which every CAD adapter shares).
+/// Returns the project JSON and the program name.
 pub fn build_project(entry: &str, params: &Value, stl: &[u8]) -> Result<(Value, String), Error> {
     let kind =
         entry_kind(entry).ok_or_else(|| input("entry", format!("no 4cam operation {entry:?}")))?;
     let t = ops::find(kind).ok_or_else(|| input("entry", "unknown operation"))?;
-    if !params.is_object() {
-        return Err(input("params", "an object"));
-    }
-    for (k, _) in params.as_object().into_iter().flatten() {
-        let known =
-            COMMON.contains(&k.as_str()) || t.params.iter().any(|p| p.name == k && k != "tool");
-        if !known {
-            return Err(input(k, format!("not an input of {entry}")));
+    if params.is_object() {
+        // the entry's inputs: no tapered ball here (no tip or taper inputs)
+        if let Some(k) = params.get("tool_kind").and_then(Value::as_str) {
+            if !tool_kinds(&t).contains(&k) {
+                return Err(input(
+                    "tool_kind",
+                    format!("{kind} takes {}", tool_kinds(&t).join(", ")),
+                ));
+            }
         }
-    }
-    let axis = match opt_str(params, "axis")?.unwrap_or("X") {
-        "X" | "x" => Axis::X,
-        "Y" | "y" => Axis::Y,
-        "Z" | "z" => Axis::Z,
-        _ => return Err(input("axis", "X, Y or Z")),
-    };
-    let machine_id = opt_str(params, "machine")?.unwrap_or(DEFAULT_MACHINE);
-    let machine = profiles::builtin_machine(machine_id)
-        .ok_or_else(|| input("machine", format!("no built-in machine {machine_id:?}")))?;
-    let body = params["bodies"][0].as_str().unwrap_or("body");
-    let name = match opt_str(params, "name")? {
-        Some(n) => n.to_string(),
-        None => {
-            let clean: String = body
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() {
-                        c.to_ascii_lowercase()
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
-            format!("{}_{kind}", clean.trim_matches('_'))
-        }
-    };
-    if name.is_empty()
-        || name.len() > 64
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(input("name", "1..64 letters, digits, _ or -"));
-    }
-
-    // Place the body: its axis on X, its front (largest X) at X0.
-    let axis_name = match axis {
-        Axis::X => "x",
-        Axis::Y => "y",
-        Axis::Z => "z",
-    };
-    let file = format!("{name}.stl");
-    let mut source = MeshSource {
-        file: file.clone(),
-        axis,
-        translate: [0.0; 3],
-        image: None,
-    };
-    let raw = source
-        .mesh(stl)
-        .map_err(|e| Error::Engine(format!("body mesh: {e}")))?;
-    let (lo, hi) = raw
-        .bounds()
-        .ok_or_else(|| Error::Engine("the body has no triangles".into()))?;
-    source.translate = [-hi[0], 0.0, 0.0];
-    let rmax = raw
-        .triangles
-        .iter()
-        .flatten()
-        .map(|p| p[1].hypot(p[2]))
-        .fold(0.0, f64::max);
-    let stock_radius = match opt_f64(params, "stock_radius")? {
-        Some(r) => r,
-        // (less a hair, so f32 rounding of an exact radius does not add 0.5 mm)
-        None => round_up_half(rmax + STOCK_RADIAL_MARGIN - 1e-4),
-    };
-    let stock_length = match opt_f64(params, "stock_length")? {
-        Some(l) => l,
-        None => (hi[0] - lo[0] + STOCK_GRIP).ceil(),
-    };
-
-    let tool_kind = opt_str(params, "tool_kind")?.unwrap_or(t.tool_shapes[0]);
-    if !tool_kinds(&t).contains(&tool_kind) {
-        return Err(input(
-            "tool_kind",
-            format!("{kind} takes {}", tool_kinds(&t).join(", ")),
-        ));
-    }
-    let diameter = opt_f64(params, "tool_diameter")?.unwrap_or(DEFAULT_TOOL_DIAMETER);
-    let tool = match tool_kind {
-        "vbit" => {
-            let angle = opt_f64(params, "vbit_angle")?.unwrap_or(DEFAULT_VBIT_ANGLE);
-            json!({"number": 1, "description": format!("{angle} deg V-bit, {diameter} mm"),
-                   "kind": "vbit", "angle": angle, "diameter": diameter})
-        }
-        k => json!({"number": 1, "description": format!("{diameter} mm {k} end mill"),
-                    "kind": k, "diameter": diameter}),
-    };
-    let rpm = match params.get("spindle_rpm") {
-        None | Some(Value::Null) => DEFAULT_RPM as u64,
-        Some(v) => v
-            .as_u64()
-            .filter(|r| *r > 0 && *r <= u32::MAX as u64)
-            .ok_or_else(|| input("spindle_rpm", "a positive whole number"))?,
-    };
-
-    let mut project = json!({
-        "schema_version": "0.2",
-        "name": name,
-        "models": [{
-            "id": "body", "name": body, "kind": "mesh", "file": file,
-            "axis": axis_name, "translate": source.translate,
-        }],
-        "tools": [tool],
-        "setups": [{
-            "id": "setup1",
-            "name": "Rotary setup",
-            "machine": machine.id,
-            "stock": {"shape": "cylinder", "radius": stock_radius, "length": stock_length},
-            "clearance": 3.0,
-            "holding": {"kind": "rotary_chuck", "tailstock": false},
-            "part": ["body"],
-            "spindle_rpm": rpm,
-            "operations": [],
-            "outputs": [],
-        }],
-    });
-
-    // The operation: 4cam's defaults, then the fields the user gave.
-    let text = project.to_string();
-    let (p, _) = fourcam::project::Project::from_json_any(&text).map_err(Error::Engine)?;
-    let placed = source.mesh(stl).map_err(|e| Error::Engine(e.to_string()))?;
-    let meshes = |_: &str| Some(placed.clone());
-    let mut op = p
-        .op_defaults(kind, "setup1", Some(1), &[], &[], Some(&machine), &meshes)
-        .map_err(Error::Engine)?;
-    for spec in &t.params {
-        if let Some(v) = params
-            .get(spec.name)
-            .filter(|v| !v.is_null() && spec.name != "tool")
+        for k in params
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, _)| k.as_str())
         {
-            op[spec.name] = v.clone();
+            if matches!(k, "body" | "tip_diameter" | "taper_angle") {
+                return Err(input(k, format!("not an input of {entry}")));
+            }
         }
     }
-    op["id"] = json!("op1");
-    op["enabled"] = json!(true);
-    let problems = ops::check(&op, None);
-    if !problems.is_empty() {
-        return Err(input(kind, problems.join("; ")));
-    }
-    let setup = &mut project["setups"][0];
-    setup["operations"] = json!([op]);
-    setup["outputs"] = json!([{
-        "name": name,
-        "title": format!("{} on {body}", t.title),
-        "operations": ["op1"],
-    }]);
-    Ok((project, name))
+    fourcam::body::body_project(kind, params, stl, &["bodies", "tolerance"]).map_err(|e| match e {
+        fourcam::body::BodyError::Input { field, reason } => Error::Input {
+            field,
+            reason: reason.replace(
+                &format!("not an input of {kind}"),
+                &format!("not an input of {entry}"),
+            ),
+        },
+        fourcam::body::BodyError::Engine(s) => Error::Engine(s),
+    })
 }
 
 /// Plan and post a project built by [`build_project`] the way the `4cam run` command does,

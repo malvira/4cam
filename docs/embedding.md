@@ -14,6 +14,13 @@ them all on the knob example.
 | Python (FreeCAD, scripts) | the `fourcam` wheel | `examples/embed/python` |
 | JavaScript (Node, browsers, Electron) | the `fourcam` npm package (WebAssembly) | `examples/embed/node` |
 | any language, as a process | the `4cam` command | below |
+| FreeCAD | the `fourcam_freecad` adapter on the wheel | `adapters/freecad`, `docs/adapters/freecad.md` |
+| SolidCraft | the WebAssembly plugin | `adapters/solidcraft`, `docs/adapters/solidcraft.md` |
+
+CAD adapters share one engine function, `body_project` (Rust `fourcam::body`, Python
+`fourcam.body_project`, or `call("body_project", ...)`). It builds a one-setup project round a
+part mesh, with every field defaulted, so every CAD host places the body and picks the stock
+and tool the same way.
 
 In every case:
 - **Inputs:** a 0.2 project (or a 0.1 job) as JSON, the part mesh's bytes when it has one

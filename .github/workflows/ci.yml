@@ -46,6 +46,9 @@ jobs:
           dotnet-version: 8.0.x
       - name: scripts/check.sh
         shell: bash
+        env:
+          # no GPU on the runners: the web test's 3D view uses Chrome's software WebGL
+          FOURCAM_E2E_SOFTWARE_GL: "1"
         run: |
           set -o pipefail
           sh scripts/check.sh 2>&1 | tee check.log

@@ -120,6 +120,56 @@ fn estimate(
     to_py(py, v)
 }
 
+/// Any engine function by name, as the WebAssembly module and the C library expose them
+/// (`docs/api.md`): up to three arguments, each JSON-able (dict, list, str) or bytes, whose
+/// meaning depends on the function. Returns its result; raises `ValueError` on an error.
+#[pyfunction]
+#[pyo3(signature = (name, a = None, b = None, c = None))]
+fn call(
+    py: Python<'_>,
+    name: &str,
+    a: Option<&Bound<'_, PyAny>>,
+    b: Option<&Bound<'_, PyAny>>,
+    c: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Py<PyAny>> {
+    let arg = |v: Option<&Bound<'_, PyAny>>| -> PyResult<Vec<u8>> {
+        match v {
+            None => Ok(Vec::new()),
+            Some(v) if v.is_none() => Ok(Vec::new()),
+            Some(v) if v.is_instance_of::<pyo3::types::PyBytes>() => v.extract::<Vec<u8>>(),
+            Some(v) => Ok(json_text(py, v)?.into_bytes()),
+        }
+    };
+    let (a, b, c) = (arg(a)?, arg(b)?, arg(c)?);
+    let name = name.to_string();
+    let v = py.detach(|| api::call(&name, &a, &b, &c));
+    to_py(py, v)
+}
+
+/// A one-setup project around a part mesh, for CAD adapters: `operation` (e.g.
+/// "rotary_finish"), the body's STL/3MF bytes (or a path), and inputs such as `axis`,
+/// `machine`, `tool_kind`, `tool_diameter`, `stock_radius`, `name` or any of the operation's
+/// fields (all defaulted). Returns `{"project": ..., "name": ...}`.
+#[pyfunction]
+#[pyo3(signature = (operation, mesh, **inputs))]
+fn body_project(
+    py: Python<'_>,
+    operation: &str,
+    mesh: &Bound<'_, PyAny>,
+    inputs: Option<&Bound<'_, pyo3::types::PyDict>>,
+) -> PyResult<Py<PyAny>> {
+    let mut req: serde_json::Value = match inputs {
+        Some(d) => serde_json::from_str(&json_text(py, d.as_any())?)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        None => serde_json::json!({}),
+    };
+    req["operation"] = serde_json::json!(operation);
+    let mesh = mesh_bytes(Some(mesh))?;
+    let req = req.to_string();
+    let v = py.detach(|| api::body_project(&req, &mesh));
+    to_py(py, v)
+}
+
 #[pymodule]
 fn fourcam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
@@ -128,5 +178,7 @@ fn fourcam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(plan_and_post, m)?)?;
     m.add_function(wrap_pyfunction!(simulate, m)?)?;
     m.add_function(wrap_pyfunction!(estimate, m)?)?;
+    m.add_function(wrap_pyfunction!(call, m)?)?;
+    m.add_function(wrap_pyfunction!(body_project, m)?)?;
     Ok(())
 }

@@ -4,6 +4,7 @@
 //! [`Machine`] profile -> G-code, which [`verify_gcode`] can sanity-check.
 
 pub mod archive;
+pub mod body;
 pub mod collision;
 pub mod dropcutter;
 pub mod engrave;

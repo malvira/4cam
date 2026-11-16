@@ -21,6 +21,8 @@ sh scripts/e2e-solidcraft.sh
 sh scripts/test-capi.sh
 # the embedding examples in Rust, Python and Node (docs/embedding.md)
 sh scripts/test-embed.sh
+# the FreeCAD adapter, with the wheel, against a mocked FreeCAD API
+sh scripts/test-freecad.sh
 sh scripts/build-wasm.sh
 node crates/fourcam-wasm/js/test.mjs
 sh scripts/test-python.sh

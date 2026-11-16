@@ -16,7 +16,8 @@ runtime is itself marked experimental. A minor version of `craft:plugin` 0.x may
 1. SolidCraft draws the entry's dialog from its input schema. The plugin ships no UI.
 2. The plugin calls `model.mesh {body, tolerance}`, SolidCraft's read-only mesh of the
    evaluated body (component-local mm, at most 8192 vertices).
-3. It builds a one-setup 4cam project:
+3. It builds a one-setup 4cam project with the engine's `fourcam::body::body_project`, which
+   the FreeCAD adapter shares:
    - the body as a mesh model, its chosen axis turned onto the rotary X axis and its front
      (largest X) moved to X0;
    - bar stock, the tool, and the operation filled by 4cam's own defaults (`op_defaults`),
