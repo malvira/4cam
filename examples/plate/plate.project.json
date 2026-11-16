@@ -19,6 +19,11 @@
       "number": 3,
       "library": "makera-starter",
       "tool": "ball-metal-3.175x10"
+    },
+    {
+      "number": 4,
+      "library": "makera-starter",
+      "tool": "vbit-90-3.175"
     }
   ],
   "setups": [

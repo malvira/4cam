@@ -51,7 +51,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // a vise setup (box stock) takes the 3-axis types; a rotary setup takes everything, the
   // 3-axis types indexed to a fixed A (3+1)
   const isBox = (s) => s?.stock?.shape === "box";
-  const fits = (ty, s) => !isBox(s) || ty.machine_needs.includes("xyz");
+  const fits = (ty, s) => !isBox(s) || !ty.machine_needs.includes("rotary_a");
   const pointsText = (v) => v.map((q) => q.join(" ")).join("; ");
 
   function render() {
@@ -122,6 +122,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         html += `<label>${label}<select name="${p.name}">${p.choices.map((c) => `<option ${c === v ? "selected" : ""}>${c}</option>`).join("")}</select></label>`;
       } else if (p.kind === "boolean") {
         html += `<label>${label}<input type="checkbox" name="${p.name}" ${(v ?? p.default) ? "checked" : ""}></label>`;
+      } else if (p.kind === "string") {
+        html += `<label title="${esc(p.help)}">${label}<input name="${p.name}" value="${esc(v ?? "")}"></label>`;
+      } else if (p.kind === "paths") {
+        const n = Array.isArray(v) ? v.length : 0;
+        const text = Array.isArray(v) ? v.map(pointsText).join(" | ") : "";
+        html += `<label title="${esc(p.help)}">${label} <span class="muted">${n} path${n === 1 ? "" : "s"}; x y; x y | ...</span><textarea name="${p.name}" rows="2" spellcheck="false">${esc(text)}</textarea></label>
+          <div class="row small"><label class="filebtn">Load SVG into ${p.name.replace(/_/g, " ")}<input type="file" accept=".svg,image/svg+xml" data-svg="${p.name}" hidden></label>
+          <label>height (mm) <input name="__svg_height" value="20" size="4"></label></div>`;
       } else if (p.kind === "points") {
         html += `<label title="${esc(p.help)}">${label} <span class="muted">x y; x y; ...</span><input name="${p.name}" value="${esc(Array.isArray(v) ? pointsText(v) : "")}" placeholder="required"></label>`;
       } else {
@@ -155,7 +163,13 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (p.kind === "boolean") out[p.name] = el.checked;
       else if (p.name === "tool" || p.kind === "integer") out[p.name] = el.value === "" ? undefined : parseInt(el.value, 10);
       else if (p.kind === "choice") out[p.name] = el.value;
-      else if (p.kind === "points") {
+      else if (p.kind === "string") out[p.name] = el.value;
+      else if (p.kind === "paths") {
+        out[p.name] = el.value
+          .split("|")
+          .map((path) => path.split(";").map((q) => q.split(/[,\s]+/).filter(Boolean).map(Number)).filter((q) => q.length === 2))
+          .filter((path) => path.length >= 2);
+      } else if (p.kind === "points") {
         const pts = el.value.split(";").map((q) => q.split(/[,\s]+/).filter(Boolean).map(Number)).filter((q) => q.length);
         out[p.name] = pts.length ? pts : undefined;
       } else if (["vec2", "rect", "numbers", "integers"].includes(p.kind)) {
@@ -362,6 +376,26 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   $("tree").addEventListener("change", async (ev) => {
     const el = ev.target;
+    // an SVG file for a paths field: it replaces the current outline, placed at its corner
+    // (else the stock's corner), scaled to the height asked for
+    if (el.dataset?.svg && el.files?.[0] && t.selected) {
+      const f = $("opForm");
+      try {
+        const text = await el.files[0].text();
+        const op = readForm();
+        const s = setup();
+        const cur = (op[el.dataset.svg] || []).flat();
+        const at = cur.length
+          ? [Math.min(...cur.map((q) => q[0])), Math.min(...cur.map((q) => q[1]))]
+          : s?.stock?.shape === "box" ? [s.stock.min[0] + 5, s.stock.min[1] + 5] : [op.text_at?.[0] ?? -20, -5];
+        const { result } = await engine("svgPaths", text, { at, height: Number(f.elements.__svg_height?.value) || 0 });
+        f.elements[el.dataset.svg].value = result.paths.map(pointsText).join(" | ");
+        if (t.edited) t.edited.add(el.dataset.svg);
+      } catch (e) {
+        showError(`SVG: ${e.message}`);
+      }
+      return;
+    }
     if (el.closest("#opForm") && el.name === "tool" && t.draft) {
       t.edited.delete("tool");
       return refreshDefaults();

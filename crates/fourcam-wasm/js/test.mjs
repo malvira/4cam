@@ -67,7 +67,7 @@ assert.ok(lim.limits.some((i) => i.message.includes("F5209")), JSON.stringify(li
 console.log(`profiles: ${reg.machines.length} machines, ${reg.libraries[0].tools.length} starter tools, limits ${lim.limits.length}`);
 // operation registry and 0.2 projects
 const types = cam.opTypes();
-assert.deepEqual(types.map((t) => t.kind).sort(), ["contour", "drill", "face", "flank_chamfer", "helical_knurl", "pocket", "raster3d", "rotary_finish", "rotary_rough", "rotary_turning", "rough3d"]);
+assert.deepEqual(types.map((t) => t.kind).sort(), ["contour", "drill", "engrave", "face", "flank_chamfer", "helical_knurl", "pocket", "raster3d", "rotary_finish", "rotary_rough", "rotary_turning", "rough3d", "vcarve"]);
 const chk = cam.checkProject(JSON.parse(readFileSync(join(root, "examples", "knob", "knob.job.json"), "utf8")));
 assert.equal(chk.upgraded, true);
 assert.deepEqual(chk.problems, []);
@@ -140,4 +140,16 @@ const ys = new Set();
 for (let i = 0; i < kio.segments; i++) if (kpath[7 * i + 1] !== 0) ys.add(kpath[7 * i + 3]);
 assert.deepEqual([...ys].sort((a, b) => a - b), [0], "Y moves only in the A0 D-flat (the hole is on the centreline)");
 console.log(`indexed 3+1: ${ki.programs[2].lines} lines, playback ${kio.segments} moves`);
+// SVG import: a 40 x 20 user-unit rectangle placed at (5, 5) and scaled to 10 mm tall (20 x 10 mm)
+const sv = cam.svgPaths('<svg xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="40" height="20"/></svg>', { at: [5, 5], height: 10 });
+assert.ok(!sv.error, sv.error);
+assert.equal(sv.count, 1);
+assert.deepEqual(sv.paths[0].map((q) => q.join(",")).sort(), ["5,15", "25,15", "25,5", "5,5", "5,15"].sort());
+assert.ok(cam.svgPaths("not svg", {}).error);
+// wrapped engraving on the Z1 (ring example)
+const ring = JSON.parse(readFileSync(join(root, "examples", "ring", "ring.project.json"), "utf8"));
+const rg = cam.planAndPost(ring, "makera-z1");
+assert.ok(!rg.error, rg.error);
+assert.deepEqual(rg.programs.map((p) => p.issues.length), [0]);
+console.log(`engraving: ring ${rg.programs[0].lines} lines; SVG rectangle -> ${sv.paths[0].length} points`);
 console.log("wasm OK");

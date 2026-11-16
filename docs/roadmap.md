@@ -121,6 +121,26 @@ goldens are still byte-identical.
     wrapped relief roughed and finished on the rotary with no gouge.
 
   Not yet: tapered ball tools; face selections as raster boundaries on 3-axis setups.
+- **Engraving (part 2). Done:**
+  - `engrave` follows polylines and text in a built-in single-stroke font (A-Z, 0-9, some
+    punctuation; an original design) at a depth in `step_down` passes, with a V-bit, ball or
+    flat tool;
+  - `vcarve` carves closed outlines (even-odd) with a V-bit, the depth from the distance to
+    the outline / tan(half angle), up to `max_depth`. This is exact for a V-bit, because
+    distance is 1-Lipschitz;
+  - both work flat on a vise or wrapped round the bar on a rotary setup (path Y = arc length
+    at radius `top`, centred on the top at A0); text can be turned (`text_rotate: 90` runs it
+    round the bar);
+  - SVG import (`engrave::svg_paths`, WASM `svgPaths`, a "Load SVG" button on the form):
+    path (lines, curves, arcs), polyline, polygon, line, rect, circle, ellipse, with
+    transforms and mm/cm/in sizes;
+  - examples: the plaque's engraved title and V-carved star (Carvera), and
+    `examples/ring` (Z1): grooves, text round the bar and a V-carved diamond band, all
+    wrapped. Tests check groove depth and wall slope, text placement, V-carve depth against
+    distance (flat floors, nothing past the outline), and the same wrapped on the rotary.
+
+  Not yet: V-carving outline fonts (only SVG shapes); the part model does not include
+  engraved or indexed features, so the simulation summary counts them as gouges.
 - ~~Indexed 3+1: 3-axis passes at fixed A angles.~~ Done: on a rotary setup the five 3-axis
   operations take `index_a` (deg). The planner turns A there at the safe radius, runs the
   3-axis strategy around the bar (raster3d on the part turned by A), and returns to Y0. The

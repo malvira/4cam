@@ -643,6 +643,38 @@ pub mod api {
         })
     }
 
+    /// Polylines from an SVG document: `opts` {at: [x, y], height (mm, 0 keeps the size),
+    /// tolerance}; returns {paths, count}.
+    pub fn svg_paths(svg: &str, opts: &str) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let tol = o["tolerance"].as_f64().unwrap_or(0.02).max(0.001);
+        let paths = match fourcam::engrave::svg_paths(svg, tol) {
+            Ok(p) => p,
+            Err(e) => return err(e),
+        };
+        let at = [
+            o["at"][0].as_f64().unwrap_or(0.0),
+            o["at"][1].as_f64().unwrap_or(0.0),
+        ];
+        let placed = fourcam::engrave::place(&paths, at, o["height"].as_f64().unwrap_or(0.0));
+        // 3 decimals keep documents readable
+        let round: Vec<Vec<[f64; 2]>> = placed
+            .iter()
+            .map(|p| {
+                p.iter()
+                    .map(|q| {
+                        [
+                            (q[0] * 1000.0).round() / 1000.0,
+                            (q[1] * 1000.0).round() / 1000.0,
+                        ]
+                    })
+                    .collect()
+            })
+            .collect();
+        json!({"count": round.len(), "paths": round})
+    }
+
     /// Face regions of a model (`model` id; the mesh bytes for mesh models), plus each
     /// triangle's region index and the triangles themselves (f32 base64) for picking.
     pub fn face_regions(doc: &str, model: &str, mesh: &[u8]) -> Value {
@@ -785,6 +817,7 @@ pub mod api {
             "sim_seek" => sim_seek(s(a).trim().parse().unwrap_or(0)),
             "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&s(a), &s(b), c),
+            "svg_paths" => svg_paths(&s(a), &s(b)),
             other => err(format!("unknown function {other:?}")),
         }
     }

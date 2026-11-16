@@ -334,12 +334,12 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
   const allKinds = await js("window.__4cam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 11 && String(typesAll).split(",").length === 11, `${typesAll}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 13 && String(typesAll).split(",").length === 13, `${typesAll}`);
   const filled = [];
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
     await waitFor(() => js(`!!document.getElementById('opForm') && !!window.__4cam.state.tree.draft && window.__4cam.state.tree.draft.op.type === '${kind}'`), `the ${kind} form`, 15000);
-    const blanks = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && !['__name', '__axial'].includes(e.name) && e.value.trim() === '').map(e => e.name).join(',')");
+    const blanks = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && e.value.trim() === '').map(e => e.name).join(',')");
     const before = await js("document.querySelectorAll('#tree .tree-op').length");
     await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${before + 1}`), `${kind} to be added`, 15000);
@@ -349,7 +349,7 @@ try {
     await treeAct(id, "delete");
     await settle();
   }
-  check("every operation type's new form is fully filled and applies cleanly", filled.length === 11 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
+  check("every operation type's new form is fully filled and applies cleanly", filled.length === 13 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 15000);
@@ -458,7 +458,7 @@ try {
   await settle();
   const plateMachine = await js("document.getElementById('machine').value");
   const plateTypes = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
-  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,contour,raster3d,rough3d", `${plateMachine}; ${plateTypes}`);
+  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,contour,raster3d,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
   await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 15000);
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
@@ -467,6 +467,16 @@ try {
   await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${plateOps + 1}`), "the drill to be added", 15000);
   const drillPts = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.type === 'drill' && o.points.length === 2)?.points)");
   check("3-axis form: fully filled, and points are typed as 'x y; x y'", drillBlank === "" && drillPts === "[[30,20],[33,20]]", `blank: ${drillBlank || "none"}; points ${drillPts}`);
+  // a V-carve whose outline comes from an SVG file, through the form's file input
+  await js("document.getElementById('treeAddType').value = 'vcarve'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
+  await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'vcarve' && !!document.getElementById('opForm')"), "the V-carve form", 15000);
+  await js("const inp = document.querySelector('#opForm input[data-svg]'); const dt = new DataTransfer(); dt.items.add(new File(['<svg xmlns=\"http://www.w3.org/2000/svg\"><polygon points=\"0,0 20,0 10,8\"/></svg>'], 'tri.svg', { type: 'image/svg+xml' })); inp.files = dt.files; document.getElementById('opForm').elements.__svg_height.value = '8'; inp.dispatchEvent(new Event('change', { bubbles: true })); true");
+  await waitFor(() => js("document.getElementById('opForm').elements.paths.value.includes('30 16')"), "the SVG outline in the form", 15000);
+  const svgField = await js("document.getElementById('opForm').elements.paths.value");
+  const vOps = await js("document.querySelectorAll('#tree .tree-op').length");
+  await js("document.getElementById('opForm').requestSubmit(); true");
+  await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${vOps + 1}`), "the V-carve to be added", 15000);
+  check("SVG import replaces the V-carve outline (at the old outline's corner, 8 mm tall)", /^20 24; 40 24; 30 16; 20 24$/.test(svgField), svgField);
   await js("document.getElementById('generate').click()");
   await waitDone("plate generation", 240000);
   const ptabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
@@ -493,7 +503,7 @@ try {
   const ptags = await js("[...new Set(window.__4cam.state.machining.op)].sort((a, b) => a - b).join(',')");
   const pz = await js("(() => { const m = window.__4cam.state.machining; const nx = m.session.grid.nx; const at = (x, y) => m.r[Math.floor(y / 0.25) * nx + Math.floor(x / 0.25)]; return [at(15, 20), at(40, 6), at(46, 20)].map(v => v.toFixed(2)).join(','); })()");
   const vtx = await js("(() => { const m = window.__4cam.state.machining; const nx = m.session.grid.nx; const k = Math.floor(20 / 0.25) * nx + Math.floor(15 / 0.25); return m.stockMesh.geometry.attributes.position.array[3 * k + 2].toFixed(2); })()");
-  check("plate playback: block cut by all six operations (five + the added drill), mesh follows the engine", ptags === "1,2,3,4,5,6" && pz.startsWith("-3.50,-4.50,") && Math.abs(parseFloat(pz.split(",")[2]) + 0.5) < 0.03 && vtx === "-3.50", `tags ${ptags}; pocket, hole, dome top ${pz}; vertex ${vtx}`);
+  check("plate playback: block cut by all seven operations (five + the added drill and V-carve), mesh follows the engine", ptags === "1,2,3,4,5,6,7" && pz.startsWith("-3.50,-4.50,") && Math.abs(parseFloat(pz.split(",")[2]) + 0.5) < 0.03 && vtx === "-3.50", `tags ${ptags}; pocket, hole, dome top ${pz}; vertex ${vtx}`);
   await sleep(800);
   await shot("09_plate_machining");
   await js("document.getElementById('simClose').click(); true");
@@ -506,7 +516,7 @@ try {
   await js("document.getElementById('generate').click()");
   await waitDone("plaque generation", 240000);
   const qtabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
-  check("plaque: roughing and finishing programs verified OK", qtabs.length === 2 && qtabs.every((t) => t.endsWith("OK")), qtabs.join(", "));
+  check("plaque: roughing, finishing and engraving programs verified OK", qtabs.length === 3 && qtabs.every((t) => t.endsWith("OK")), qtabs.join(", "));
   await js("document.getElementById('simulate').click()");
   await waitDone("plaque simulation", 240000);
   await js("document.querySelectorAll('#tabs button')[1].click()");
@@ -515,6 +525,19 @@ try {
   const qmean = parseFloat((qsim.match(/mean ([0-9.]+)/) || [])[1]);
   check("plaque simulated: finished to the relief, no gouge, no rapids through stock", /deepest gouge 0\.00\d mm; 0 rapid/.test(qsim) && qmean < 0.05, qsim);
   await shot("11_plaque_simulated");
+
+  // 8e. wrapped engraving on the Z1: grooves, text round the bar and a V-carved band
+  await js("document.getElementById('example').value = 'ring'; document.getElementById('loadExample').click(); true");
+  await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 3"), "the ring in the tree", 15000);
+  await js("document.getElementById('generate').click()");
+  await waitDone("ring generation", 240000);
+  const rtabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
+  await js("document.getElementById('simulate').click()");
+  await waitDone("ring simulation", 240000);
+  const rcut = await js("(() => { const s = window.__4cam.state.sim; const g = s.grid; const r = s.stocks[0].r; const at = (x, deg) => r[Math.floor((x - g.x0) / g.dx) * g.na + Math.floor(deg / 360 * g.na) % g.na]; return [at(-31, 90), at(-40, 200), at(-25, 90)].map(v => v.toFixed(2)).join(','); })()");
+  check("ring: wrapped engraving verified and simulated (diamond floor, groove all round, bar elsewhere)", rtabs.length === 1 && rtabs[0].endsWith("OK") && /^10\.6\d,11\.7\d,12\.00$/.test(rcut), `${rtabs.join(", ")}; ${rcut}`);
+  await sleep(1000);
+  await shot("12_ring_engraved");
 
   // 8c. indexed 3+1 on the knob: D-flat at A0, cross hole at A90, simulated on the bar
   await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");

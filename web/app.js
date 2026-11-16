@@ -138,6 +138,7 @@ async function loadExample(name) {
       plate: ["plate/plate.project.json", "plate/dome.stl"],
       knob_indexed: ["knob/knob_indexed.project.json", null],
       plaque: ["plaque/plaque.project.json", "plaque/plaque.png"],
+      ring: ["ring/ring.project.json", null],
     }[name] || ["knob/knob_finish.job.json", "knob/knob.stl"];
     const [job, stl] = await Promise.all([
       fetch(`../examples/${file}`).then((r) => {

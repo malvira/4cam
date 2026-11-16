@@ -177,6 +177,8 @@ pub enum Operation {
     /// 3D roughing: the parallel raster with a flat (or ball) tool in step-down levels,
     /// leaving stock for the finish.
     Rough3d(Raster3d),
+    Engrave(Engrave),
+    Vcarve(Vcarve),
 }
 
 /// 3-axis: face the top of the stock down by `depth`.
@@ -288,6 +290,61 @@ pub struct Raster3d {
     pub plunge_feed: f64,
 }
 
+/// Follow paths and single-line text at `depth` below the surface, in `step_down` passes:
+/// on a vise at Z `top`, or wrapped round the rotary axis at radius `top` (path Y = arc
+/// length, centred on the top of the bar at A0).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Engrave {
+    pub tool: u32,
+    /// Polylines (closed when the last point repeats the first).
+    #[serde(default)]
+    pub paths: Vec<Vec<[f64; 2]>>,
+    /// Text in the built-in single-stroke font (A-Z, 0-9, - . , / : ! ? + = ( ) ').
+    #[serde(default)]
+    pub text: String,
+    /// Cap height of the text (mm).
+    #[serde(default = "default_text_height")]
+    pub text_height: f64,
+    /// Start of the text's first baseline.
+    #[serde(default)]
+    pub text_at: [f64; 2],
+    /// Turn the text by this many degrees about `text_at` (90: it runs along +Y, i.e.
+    /// round the bar when wrapped).
+    #[serde(default)]
+    pub text_rotate: f64,
+    pub depth: f64,
+    /// Surface: Z on a vise (default: the stock top), radius on a rotary setup (default:
+    /// the stock radius).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    pub step_down: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+}
+
+fn default_text_height() -> f64 {
+    5.0
+}
+
+/// V-carve closed paths (even-odd fill) with a V-bit: depth from the bit's angle and the
+/// distance to the outline, up to `max_depth`; flat or wrapped as [`Engrave`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Vcarve {
+    pub tool: u32,
+    pub paths: Vec<Vec<[f64; 2]>>,
+    pub max_depth: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    /// Distance between rows (mm).
+    pub stepover: f64,
+    /// Point spacing along a row (mm).
+    pub sample: f64,
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+}
+
 fn default_pattern() -> String {
     "zigzag".into()
 }
@@ -318,6 +375,8 @@ impl Operation {
             Operation::Drill(o) => o.tool,
             Operation::Contour(o) => o.tool,
             Operation::Raster3d(o) | Operation::Rough3d(o) => o.tool,
+            Operation::Engrave(o) => o.tool,
+            Operation::Vcarve(o) => o.tool,
             Operation::RotaryTurning(o) => o.tool,
             Operation::HelicalKnurl(o) => o.tool,
             Operation::FlankChamfer(o) => o.tool,

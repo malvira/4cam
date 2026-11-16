@@ -1,5 +1,6 @@
 //! Toolpath strategies. Each one appends moves to a [`Builder`].
 
+pub mod engrave;
 mod flank_chamfer;
 mod helical_knurl;
 mod rotary_finish;

@@ -11,7 +11,8 @@ use serde_json::{json, Value};
 pub struct ParamSpec {
     pub name: &'static str,
     /// "number", "integer", "boolean", "vec2" ([a, b]), "rect" ([x0, y0, x1, y1]), "numbers"
-    /// (list), "integers", "points" ([[x, y], ...]), "choice"
+    /// (list), "integers", "points" ([[x, y], ...]), "paths" ([[[x, y], ...], ...]),
+    /// "string", "choice"
     pub kind: &'static str,
     #[serde(skip_serializing_if = "str::is_empty")]
     pub unit: &'static str,
@@ -39,7 +40,8 @@ pub struct OperationType {
     pub tool_shapes: &'static [&'static str],
     /// Geometry it works from: "profile", "mesh", "axial_range", "edge".
     pub geometry: &'static [&'static str],
-    /// Machine abilities needed: "rotary_a" (A about X).
+    /// Machine abilities needed: "rotary_a" (A about X), "xyz" (3-axis moves; on a rotary
+    /// setup indexed to a fixed A). None: either setup (flat on a vise, wrapped on the bar).
     pub machine_needs: &'static [&'static str],
     /// Whether it may cut below the part surface on purpose (knurls, chamfers).
     pub shapes_part: bool,
@@ -328,6 +330,50 @@ pub fn registry() -> Vec<OperationType> {
             machine_needs: &["xyz"],
             shapes_part: false,
         },
+        OperationType {
+            kind: "engrave",
+            title: "Engrave paths / text",
+            description: "Follow paths (e.g. from an SVG) and single-line text at a depth, in passes; flat on a vise, wrapped round the bar on a rotary setup.",
+            group: "feature",
+            params: vec![
+                tool(),
+                p("text", "string", "", "Text in the built-in single-stroke font (A-Z, 0-9, - . , / : ! ? + = ( ) ').").opt(json!("")),
+                p("text_height", "number", "mm", "Cap height of the text.").opt(json!(5.0)).min(0.1),
+                p("text_at", "vec2", "mm", "Start of the text's baseline (wrapped: X, and arc length from the top of the bar)."),
+                p("text_rotate", "number", "deg", "Turn the text (90: it runs round the bar when wrapped).").opt(json!(0.0)),
+                p("paths", "paths", "mm", "Polylines to follow, e.g. imported from an SVG.").opt(json!([])),
+                p("depth", "number", "mm", "Depth below the surface.").min(0.001),
+                p("top", "number", "mm", "Surface: Z on a vise (default: stock top), radius on a rotary setup (default: stock radius).").opt(Value::Null),
+                p("step_down", "number", "mm", "Depth per pass.").min(0.001),
+                feed(),
+                plunge(),
+            ],
+            tool_shapes: &["vbit", "ball", "flat"],
+            geometry: &["curve"],
+            machine_needs: &[],
+            shapes_part: true,
+        },
+        OperationType {
+            kind: "vcarve",
+            title: "V-carve",
+            description: "Carve closed shapes with a V-bit, the depth set by the bit's angle and the distance to the outline (up to a maximum); flat or wrapped.",
+            group: "feature",
+            params: vec![
+                tool(),
+                p("paths", "paths", "mm", "Closed outlines (even-odd fill), e.g. imported from an SVG."),
+                p("max_depth", "number", "mm", "Deepest cut (wide areas get a flat floor).").min(0.01),
+                p("top", "number", "mm", "Surface: Z on a vise (default: stock top), radius on a rotary setup (default: stock radius).").opt(Value::Null),
+                p("stepover", "number", "mm", "Distance between rows.").min(0.005),
+                p("sample", "number", "mm", "Point spacing along a row.").min(0.005),
+                p("tolerance", "number", "mm", "Largest dip of a straight move below the carved surface.").opt(json!(0.005)).min(0.0001),
+                feed(),
+                plunge(),
+            ],
+            tool_shapes: &["vbit"],
+            geometry: &["curve"],
+            machine_needs: &[],
+            shapes_part: true,
+        },
     ]
 }
 
@@ -389,6 +435,18 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
                 let n: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
                 n.len() == 4 && a.len() == 4 && n[2] > n[0] && n[3] > n[1]
             }),
+            "string" => v.is_string(),
+            "paths" => v.as_array().is_some_and(|a| {
+                a.iter().all(|path| {
+                    path.as_array().is_some_and(|q| {
+                        q.len() >= 2
+                            && q.iter().all(|pt| {
+                                pt.as_array()
+                                    .is_some_and(|c| c.len() == 2 && c.iter().all(Value::is_number))
+                            })
+                    })
+                }) && (p.name != "paths" || !a.is_empty() || !p.required)
+            }),
             "points" => v.as_array().is_some_and(|a| {
                 let pairs = a.iter().all(|q| {
                     q.as_array()
@@ -415,6 +473,7 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
                     "points" if p.name == "path" =>
                         "[[x, y], ...] with 3 or more points".to_string(),
                     "points" => "[[x, y], ...]".to_string(),
+                    "paths" => "[[[x, y], ...], ...] (polylines of 2 or more points)".to_string(),
                     "numbers" | "integers" => format!("a list of {}", p.kind),
                     "choice" => format!("one of {:?}", p.choices),
                     k => format!("a {k}"),
@@ -450,6 +509,8 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
         Operation::Rough3d(_) => "rough3d",
+        Operation::Engrave(_) => "engrave",
+        Operation::Vcarve(_) => "vcarve",
     }
 }
 
@@ -624,6 +685,81 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("tip_offset".into(), json!(0.5));
             v.insert("passes".into(), json!([0.2, 0.0]));
             v.insert("feed".into(), json!(nice(feed * 2.0 / 3.0, 5.0)));
+            v.insert("plunge_feed".into(), json!(plunge));
+        }
+        "engrave" | "vcarve" => {
+            // the surface: the vise block's top, or round the bar at the part's largest
+            // radius over the area (the stock radius without a profile)
+            let (cx, cy, span, top) = match job.stock_box {
+                Some(sb) => (
+                    (sb.min[0] + sb.max[0]) / 2.0,
+                    (sb.min[1] + sb.max[1]) / 2.0,
+                    [sb.max[0] - sb.min[0], sb.max[1] - sb.min[1]],
+                    sb.max[2],
+                ),
+                None => {
+                    let rad = job
+                        .part
+                        .profile
+                        .as_ref()
+                        .map(|p| {
+                            let g = crate::geom::RevolvedProfile::new(p, job.stock.radius);
+                            (0..=20)
+                                .map(|k| {
+                                    g.radius(
+                                        x_range[0] + (x_range[1] - x_range[0]) * k as f64 / 20.0,
+                                    )
+                                })
+                                .fold(0.0, f64::max)
+                        })
+                        .filter(|r| *r > 0.0)
+                        .unwrap_or(job.stock.radius);
+                    let circ = std::f64::consts::TAU * rad;
+                    (
+                        (x_range[0] + x_range[1]) / 2.0,
+                        0.0,
+                        [x_range[1] - x_range[0], circ / 2.0],
+                        rad,
+                    )
+                }
+            };
+            v.insert("top".into(), json!(nice(top, 0.001)));
+            if kind == "engrave" {
+                let h = nice((span[1] / 4.0).clamp(1.0, 5.0), 0.5);
+                let text = "4CAM";
+                let width = (5.0 * text.len() as f64 - 1.0) * h / 6.0;
+                v.insert("text".into(), json!(text));
+                v.insert("text_height".into(), json!(h));
+                v.insert(
+                    "text_at".into(),
+                    json!([nice(cx - width / 2.0, 0.01), nice(cy - h / 2.0, 0.01)]),
+                );
+                v.insert("text_rotate".into(), json!(0.0));
+                v.insert("paths".into(), json!([]));
+                let dep = match tool.shape {
+                    ToolShape::Vbit { .. } => 0.3,
+                    _ => nice((0.1 * d).max(0.05), 0.05),
+                };
+                v.insert("depth".into(), json!(dep));
+                v.insert("step_down".into(), json!(nice(dep / 2.0, 0.01)));
+            } else {
+                let (hw, hh) = ((span[0] / 3.0).min(10.0), (span[1] / 6.0).min(4.0));
+                let (x0, y0, x1, y1) = (
+                    nice(cx - hw, 0.01),
+                    nice(cy - hh, 0.01),
+                    nice(cx + hw, 0.01),
+                    nice(cy + hh, 0.01),
+                );
+                v.insert(
+                    "paths".into(),
+                    json!([[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]),
+                );
+                v.insert("max_depth".into(), json!(1.0));
+                v.insert("stepover".into(), json!(0.1));
+                v.insert("sample".into(), json!(0.1));
+                v.insert("tolerance".into(), json!(0.005));
+            }
+            v.insert("feed".into(), json!(feed));
             v.insert("plunge_feed".into(), json!(plunge));
         }
         "face" | "pocket" | "drill" | "contour" | "raster3d" | "rough3d" => {
@@ -870,6 +1006,14 @@ mod tests {
                     "vec2" => json!([-5.0, 0.0]),
                     "rect" => json!([5.0, 5.0, 25.0, 35.0]),
                     "points" => json!([[2.0, 2.0], [58.0, 2.0], [58.0, 38.0], [2.0, 38.0]]),
+                    "paths" => json!([[
+                        [-15.0, -3.0],
+                        [-5.0, -3.0],
+                        [-5.0, 3.0],
+                        [-15.0, 3.0],
+                        [-15.0, -3.0]
+                    ]]),
+                    "string" => json!("4CAM"),
                     "numbers" => json!([1.0]),
                     "integers" => json!([1]),
                     "choice" => json!(p.choices[0]),

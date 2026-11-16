@@ -5,6 +5,7 @@
 
 pub mod archive;
 pub mod dropcutter;
+pub mod engrave;
 pub mod geom;
 pub mod geometry;
 pub mod job;
@@ -107,6 +108,8 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
         Operation::Rough3d(_) => "rough3d",
+        Operation::Engrave(_) => "engrave",
+        Operation::Vcarve(_) => "vcarve",
     }
 }
 
@@ -192,12 +195,22 @@ fn is_three_axis(op: &Operation) -> bool {
     )
 }
 
+/// Operations that work on either setup: flat on a vise, wrapped on a rotary setup.
+pub fn is_surface_op(op: &Operation) -> bool {
+    matches!(op, Operation::Engrave(_) | Operation::Vcarve(_))
+}
+
 fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Toolpath, Error> {
     let job = ctx.job;
     // a vise setup (box stock) runs only 3-axis operations; a rotary setup runs both, the
     // 3-axis ones indexed to a fixed A (3+1)
     let three = job.stock_box.is_some();
-    if three && prog.operations.iter().any(|o| !is_three_axis(o)) {
+    if three
+        && prog
+            .operations
+            .iter()
+            .any(|o| !is_three_axis(o) && !is_surface_op(o))
+    {
         return Err(Error::Invalid(format!(
             "program {}: rotary operations need bar stock on the rotary axis, not a vise setup",
             prog.name
@@ -295,6 +308,9 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 | Operation::Contour(_),
                 ToolShape::Flat { .. },
             ) => None,
+            (Operation::Engrave(_), _) => None,
+            (Operation::Vcarve(_), ToolShape::Vbit { .. }) => None,
+            (Operation::Vcarve(_), _) => return Err(wrong("vbit")),
             (
                 Operation::Face(_)
                 | Operation::Pocket(_)
@@ -335,6 +351,41 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let r_min = strategy::rotary_rough(&mut b, &dc, job.stock.radius, safe_r, o)
                     .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
+            }
+            (Operation::Engrave(_) | Operation::Vcarve(_), shape) => {
+                use strategy::engrave as eg;
+                let err = |e: String| Error::Invalid(format!("program {}: {e}", prog.name));
+                let top_of = |t: Option<f64>| match stock_box {
+                    Some(sb) if three => eg::Surface::Flat {
+                        top: t.unwrap_or(sb.max[2]),
+                    },
+                    _ => eg::Surface::Wrapped {
+                        top: t.unwrap_or(job.stock.radius),
+                    },
+                };
+                // wrapped cuts start on the axis centreline from the rotary state
+                if !three && b.p3.is_some_and(|p| p[1] != 0.0) {
+                    b.rapid3(None, None, Some(safe_r));
+                    b.rapid3(None, Some(0.0), None);
+                }
+                match op {
+                    Operation::Engrave(o) => {
+                        eg::engrave(&mut b, top_of(o.top), safe_r, o).map_err(err)?
+                    }
+                    Operation::Vcarve(o) => {
+                        let ToolShape::Vbit { angle, .. } = shape else {
+                            unreachable!("checked above")
+                        };
+                        eg::vcarve(&mut b, top_of(o.top), safe_r, (angle / 2.0).to_radians(), o)
+                            .map_err(err)?
+                    }
+                    _ => unreachable!(),
+                }
+                if three {
+                    b.x = None;
+                } else {
+                    b.p3 = None;
+                }
             }
             (op3, shape) if is_three_axis(op3) => {
                 let sb = stock_box.as_ref().expect("set above");
@@ -401,7 +452,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
         plunge_limit: prog
             .operations
             .iter()
-            .any(is_three_axis)
+            .any(|o| is_three_axis(o) || is_surface_op(o))
             .then(|| {
                 prog.operations
                     .iter()
@@ -411,6 +462,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         Operation::Drill(o) => Some(o.feed),
                         Operation::Contour(o) => Some(o.plunge_feed),
                         Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.plunge_feed),
+                        Operation::Engrave(o) => Some(o.plunge_feed),
+                        Operation::Vcarve(o) => Some(o.plunge_feed),
                         _ => None,
                     })
                     .fold(f64::INFINITY, f64::min)

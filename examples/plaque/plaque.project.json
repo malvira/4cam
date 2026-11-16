@@ -1,6 +1,6 @@
 {
   "schema_version": "0.2",
-  "name": "relief plaque (Carvera vise)",
+  "name": "relief plaque with engraving (Carvera vise)",
   "models": [
     {
       "id": "relief",
@@ -30,6 +30,11 @@
       "number": 3,
       "library": "makera-starter",
       "tool": "ball-metal-3.175x10"
+    },
+    {
+      "number": 4,
+      "library": "makera-starter",
+      "tool": "vbit-90-3.175"
     }
   ],
   "setups": [
@@ -46,7 +51,7 @@
         ],
         "max": [
           90.0,
-          70.0,
+          90.0,
           0.0
         ]
       },
@@ -111,6 +116,84 @@
           "tolerance": 0.005,
           "feed": 600.0,
           "plunge_feed": 60.0
+        },
+        {
+          "id": "op3",
+          "name": "Title",
+          "type": "engrave",
+          "tool": 4,
+          "text": "RELIEF 4CAM",
+          "text_height": 5.0,
+          "text_at": [
+            8.0,
+            72.0
+          ],
+          "text_rotate": 0.0,
+          "paths": [],
+          "depth": 0.4,
+          "step_down": 0.2,
+          "feed": 300.0,
+          "plunge_feed": 60.0
+        },
+        {
+          "id": "op4",
+          "name": "Star",
+          "type": "vcarve",
+          "tool": 4,
+          "paths": [
+            [
+              [
+                78.0,
+                86.0
+              ],
+              [
+                75.943,
+                80.832
+              ],
+              [
+                70.392,
+                80.472
+              ],
+              [
+                74.671,
+                76.918
+              ],
+              [
+                73.298,
+                71.528
+              ],
+              [
+                78.0,
+                74.5
+              ],
+              [
+                82.702,
+                71.528
+              ],
+              [
+                81.329,
+                76.918
+              ],
+              [
+                85.608,
+                80.472
+              ],
+              [
+                80.057,
+                80.832
+              ],
+              [
+                78.0,
+                86.0
+              ]
+            ]
+          ],
+          "max_depth": 1.5,
+          "stepover": 0.1,
+          "sample": 0.1,
+          "tolerance": 0.005,
+          "feed": 300.0,
+          "plunge_feed": 60.0
         }
       ],
       "outputs": [
@@ -126,6 +209,14 @@
           "title": "Plaque: 45 deg parallel finish, 0.01 mm scallop (T3 ball)",
           "operations": [
             "op2"
+          ]
+        },
+        {
+          "name": "plaque_3_engrave",
+          "title": "Plaque: engraved title and V-carved star (T4 V-bit)",
+          "operations": [
+            "op3",
+            "op4"
           ]
         }
       ]

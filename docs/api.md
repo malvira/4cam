@@ -69,6 +69,8 @@ All calls take and return JSON. No wasm-bindgen is needed.
   - `simOpen(doc, {setup, dx, na, cell}, mesh)` and `simSeek(n)` play it back move by move
     (for box setups the changed rows are Y rows, with `z` and the operation tags).
 - **Profiles:**
+  - `svgPaths(svgText, {at, height, tolerance})` turns an SVG into polylines (mm, Y up) for
+    `engrave`/`vcarve` paths;
   - `profileList()` lists the built-in machines and tool libraries;
   - `importProfile(bytes, name)` reads a 4cam or Fusion 360 profile file.
 
