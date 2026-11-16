@@ -9,6 +9,24 @@ use serde::{Deserialize, Serialize};
 pub enum Move {
     /// Operator-visible comment.
     Comment { text: String },
+    /// Rapid in work XYZ (3-axis and later 5-axis); only the given axes move.
+    Rapid3 {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        z: Option<f64>,
+    },
+    /// Straight cut to the tool tip at (x, y, z) with the tool along `axis` (unit vector;
+    /// [0, 0, 1] for 3-axis) at `feed` mm/min.
+    Line3 {
+        x: f64,
+        y: f64,
+        z: f64,
+        axis: [f64; 3],
+        feed: f64,
+    },
     /// Start of an operation: the moves until the next marker belong to it. `id` numbers the
     /// job's operations in order (0, 1, ...); `kind` is the operation type. Posts ignore it.
     Operation { id: u32, kind: String },
@@ -45,8 +63,16 @@ pub struct Toolpath {
     pub tool: Option<(u32, String)>,
     pub notes: Vec<String>,
     pub reset_a: bool,
+    /// Safe radius (rotary) or safe Z (3-axis) for rapids.
     pub safe_r: f64,
     pub moves: Vec<Move>,
+    /// Replaces the machine's origin comment (3-axis programs state their own zero).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_comment: Option<String>,
+    /// Fastest allowed Z descent (mm/min) for programs whose moves don't carry it
+    /// (3-axis): the slowest plunge feed of its operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plunge_limit: Option<f64>,
 }
 
 /// True length of a move at the mean radius (minimum 0.5 mm so moves near the axis still count).
@@ -63,6 +89,8 @@ pub struct Builder {
     pub x: Option<f64>,
     pub r: Option<f64>,
     pub a: f64,
+    /// 3-axis position (tool tip, work XYZ).
+    pub p3: Option<[f64; 3]>,
 }
 
 impl Default for Builder {
@@ -78,6 +106,7 @@ impl Builder {
             x: None,
             r: None,
             a: 0.0,
+            p3: None,
         }
     }
 
@@ -120,6 +149,39 @@ impl Builder {
 
     pub fn rapid_x(&mut self, x: f64) {
         self.rapid(Some(x), None, None);
+    }
+
+    /// 3-axis rapid; the planner orders the axes (up first, then across, then down).
+    pub fn rapid3(&mut self, x: Option<f64>, y: Option<f64>, z: Option<f64>) {
+        let p = self.p3.get_or_insert([0.0, 0.0, 0.0]);
+        if let Some(v) = x {
+            p[0] = v;
+        }
+        if let Some(v) = y {
+            p[1] = v;
+        }
+        if let Some(v) = z {
+            p[2] = v;
+        }
+        self.moves.push(Move::Rapid3 { x, y, z });
+    }
+
+    /// 3-axis feed move; dropped when shorter than 1e-6 mm.
+    pub fn line3(&mut self, x: f64, y: f64, z: f64, axis: [f64; 3], feed: f64) {
+        if let Some(p) = self.p3 {
+            let l = ((x - p[0]).powi(2) + (y - p[1]).powi(2) + (z - p[2]).powi(2)).sqrt();
+            if l < 1e-6 {
+                return;
+            }
+        }
+        self.p3 = Some([x, y, z]);
+        self.moves.push(Move::Line3 {
+            x,
+            y,
+            z,
+            axis,
+            feed,
+        });
     }
 
     pub fn plunge(&mut self, r: f64, feed: f64) {

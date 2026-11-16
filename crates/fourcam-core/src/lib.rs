@@ -17,6 +17,7 @@ pub mod profiles;
 pub mod project;
 pub mod render;
 pub mod sim;
+pub mod sim3;
 pub mod strategy;
 pub mod toolpath;
 pub mod verify;
@@ -99,6 +100,11 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::FlankChamfer(_) => "flank_chamfer",
         Operation::RotaryFinish(_) => "rotary_finish",
         Operation::RotaryRough(_) => "rotary_rough",
+        Operation::Face(_) => "face",
+        Operation::Pocket(_) => "pocket",
+        Operation::Drill(_) => "drill",
+        Operation::Contour(_) => "contour",
+        Operation::Raster3d(_) => "raster3d",
     }
 }
 
@@ -172,9 +178,47 @@ pub fn cutter_for(number: u32, shape: ToolShape) -> Result<Cutter, Error> {
     })
 }
 
+fn is_three_axis(op: &Operation) -> bool {
+    matches!(
+        op,
+        Operation::Face(_)
+            | Operation::Pocket(_)
+            | Operation::Drill(_)
+            | Operation::Contour(_)
+            | Operation::Raster3d(_)
+    )
+}
+
 fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Toolpath, Error> {
     let job = ctx.job;
-    let safe_r = job.safe_r();
+    let three = prog.operations.iter().any(is_three_axis);
+    if three && prog.operations.iter().any(|o| !is_three_axis(o)) {
+        return Err(Error::Invalid(format!(
+            "program {}: mixes 3-axis and rotary operations; put them in separate files",
+            prog.name
+        )));
+    }
+    let stock_box = match (three, job.stock_box) {
+        (true, None) => {
+            return Err(Error::Invalid(format!(
+                "program {}: 3-axis operations need box stock (a vise setup)",
+                prog.name
+            )))
+        }
+        (_, b) => b,
+    };
+    // safe radius above the rotary axis, or safe Z above the block
+    let safe_r = match (three, stock_box) {
+        (true, Some(b)) => b.max[2] + job.clearance,
+        _ => job.safe_r(),
+    };
+    let rapid_safe = |b: &mut Builder| {
+        if three {
+            b.rapid3(None, None, Some(safe_r));
+        } else {
+            b.rapid_r(safe_r);
+        }
+    };
     let mut b = Builder::new();
     if prog.reset_a {
         b.reset_a();
@@ -212,15 +256,30 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             (Operation::HelicalKnurl(_) | Operation::FlankChamfer(_), _) => {
                 return Err(wrong("vbit"))
             }
-            (Operation::RotaryFinish(_) | Operation::RotaryRough(_), shape) => {
-                Some(cutter_for(number, shape)?)
-            }
+            (
+                Operation::RotaryFinish(_) | Operation::RotaryRough(_) | Operation::Raster3d(_),
+                shape,
+            ) => Some(cutter_for(number, shape)?),
+            (
+                Operation::Face(_)
+                | Operation::Pocket(_)
+                | Operation::Drill(_)
+                | Operation::Contour(_),
+                ToolShape::Flat { .. },
+            ) => None,
+            (
+                Operation::Face(_)
+                | Operation::Pocket(_)
+                | Operation::Drill(_)
+                | Operation::Contour(_),
+                _,
+            ) => return Err(wrong("flat")),
         };
         b.operation(*next_op, op_name(op));
         *next_op += 1;
         if current != Some(number) {
             b.tool_change(number, job.spindle_rpm);
-            b.rapid_r(safe_r);
+            rapid_safe(&mut b);
             current = Some(number);
             first_tool.get_or_insert((number, tool.description.clone()));
         }
@@ -249,6 +308,32 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
             }
+            (op3, shape) if is_three_axis(op3) => {
+                let sb = stock_box.as_ref().expect("checked above");
+                let d = match shape {
+                    ToolShape::Flat { diameter } | ToolShape::Ball { diameter } => diameter,
+                    ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0),
+                };
+                let err = |e: String| Error::Invalid(format!("program {}: {e}", prog.name));
+                use strategy::three_axis as t3;
+                match op3 {
+                    Operation::Face(o) => t3::face(&mut b, d, sb, safe_r, o),
+                    Operation::Pocket(o) => t3::pocket(&mut b, d, sb, safe_r, o).map_err(err)?,
+                    Operation::Drill(o) => t3::drill(&mut b, sb, safe_r, o),
+                    Operation::Contour(o) => t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?,
+                    Operation::Raster3d(o) => {
+                        let mesh = ctx.mesh.ok_or_else(|| {
+                            Error::Invalid(format!(
+                                "program {}: raster3d needs part.mesh",
+                                prog.name
+                            ))
+                        })?;
+                        let dc = t3::DropCutter3::new(mesh, cutter.expect("set above"));
+                        t3::raster3d(&mut b, &dc, sb, safe_r, o).map_err(err)?
+                    }
+                    _ => unreachable!(),
+                }
+            }
             _ => unreachable!("tool shape validated above"),
         }
     }
@@ -260,6 +345,24 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
         reset_a: prog.reset_a,
         safe_r,
         moves: b.moves,
+        origin_comment: three.then(|| {
+            "Zero: the setup's work coordinates, Z up (Z0 = top of the stock)".to_string()
+        }),
+        plunge_limit: three
+            .then(|| {
+                prog.operations
+                    .iter()
+                    .filter_map(|op| match op {
+                        Operation::Face(o) => Some(o.plunge_feed),
+                        Operation::Pocket(o) => Some(o.plunge_feed),
+                        Operation::Drill(o) => Some(o.feed),
+                        Operation::Contour(o) => Some(o.plunge_feed),
+                        Operation::Raster3d(o) => Some(o.plunge_feed),
+                        _ => None,
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .filter(|v| v.is_finite()),
     })
 }
 
@@ -319,7 +422,7 @@ pub fn limits_for(tp: &Toolpath, machine: &Machine) -> Limits {
             Move::Cut { plunge_cap, .. } => Some(*plunge_cap),
             _ => None,
         })
-        .fold(f64::INFINITY, f64::min);
+        .fold(tp.plunge_limit.unwrap_or(f64::INFINITY), f64::min);
     Limits {
         plunge_feed: if plunge.is_finite() { plunge } else { 60.0 },
         safe_r: tp.safe_r,
@@ -442,7 +545,10 @@ pub fn gouge_check(
                     r = Some(nr);
                     a = na;
                 }
-                Move::Comment { .. } | Move::Operation { .. } => {}
+                Move::Comment { .. }
+                | Move::Operation { .. }
+                | Move::Rapid3 { .. }
+                | Move::Line3 { .. } => {}
             }
         }
         out.push(rep);
@@ -470,6 +576,13 @@ pub fn simulate_job(
     na: usize,
     tol: f64,
 ) -> Result<JobSim, Error> {
+    if job.stock_box.is_some() {
+        return Err(Error::Invalid(
+            "the machining simulation doesn't handle 3-axis (box stock) setups yet \
+             (the engine's sim3::Heightmap3 does, for tests)"
+                .into(),
+        ));
+    }
     let (x_lo, x_hi, part_fn): (f64, f64, Box<dyn Fn(sim::Grid) -> sim::Part>) =
         match (mesh, &job.part.profile) {
             (Some(m), _) => {

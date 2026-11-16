@@ -67,7 +67,7 @@ assert.ok(lim.limits.some((i) => i.message.includes("F5209")), JSON.stringify(li
 console.log(`profiles: ${reg.machines.length} machines, ${reg.libraries[0].tools.length} starter tools, limits ${lim.limits.length}`);
 // operation registry and 0.2 projects
 const types = cam.opTypes();
-assert.deepEqual(types.map((t) => t.kind).sort(), ["flank_chamfer", "helical_knurl", "rotary_finish", "rotary_rough", "rotary_turning"]);
+assert.deepEqual(types.map((t) => t.kind).sort(), ["contour", "drill", "face", "flank_chamfer", "helical_knurl", "pocket", "raster3d", "rotary_finish", "rotary_rough", "rotary_turning"]);
 const chk = cam.checkProject(JSON.parse(readFileSync(join(root, "examples", "knob", "knob.job.json"), "utf8")));
 assert.equal(chk.upgraded, true);
 assert.deepEqual(chk.problems, []);
@@ -90,4 +90,19 @@ for (const p of wr.programs) {
 const fr = cam.faceRegions(proj, "profile");
 assert.equal(fr.regions.length, 8);
 console.log("knurl wizard reproduces the cut G-code; 8 face regions");
+// 3-axis plate on the Carvera: XYZ polylines (kinds 2/3), box stock, clean programs
+const plate = JSON.parse(readFileSync(join(root, "examples", "plate", "plate.project.json"), "utf8"));
+const dome = new Uint8Array(readFileSync(join(root, "examples", "plate", "dome.stl")));
+const pl = cam.planAndPost(plate, "", dome, { max_points: 20000 });
+assert.ok(!pl.error, pl.error);
+assert.equal(pl.machine_id, "makera-carvera-4axis");
+assert.deepEqual(pl.stock_box, { min: [0, 0, -10], max: [60, 40, 0] });
+assert.deepEqual(pl.programs.map((p) => p.issues.length), [0, 0]);
+for (const p of pl.programs) {
+  const kinds = new Set();
+  for (let i = 3; i < p.toolpath.points.length; i += 4) kinds.add(p.toolpath.points[i]);
+  assert.deepEqual([...kinds].sort(), [2, 3]);
+}
+assert.ok(cam.simulate(plate, {}, dome).error.includes("3-axis"));
+console.log(`3-axis plate: ${pl.programs.map((p) => `${p.name} ${p.lines} lines`).join(", ")}`);
 console.log("wasm OK");

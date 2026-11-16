@@ -306,6 +306,40 @@ pub fn polyline(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
     pts
 }
 
+/// True when the toolpath moves in work XYZ (3-axis) rather than X/radius/A.
+pub fn is_xyz(tp: &Toolpath) -> bool {
+    tp.moves
+        .iter()
+        .any(|m| matches!(m, Move::Rapid3 { .. } | Move::Line3 { .. }))
+}
+
+/// Tool-tip polyline of a 3-axis toolpath: `(x, y, z, is_cut)` per move once XYZ is known.
+pub fn polyline3(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
+    let mut p: [Option<f64>; 3] = [None; 3];
+    let mut pts = Vec::new();
+    for m in &tp.moves {
+        let cut = match *m {
+            Move::Rapid3 { x, y, z } => {
+                for (k, v) in [x, y, z].into_iter().enumerate() {
+                    if v.is_some() {
+                        p[k] = v;
+                    }
+                }
+                false
+            }
+            Move::Line3 { x, y, z, .. } => {
+                p = [Some(x), Some(y), Some(z)];
+                true
+            }
+            _ => continue,
+        };
+        if let [Some(x), Some(y), Some(z)] = p {
+            pts.push((x, y, z, cut));
+        }
+    }
+    pts
+}
+
 /// Two-panel preview PNG. `profile` (if any) is drawn as the finished part in the side view.
 pub fn preview_png(tp: &Toolpath, stock_r: f64, profile: Option<&[[f64; 2]]>) -> Vec<u8> {
     let pts = polyline(tp);
@@ -413,6 +447,101 @@ pub fn preview_png(tp: &Toolpath, stock_r: f64, profile: Option<&[[f64; 2]]>) ->
     }
     cv.text(w as i64 - 330, 978, 1, &format!("R{rlo:.2}"), [60, 60, 60]);
     cv.text(w as i64 - 54, 978, 1, &format!("{rhi:.2}"), [60, 60, 60]);
+    cv.to_png()
+}
+
+/// Preview PNG of a 3-axis toolpath: top view (X/Y, cuts coloured by Z) over a front view
+/// (X/Z), with the stock block outlined.
+pub fn preview_png3(tp: &Toolpath, stock: &crate::job::StockBox) -> Vec<u8> {
+    let pts = polyline3(tp);
+    let (w, h) = (1400usize, 1000usize);
+    let mut cv = Canvas::new(w, h, [255, 255, 255]);
+    cv.text(
+        20,
+        12,
+        2,
+        &format!("{} - {}", tp.name, tp.title),
+        [40, 40, 40],
+    );
+    let mut lo = stock.min;
+    let mut hi = stock.max;
+    for p in &pts {
+        for (k, v) in [p.0, p.1, p.2].into_iter().enumerate() {
+            lo[k] = lo[k].min(v);
+            hi[k] = hi[k].max(v);
+        }
+    }
+    let pad = 0.05 * (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1.0);
+    let (xa, xb) = (lo[0] - pad, hi[0] + pad);
+    let (ya, yb) = (lo[1] - pad, hi[1] + pad);
+    let (za, zb) = (lo[2] - pad, hi[2] + pad);
+    // equal scale in the top view, fitted to its box
+    let (bl, bt, br, bb) = (80.0, 50.0, w as f64 - 30.0, 640.0);
+    let k = ((br - bl) / (xb - xa)).min((bb - bt) / (yb - ya));
+    let top = Frame {
+        px: [bl, bt, bl + k * (xb - xa), bt + k * (yb - ya)],
+        data: [xa, ya, xb, yb],
+    };
+    let gx = nice_step(xb - xa);
+    top.axes(&mut cv, gx, nice_step(yb - ya), "X", "Y");
+    let front = Frame {
+        px: [80.0, 700.0, w as f64 - 30.0, 950.0],
+        data: [xa, za, xb, zb],
+    };
+    front.axes(&mut cv, gx, nice_step(zb - za), "X", "Z");
+    let block = [120, 120, 120];
+    let outline = |cv: &mut Canvas, f: &Frame, a: [f64; 2], b: [f64; 2]| {
+        let (x0, y0) = f.map(a[0], a[1]);
+        let (x1, y1) = f.map(b[0], b[1]);
+        for (p, q, r, t) in [
+            (x0, y0, x1, y0),
+            (x1, y0, x1, y1),
+            (x1, y1, x0, y1),
+            (x0, y1, x0, y0),
+        ] {
+            cv.line(p, q, r, t, block, 1.0);
+        }
+    };
+    outline(
+        &mut cv,
+        &top,
+        [stock.min[0], stock.min[1]],
+        [stock.max[0], stock.max[1]],
+    );
+    outline(
+        &mut cv,
+        &front,
+        [stock.min[0], stock.min[2]],
+        [stock.max[0], stock.max[2]],
+    );
+    let (zlo, zhi) = pts
+        .iter()
+        .filter(|p| p.3)
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
+            (lo.min(p.2), hi.max(p.2))
+        });
+    let span = (zhi - zlo).max(1e-9);
+    for wv in pts.windows(2) {
+        let (p, q) = (wv[0], wv[1]);
+        let (u0, v0) = front.map(p.0, p.2);
+        let (u1, v1) = front.map(q.0, q.2);
+        if q.3 {
+            cv.line(u0, v0, u1, v1, [30, 90, 200], 0.35);
+            let (u0, v0) = top.map(p.0, p.1);
+            let (u1, v1) = top.map(q.0, q.1);
+            cv.line(u0, v0, u1, v1, ramp((q.2 - zlo) / span), 0.6);
+        } else {
+            cv.line(u0, v0, u1, v1, [220, 60, 60], 0.25);
+        }
+    }
+    for i in 0..200 {
+        let x = w as f64 - 260.0 + i as f64;
+        cv.line(x, 975.0, x, 990.0, ramp(i as f64 / 199.0), 1.0);
+    }
+    if zlo.is_finite() {
+        cv.text(w as i64 - 330, 978, 1, &format!("Z{zlo:.2}"), [60, 60, 60]);
+        cv.text(w as i64 - 54, 978, 1, &format!("{zhi:.2}"), [60, 60, 60]);
+    }
     cv.to_png()
 }
 

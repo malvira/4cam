@@ -134,17 +134,21 @@ async function loadExample(name) {
     writeJob(result);
     setMesh(null, "");
   } else {
+    const [file, mesh] = name === "plate" ? ["plate/plate.project.json", "plate/dome.stl"] : ["knob/knob_finish.job.json", "knob/knob.stl"];
     const [job, stl] = await Promise.all([
-      fetch("../examples/knob/knob_finish.job.json").then((r) => {
-        if (!r.ok) throw new Error("examples/knob/knob_finish.job.json not found (serve the repository root)");
+      fetch(`../examples/${file}`).then((r) => {
+        if (!r.ok) throw new Error(`examples/${file} not found (serve the repository root)`);
         return r.json();
       }),
-      fetch("../examples/knob/knob.stl").then((r) => (r.ok ? r.arrayBuffer() : null)),
+      fetch(`../examples/${mesh}`).then((r) => (r.ok ? r.arrayBuffer() : null)),
     ]);
     writeJob(job);
-    setMesh(stl ? new Uint8Array(stl) : null, stl ? "knob.stl (example)" : "");
+    const meshName = mesh.split("/")[1];
+    setMesh(stl ? new Uint8Array(stl) : null, stl ? `${meshName} (example)` : "");
   }
-  const jm = readJob().machine;
+  // a 0.1 job names its machine; a project names one per setup
+  const loaded = readJob();
+  const jm = loaded.machine ?? loaded.setups?.[0]?.machine;
   if (jm) renderMachines(jm);
   renderQuick();
   renderTools();
@@ -291,7 +295,10 @@ function updateScrubLabel() {
   if (!p) return;
   const n = +$("scrub").value;
   const pts = p.toolpath.points;
-  const at = n > 0 ? `X${pts[4 * (n - 1)].toFixed(2)} Z${pts[4 * (n - 1) + 1].toFixed(2)} A${pts[4 * (n - 1) + 2].toFixed(1)}` : "";
+  const q = 4 * (n - 1);
+  const at = n <= 0 ? "" : pts[q + 3] >= 2
+    ? `X${pts[q].toFixed(2)} Y${pts[q + 1].toFixed(2)} Z${pts[q + 2].toFixed(2)}`
+    : `X${pts[q].toFixed(2)} Z${pts[q + 1].toFixed(2)} A${pts[q + 2].toFixed(1)}`;
   const thin = p.toolpath.thinned ? ` (thinned from ${p.toolpath.total.toLocaleString("en")})` : "";
   $("scrubLabel").textContent = `${n.toLocaleString("en")} / ${(pts.length / 4).toLocaleString("en")}${thin} ${at}`;
 }
@@ -311,8 +318,10 @@ function drawSide() {
   const p = res.programs[state.tab];
   const pts = p.toolpath.points;
   const n = +$("scrub").value;
+  const sb = res.stock_box;
+  if (sb) return drawSideXYZ(ctx, w, h, p, pts, n, sb);
   let x0 = Infinity, x1 = -Infinity;
-  for (let i = 0; i < pts.length; i += 4) if (pts[i + 3]) { x0 = Math.min(x0, pts[i]); x1 = Math.max(x1, pts[i]); }
+  for (let i = 0; i < pts.length; i += 4) if (pts[i + 3] % 2) { x0 = Math.min(x0, pts[i]); x1 = Math.max(x1, pts[i]); }
   const prof = res.profile?.points || [];
   for (const [x] of prof) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); }
   if (!Number.isFinite(x0)) { x0 = -1; x1 = 1; }
@@ -343,6 +352,28 @@ function drawSide() {
     ctx.beginPath();
     ctx.moveTo(sx(pts[4 * (i - 1)]), sy(pts[4 * (i - 1) + 1]));
     ctx.lineTo(sx(pts[4 * i]), sy(pts[4 * i + 1]));
+    ctx.stroke();
+  }
+}
+
+/** Side view of a 3-axis program: X vs Z, with the stock block. */
+function drawSideXYZ(ctx, w, h, p, pts, n, sb) {
+  const x0 = sb.min[0] - 3, x1 = sb.max[0] + 3;
+  const z0 = sb.min[2] - 1, z1 = Math.max(p.safe_r, sb.max[2]) + 1;
+  const pad = 30, sx = (x) => pad + ((x - x0) / (x1 - x0)) * (w - 2 * pad), sz = (z) => h - 18 - ((z - z0) / (z1 - z0)) * (h - 30);
+  ctx.font = "11px system-ui";
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--muted");
+  ctx.fillText("side view: X vs Z (box: stock)", 6, 12);
+  ctx.fillStyle = "rgba(150,150,150,0.25)";
+  ctx.fillRect(sx(sb.min[0]), sz(sb.max[2]), sx(sb.max[0]) - sx(sb.min[0]), sz(sb.min[2]) - sz(sb.max[2]));
+  ctx.lineWidth = 1;
+  for (let i = 1; i < Math.min(n, pts.length / 4); i++) {
+    const cut = pts[4 * i + 3] % 2;
+    if (!cut && !$("showRapids").checked) continue;
+    ctx.strokeStyle = cut ? "rgba(37,99,235,0.35)" : "rgba(220,38,38,0.35)";
+    ctx.beginPath();
+    ctx.moveTo(sx(pts[4 * (i - 1)]), sz(pts[4 * (i - 1) + 2]));
+    ctx.lineTo(sx(pts[4 * i]), sz(pts[4 * i + 2]));
     ctx.stroke();
   }
 }
@@ -400,6 +431,11 @@ function clear(group) {
   }
 }
 
+/** Polyline point i -> xyz: 3-axis points (kind 2/3) are already work XYZ. */
+function pointXYZ(pts, i) {
+  return pts[4 * i + 3] >= 2 ? [pts[4 * i], pts[4 * i + 1], pts[4 * i + 2]] : toXYZ(pts[4 * i], pts[4 * i + 1], pts[4 * i + 2]);
+}
+
 /** Machine (x, r, a) -> part frame xyz: the tool at A sits over part angle 90 - A. */
 function toXYZ(x, r, aDeg) {
   const phi = ((90 - aDeg) * Math.PI) / 180;
@@ -423,9 +459,9 @@ async function updateView() {
     const cut = [], rap = [];
     const cutUpTo = new Uint32Array(n + 1), rapUpTo = new Uint32Array(n + 1);
     for (let i = 1; i < n; i++) {
-      const a = toXYZ(pts[4 * (i - 1)], pts[4 * (i - 1) + 1], pts[4 * (i - 1) + 2]);
-      const b = toXYZ(pts[4 * i], pts[4 * i + 1], pts[4 * i + 2]);
-      (pts[4 * i + 3] ? cut : rap).push(...a, ...b);
+      const a = pointXYZ(pts, i - 1);
+      const b = pointXYZ(pts, i);
+      (pts[4 * i + 3] % 2 ? cut : rap).push(...a, ...b);
       cutUpTo[i + 1] = cut.length / 6;
       rapUpTo[i + 1] = rap.length / 6;
     }
@@ -445,14 +481,22 @@ async function updateView() {
     clear(groups.part);
     const prof = res.profile?.points;
     let xs = [];
-    for (let i = 0; i < pts.length; i += 4) if (pts[i + 3]) xs.push(pts[i]);
+    for (let i = 0; i < pts.length; i += 4) if (pts[i + 3] % 2) xs.push(pts[i]);
     if (prof) xs.push(...prof.map((q) => q[0]));
     if (res.mesh_bounds) xs.push(res.mesh_bounds[0][0], res.mesh_bounds[1][0]);
     const xmin = Math.min(...xs) - 3, xmax = Math.max(...xs) + 1;
     const R = res.stock.radius;
     v.bounds = { xmin, xmax, R };
     // closed solids (web/meshes.js): caps and shoulder faces, outward winding, front faces only
-    groups.stock.add(new THREE.Mesh(toGeometry(THREE, cylinder(R, xmin, xmax, 96)), new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.15, depthWrite: false })));
+    const stockMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.15, depthWrite: false });
+    const sb = res.stock_box;
+    if (sb) {
+      // vise setup: the block in work coordinates (Z up)
+      const size = [0, 1, 2].map((k) => sb.max[k] - sb.min[k]);
+      const box = new THREE.Mesh(new THREE.BoxGeometry(...size), stockMat);
+      box.position.set(...[0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2));
+      groups.stock.add(box);
+    } else groups.stock.add(new THREE.Mesh(toGeometry(THREE, cylinder(R, xmin, xmax, 96)), stockMat));
     const partMat = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.3, roughness: 0.5 });
     if (state.mesh && res.mesh_bounds) {
       const { result } = await engine("meshTriangles", state.job, { max_triangles: 150000 }, state.mesh);
@@ -465,6 +509,12 @@ async function updateView() {
       groups.part.add(new THREE.Mesh(g, meshMat));
     } else if (prof && prof.length > 1) {
       groups.part.add(new THREE.Mesh(toGeometry(THREE, revolveProfile(prof, 120)), partMat));
+    }
+    if (!v.fitted && sb) {
+      const c = [0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2), span = Math.max(sb.max[0] - sb.min[0], sb.max[1] - sb.min[1]);
+      v.camera.position.set(c[0] - span * 0.3, c[1] - span * 1.2, c[2] + span * 0.9);
+      v.controls.target.set(...c);
+      v.fitted = true;
     }
     if (!v.fitted) {
       const span = xmax - xmin;
@@ -496,7 +546,7 @@ async function updateView() {
   clear(groups.tool);
   const pts = p.toolpath.points;
   if (k > 0) {
-    const [x, y, z] = toXYZ(pts[4 * (k - 1)], pts[4 * (k - 1) + 1], pts[4 * (k - 1) + 2]);
+    const [x, y, z] = pointXYZ(pts, k - 1);
     const tip = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 12), new THREE.MeshBasicMaterial({ color: 0xf59e0b }));
     tip.position.set(x, y, z);
     groups.tool.add(tip);

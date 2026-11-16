@@ -331,7 +331,10 @@ try {
   await treeAct("op3", "down");
   await settle();
   // every operation type: the create form comes fully filled and applies without problems
-  const typesAll = await js("window.__4cam.state.tree.types.map(t => t.kind).join(',')");
+  // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
+  const typesAll = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
+  const allKinds = await js("window.__4cam.state.tree.types.map(t => t.kind).join(',')");
+  check("a rotary setup offers only rotary operation types", String(allKinds).split(",").length === 10 && !String(typesAll).includes("pocket"), `${typesAll} of ${allKinds}`);
   const filled = [];
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
@@ -449,6 +452,36 @@ try {
 
   // 8b. resizable panes: drag the bars, keyboard, reset, persistence, minimum sizes
   const rect = (id) => js(`(() => { const r = document.getElementById('${id}').getBoundingClientRect(); return [r.x, r.y, r.width, r.height].map(Math.round).join(','); })()`).then((t) => String(t).split(",").map(Number));
+  // 8b. 3-axis plate on the Carvera vise: types, forms with points, generate, preview
+  await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+  await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate's dome mesh", 15000);
+  await settle();
+  const plateMachine = await js("document.getElementById('machine').value");
+  const plateTypes = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
+  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,contour,raster3d", `${plateMachine}; ${plateTypes}`);
+  await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
+  await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 15000);
+  const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
+  const plateOps = await js("document.querySelectorAll('#tree .tree-op').length");
+  await js("const f = document.getElementById('opForm'); f.elements.points.value = '30 20; 33 20'; f.elements.points.dispatchEvent(new Event('input', { bubbles: true })); f.requestSubmit(); true");
+  await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${plateOps + 1}`), "the drill to be added", 15000);
+  const drillPts = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.type === 'drill' && o.points.length === 2)?.points)");
+  check("3-axis form: fully filled, and points are typed as 'x y; x y'", drillBlank === "" && drillPts === "[[30,20],[33,20]]", `blank: ${drillBlank || "none"}; points ${drillPts}`);
+  await js("document.getElementById('generate').click()");
+  await waitDone("plate generation", 240000);
+  const ptabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
+  const plimits = await js("document.getElementById('summary').innerText");
+  const pkinds = await js("[...new Set(window.__4cam.state.result.programs.flatMap(p => { const a = p.toolpath.points; const k = []; for (let i = 3; i < a.length; i += 4) k.push(a[i]); return k; }))].sort().join(',')");
+  check("plate: two programs verified OK, machine limits OK, XYZ toolpaths", ptabs.length === 2 && ptabs.every((t) => t.endsWith("OK")) && /Machine limits: OK/.test(plimits) && pkinds === "2,3", `${ptabs.join(", ")}; kinds ${pkinds}`);
+  await sleep(1500);
+  await shot("07_plate");
+  await js("document.getElementById('simulate').click()");
+  await waitFor(() => js("document.getElementById('error').textContent"), "the 3-axis simulation message", 30000);
+  const psim = await js("document.getElementById('error').textContent");
+  check("plate: the rotary simulation declines 3-axis setups with a message", /3-axis/.test(psim), psim.slice(0, 90));
+  await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+  await settle();
+
   async function drag(id, dx, dy) {
     const [x, y, w, h] = await rect(id);
     const cx = x + w / 2, cy = y + h / 2;

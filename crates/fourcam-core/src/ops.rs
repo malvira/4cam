@@ -10,7 +10,8 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ParamSpec {
     pub name: &'static str,
-    /// "number", "integer", "boolean", "vec2" ([a, b]), "numbers" (list), "integers", "choice"
+    /// "number", "integer", "boolean", "vec2" ([a, b]), "rect" ([x0, y0, x1, y1]), "numbers"
+    /// (list), "integers", "points" ([[x, y], ...]), "choice"
     pub kind: &'static str,
     #[serde(skip_serializing_if = "str::is_empty")]
     pub unit: &'static str,
@@ -224,6 +225,106 @@ pub fn registry() -> Vec<OperationType> {
             machine_needs: &["rotary_a"],
             shapes_part: true,
         },
+        OperationType {
+            kind: "face",
+            title: "Facing (3-axis)",
+            description: "Face the top of the block down by a depth, in zig-zag passes along X.",
+            group: "roughing",
+            params: vec![
+                tool(),
+                p("depth", "number", "mm", "How much to take off the top.").min(0.0),
+                p("step_down", "number", "mm", "Depth per pass.").min(0.01),
+                p("stepover", "number", "", "Stepover as a fraction of the tool diameter.").min(0.05).max(1.0),
+                feed(),
+                plunge(),
+            ],
+            tool_shapes: &["flat"],
+            geometry: &["stock"],
+            machine_needs: &["xyz"],
+            shapes_part: false,
+        },
+        OperationType {
+            kind: "pocket",
+            title: "Rectangular pocket (3-axis)",
+            description: "Clear a rectangle to a depth in zig-zag levels, then finish its walls.",
+            group: "roughing",
+            params: vec![
+                tool(),
+                p("rect", "rect", "mm", "[x0, y0, x1, y1] of the pocket."),
+                p("depth", "number", "mm", "Depth below the top.").min(0.01),
+                p("top", "number", "mm", "Top of the pocket (default: stock top).").opt(Value::Null),
+                p("step_down", "number", "mm", "Depth per level.").min(0.01),
+                p("stepover", "number", "", "Stepover as a fraction of the tool diameter.").min(0.05).max(1.0),
+                feed(),
+                plunge(),
+            ],
+            tool_shapes: &["flat"],
+            geometry: &["rectangle"],
+            machine_needs: &["xyz"],
+            shapes_part: false,
+        },
+        OperationType {
+            kind: "drill",
+            title: "Drilling / pecking (3-axis)",
+            description: "Peck holes at points with an end mill.",
+            group: "feature",
+            params: vec![
+                tool(),
+                p("points", "points", "mm", "Hole centres as [[x, y], ...]."),
+                p("depth", "number", "mm", "Hole depth below the top.").min(0.01),
+                p("top", "number", "mm", "Top (default: stock top).").opt(Value::Null),
+                p("peck", "number", "mm", "Depth per peck.").min(0.01),
+                p("retract", "number", "mm", "Clearance above the top between pecks.").min(0.0),
+                feed(),
+            ],
+            tool_shapes: &["flat"],
+            geometry: &["points"],
+            machine_needs: &["xyz"],
+            shapes_part: false,
+        },
+        OperationType {
+            kind: "contour",
+            title: "2D contour (3-axis)",
+            description: "Follow a closed outline outside, inside or on it, in step-down passes.",
+            group: "finishing",
+            params: vec![
+                tool(),
+                p("path", "points", "mm", "Closed outline as [[x, y], ...] (3 or more)."),
+                p("side", "choice", "", "Which side of the outline the tool runs on.").choices(&["outside", "inside", "on"]),
+                p("depth", "number", "mm", "Depth below the top.").min(0.01),
+                p("top", "number", "mm", "Top (default: stock top).").opt(Value::Null),
+                p("step_down", "number", "mm", "Depth per pass.").min(0.01),
+                feed(),
+                plunge(),
+            ],
+            tool_shapes: &["flat"],
+            geometry: &["curve"],
+            machine_needs: &["xyz"],
+            shapes_part: false,
+        },
+        OperationType {
+            kind: "raster3d",
+            title: "3D raster (3-axis)",
+            description: "Drop-cutter raster over the part mesh, passes along X stepping in Y, in step-down levels.",
+            group: "finishing",
+            params: vec![
+                tool(),
+                p("x_range", "vec2", "mm", "X extent of the tool centre."),
+                p("y_range", "vec2", "mm", "Y extent of the tool centre."),
+                p("stepover", "number", "mm", "Distance between passes.").min(0.01),
+                p("sample", "number", "mm", "Point spacing along a pass.").min(0.005),
+                p("step_down", "number", "mm", "Depth per level (roughing to the surface).").min(0.01),
+                p("floor", "number", "mm", "Lowest Z (where there is no part).").min(-10000.0),
+                p("leave", "number", "mm", "Stock to leave on the surface.").opt(json!(0.0)),
+                p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),
+                feed(),
+                plunge(),
+            ],
+            tool_shapes: &["flat", "ball", "vbit"],
+            geometry: &["mesh"],
+            machine_needs: &["xyz"],
+            shapes_part: false,
+        },
     ]
 }
 
@@ -281,6 +382,17 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
             "vec2" => v
                 .as_array()
                 .is_some_and(|a| a.len() == 2 && a.iter().all(Value::is_number)),
+            "rect" => v.as_array().is_some_and(|a| {
+                let n: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
+                n.len() == 4 && a.len() == 4 && n[2] > n[0] && n[3] > n[1]
+            }),
+            "points" => v.as_array().is_some_and(|a| {
+                let pairs = a.iter().all(|q| {
+                    q.as_array()
+                        .is_some_and(|q| q.len() == 2 && q.iter().all(Value::is_number))
+                });
+                pairs && a.len() >= if p.name == "path" { 3 } else { 1 }
+            }),
             "numbers" => v
                 .as_array()
                 .is_some_and(|a| !a.is_empty() && a.iter().all(Value::is_number)),
@@ -296,6 +408,10 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
                 p.name,
                 match p.kind {
                     "vec2" => "[a, b]".to_string(),
+                    "rect" => "[x0, y0, x1, y1] with x1 > x0 and y1 > y0".to_string(),
+                    "points" if p.name == "path" =>
+                        "[[x, y], ...] with 3 or more points".to_string(),
+                    "points" => "[[x, y], ...]".to_string(),
                     "numbers" | "integers" => format!("a list of {}", p.kind),
                     "choice" => format!("one of {:?}", p.choices),
                     k => format!("a {k}"),
@@ -325,6 +441,11 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::FlankChamfer(_) => "flank_chamfer",
         Operation::RotaryFinish(_) => "rotary_finish",
         Operation::RotaryRough(_) => "rotary_rough",
+        Operation::Face(_) => "face",
+        Operation::Pocket(_) => "pocket",
+        Operation::Drill(_) => "drill",
+        Operation::Contour(_) => "contour",
+        Operation::Raster3d(_) => "raster3d",
     }
 }
 
@@ -342,6 +463,8 @@ pub struct DefaultsContext<'a> {
     pub tool: Option<u32>,
     /// Containment boundary from the operation's geometry selection.
     pub boundary: Option<crate::geometry::Boundary>,
+    /// XY extent of the part mesh (3-axis setups), for raster ranges.
+    pub part_xy: Option<([f64; 2], [f64; 2])>,
 }
 
 /// Round to a "nice" step (0.05 mm, 5 mm/min ...).
@@ -497,6 +620,88 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("feed".into(), json!(nice(feed * 2.0 / 3.0, 5.0)));
             v.insert("plunge_feed".into(), json!(plunge));
         }
+        "face" | "pocket" | "drill" | "contour" | "raster3d" => {
+            let sb = job
+                .stock_box
+                .ok_or(format!("{kind} needs box stock (a vise setup)"))?;
+            let (w, h, hz) = (
+                sb.max[0] - sb.min[0],
+                sb.max[1] - sb.min[1],
+                sb.max[2] - sb.min[2],
+            );
+            let (mx, my) = ((sb.min[0] + sb.max[0]) / 2.0, (sb.min[1] + sb.max[1]) / 2.0);
+            if matches!(kind, "pocket" | "drill" | "contour") {
+                v.insert("top".into(), json!(sb.max[2]));
+            }
+            match kind {
+                "face" => {
+                    v.insert("depth".into(), json!(0.5f64.min(hz)));
+                    v.insert("step_down".into(), json!(depth.max(0.25)));
+                    v.insert("stepover".into(), json!(0.6));
+                }
+                "pocket" => {
+                    v.insert(
+                        "rect".into(),
+                        json!([
+                            nice(mx - w / 4.0, 0.01),
+                            nice(my - h / 4.0, 0.01),
+                            nice(mx + w / 4.0, 0.01),
+                            nice(my + h / 4.0, 0.01)
+                        ]),
+                    );
+                    v.insert("depth".into(), json!(nice((0.3 * hz).max(0.5), 0.05)));
+                    v.insert("step_down".into(), json!(depth));
+                    v.insert("stepover".into(), json!(0.5));
+                }
+                "drill" => {
+                    v.insert("points".into(), json!([[nice(mx, 0.01), nice(my, 0.01)]]));
+                    v.insert("depth".into(), json!(nice((0.5 * hz).max(0.5), 0.05)));
+                    v.insert("peck".into(), json!(nice(d.max(0.5), 0.05)));
+                    v.insert("retract".into(), json!(1.0));
+                    v.insert("feed".into(), json!(plunge));
+                }
+                "contour" => {
+                    let i = 2.0f64.min(w / 4.0).min(h / 4.0);
+                    let (x0, y0, x1, y1) =
+                        (sb.min[0] + i, sb.min[1] + i, sb.max[0] - i, sb.max[1] - i);
+                    v.insert(
+                        "path".into(),
+                        json!([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]),
+                    );
+                    v.insert("side".into(), json!("outside"));
+                    v.insert("depth".into(), json!(nice((0.3 * hz).max(0.5), 0.05)));
+                    v.insert("step_down".into(), json!(depth));
+                }
+                _ => {
+                    // over the part mesh, or the block
+                    let (xr, yr) = cx
+                        .part_xy
+                        .unwrap_or(([sb.min[0], sb.max[0]], [sb.min[1], sb.max[1]]));
+                    let zb = sb.min[2];
+                    v.insert(
+                        "x_range".into(),
+                        json!([nice(xr[0], 0.01), nice(xr[1], 0.01)]),
+                    );
+                    v.insert(
+                        "y_range".into(),
+                        json!([nice(yr[0], 0.01), nice(yr[1], 0.01)]),
+                    );
+                    v.insert("stepover".into(), json!(nice((0.15 * d).max(0.05), 0.01)));
+                    v.insert("sample".into(), json!(nice((0.1 * d).max(0.05), 0.01)));
+                    v.insert("step_down".into(), json!(depth));
+                    v.insert(
+                        "floor".into(),
+                        json!(nice(zb.max(sb.max[2] - hz / 2.0), 0.01)),
+                    );
+                }
+            }
+            if !v.contains_key("feed") {
+                v.insert("feed".into(), json!(feed));
+            }
+            if kind != "drill" {
+                v.insert("plunge_feed".into(), json!(plunge));
+            }
+        }
         _ => return Err(format!("no defaults for {kind:?}")),
     }
     // every other parameter: its registry default
@@ -531,6 +736,8 @@ mod tests {
                 match p.kind {
                     "integer" => json!(p.min.unwrap_or(1.0).max(1.0) as i64),
                     "vec2" => json!([-5.0, 0.0]),
+                    "rect" => json!([5.0, 5.0, 25.0, 35.0]),
+                    "points" => json!([[2.0, 2.0], [58.0, 2.0], [58.0, 38.0], [2.0, 38.0]]),
                     "numbers" => json!([1.0]),
                     "integers" => json!([1]),
                     "choice" => json!(p.choices[0]),
@@ -594,13 +801,23 @@ mod tests {
             shape: ToolShape::Ball { diameter: 3.175 },
             flute_length: Some(12.0),
         });
+        let mut boxed = job.clone();
+        boxed.stock_box = Some(crate::job::StockBox {
+            min: [0.0, 0.0, -10.0],
+            max: [60.0, 40.0, 0.0],
+        });
+        let dome =
+            crate::Mesh::from_bytes(include_bytes!("../../../examples/plate/dome.stl")).unwrap();
         for t in registry() {
+            let three = t.machine_needs.contains(&"xyz");
+            let job = if three { &boxed } else { &job };
             let cx = DefaultsContext {
-                job: &job,
+                job,
                 regions: Some(&regions),
                 machine: Some(&z1),
                 tool: None,
                 boundary: None,
+                part_xy: None,
             };
             let v = defaults(t.kind, &cx).unwrap_or_else(|e| panic!("{}: {e}", t.kind));
             // every parameter present (none blank)
@@ -631,7 +848,8 @@ mod tests {
                 reset_a: false,
                 operations: vec![op],
             }];
-            let tps = crate::plan(&one).unwrap_or_else(|e| panic!("{}: {e}", t.kind));
+            let tps = crate::plan_with_mesh(&one, three.then_some(&dome))
+                .unwrap_or_else(|e| panic!("{}: {e}", t.kind));
             assert!(tps[0].moves.len() > 10, "{}", t.kind);
         }
         // defaults follow the context: the knob's own values come out for the knob
@@ -641,6 +859,7 @@ mod tests {
             machine: Some(&z1),
             tool: None,
             boundary: None,
+            part_xy: None,
         };
         let turn = defaults("rotary_turning", &cx).unwrap();
         assert_eq!(

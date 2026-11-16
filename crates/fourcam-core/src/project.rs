@@ -97,6 +97,11 @@ pub enum StockDef {
         radius: f64,
         length: f64,
     },
+    /// Rectangular block in a vise (3-axis), corners in work coordinates (Z up).
+    Box {
+        min: [f64; 3],
+        max: [f64; 3],
+    },
 }
 
 impl StockDef {
@@ -105,6 +110,14 @@ impl StockDef {
             StockDef::Cylinder { radius, length } | StockDef::FromPrevious { radius, length } => {
                 Stock { radius, length }
             }
+            // rotary fields for a block: the radius that encloses it about X
+            StockDef::Box { min, max } => Stock {
+                radius: [min[1].abs(), max[1].abs()]
+                    .iter()
+                    .flat_map(|y| [min[2].abs(), max[2].abs()].map(|z| y.hypot(z)))
+                    .fold(0.0, f64::max),
+                length: max[0] - min[0],
+            },
         }
     }
 }
@@ -402,6 +415,14 @@ impl Project {
                 machine,
                 tool,
                 boundary,
+                part_xy: model.and_then(|m| {
+                    let mesh = match &self.models.iter().find(|x| &x.id == m)?.kind {
+                        ModelKind::Mesh(_) => meshes(m)?,
+                        ModelKind::Profile(_) => return None,
+                    };
+                    let (lo, hi) = mesh.bounds()?;
+                    Some(([lo[0], hi[0]], [lo[1], hi[1]]))
+                }),
             },
         )?;
         if !geometry.is_empty() {
@@ -559,6 +580,9 @@ impl Project {
         if let Some(m) = &setup.machine {
             v["machine"] = Value::String(m.clone());
         }
+        if let StockDef::Box { min, max } = setup.stock {
+            v["stock_box"] = serde_json::json!({"min": min, "max": max});
+        }
         profiles::resolve_job_tools(&mut v, libraries)?;
         serde_json::from_value(v).map_err(|e| format!("setup {:?}: {e}", setup.id))
     }
@@ -613,6 +637,11 @@ pub fn simulate_project(
                 ))
             }
             (StockDef::Cylinder { radius, .. }, _) => crate::sim::RadialMap::filled(grid, *radius),
+            (StockDef::Box { .. }, _) => {
+                return Err(format!(
+                    "setup {id:?}: 3-axis (box) setups are not simulated on the rotary heightmap"
+                ))
+            }
         };
         let mesh = mesh_for(job);
         let tps = crate::plan_with_mesh(job, mesh.as_ref()).map_err(|e| e.to_string())?;

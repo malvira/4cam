@@ -171,9 +171,15 @@ pub mod api {
 
     /// Tool-tip polyline, flattened `[x, r, a, kind, ...]` (kind 0 rapid, 1 feed), thinned
     /// to about `max_points` points (rapids and direction changes between rapid and feed are
-    /// always kept).
+    /// always kept). 3-axis programs give `[x, y, z, kind, ...]` with kind 2 rapid, 3 feed.
     fn polyline(tp: &Toolpath, max_points: usize) -> (Vec<f32>, usize, bool) {
-        let pts = render::polyline(tp);
+        let xyz = render::is_xyz(tp);
+        let pts = if xyz {
+            render::polyline3(tp)
+        } else {
+            render::polyline(tp)
+        };
+        let kind0 = if xyz { 2u8 } else { 0 };
         let total = pts.len();
         let stride = if max_points > 0 && total > max_points {
             total.div_ceil(max_points)
@@ -192,7 +198,7 @@ pub mod api {
                     p.0 as f32,
                     p.1 as f32,
                     p.2 as f32,
-                    f32::from(u8::from(p.3)),
+                    f32::from(kind0 + u8::from(p.3)),
                 ]);
             }
         }
@@ -268,6 +274,7 @@ pub mod api {
             "limits": limits,
             "tools": job.tools,
             "stock": job.stock,
+            "stock_box": job.stock_box,
             "profile": job.part.profile,
             "mesh_bounds": mesh.as_ref().and_then(|m| m.bounds()),
             "programs": programs,

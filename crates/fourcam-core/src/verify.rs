@@ -92,11 +92,13 @@ fn words(line: &str) -> Vec<(char, f64)> {
 pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
     let mut issues = Vec::new();
     let (mut x, mut z, mut a) = (None::<f64>, None::<f64>, 0.0f64);
+    let mut y: Option<f64> = None;
     let mut motion = None::<u32>;
     let mut feed = None::<f64>;
     for (idx, line) in text.lines().enumerate() {
         let w = words(line);
         let mut nx = None;
+        let mut ny = None;
         let mut nz = None;
         let mut na = None;
         let mut g92 = false;
@@ -111,6 +113,7 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                     }
                 }
                 'X' => nx = Some(v),
+                'Y' => ny = Some(v),
                 'Z' => nz = Some(v),
                 'A' => na = Some(v),
                 'F' => feed = Some(v),
@@ -123,7 +126,7 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
             }
             continue;
         }
-        if nx.is_none() && nz.is_none() && na.is_none() {
+        if nx.is_none() && ny.is_none() && nz.is_none() && na.is_none() {
             continue;
         }
         let tx = nx.or(x);
@@ -131,7 +134,9 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
         let ta = na.unwrap_or(a);
         match motion {
             Some(0) => {
-                let moves_xa = nx.is_some_and(|v| Some(v) != x) || (ta - a).abs() > 1e-9;
+                let moves_xa = nx.is_some_and(|v| Some(v) != x)
+                    || ny.is_some_and(|v| Some(v) != y)
+                    || (ta - a).abs() > 1e-9;
                 // the tool is at the lower of the start and end radius during the move
                 let low = match (z, tz) {
                     (Some(z0), Some(z1)) => Some(z0.min(z1)),
@@ -153,6 +158,8 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                     let dz = z1 - z0;
                     if dz < 0.0 && f > 0.0 {
                         let dx = tx.zip(x).map_or(0.0, |(p, q)| p - q);
+                        let dy = ny.zip(y).map_or(0.0, |(p, q)| p - q);
+                        let dx = dx.hypot(dy);
                         let da = ta - a;
                         let time = match limits.feed_mode {
                             FeedMode::DegreesAsLength => (dx * dx + dz * dz + da * da).sqrt() / f,
@@ -176,6 +183,7 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
             _ => {}
         }
         x = tx;
+        y = ny.or(y);
         z = tz;
         a = ta;
     }

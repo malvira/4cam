@@ -12,6 +12,12 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
 - tools: inline, or references to a library;
 - setups: machine, stock, holding, part, operations, and outputs (G-code files).
 
+  Stock is a bar on the rotary axis (`{"shape": "cylinder", ...}`), the previous setup's
+  result (`"from_previous"`), or a block in a vise (`{"shape": "box", "min": [x, y, z],
+  "max": [x, y, z]}`, work coordinates, Z up, Z0 normally the top). Box setups take the 3-axis
+  operation types (`face`, `pocket`, `drill`, `contour`, `raster3d`); bar setups take the
+  rotary ones. A program can't mix the two. Example: `examples/plate/plate.project.json`.
+
 0.1 jobs upgrade automatically. Machine profiles and tool libraries are separate JSON files
 (`docs/profiles.md`).
 
@@ -31,7 +37,8 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
 | `project::Project::op_defaults` / `ops::defaults` | A new operation with every field filled from the tool, spindle, machine limits and part faces. |
 | `geometry::face_regions` | Pickable faces with stable ids. |
 | `wizards::KnurlWizard` | The knurl wizard. |
-| `sim::Playback` | Material-removal playback. |
+| `sim::Playback` | Material-removal playback (rotary). |
+| `sim3::Heightmap3` | Material removal for 3-axis programs (a Z heightmap of the block). |
 | `project::simulate_project` | Simulate all setups in order. |
 
 ## WebAssembly (`web/pkg/fourcam.js`)
@@ -40,7 +47,9 @@ All calls take and return JSON. No wasm-bindgen is needed.
 
 - **Planning and posting:**
   - `planAndPost(doc, machine, mesh, {setup, libraries})` returns G-code, issues, the limit
-    check, the gouge check and a toolpath polyline.
+    check, the gouge check and a toolpath polyline. Polyline points are `[x, r, a, kind]` for
+    rotary programs (kind 0 rapid, 1 feed) and `[x, y, z, kind]` for 3-axis ones (kind 2
+    rapid, 3 feed); box setups also return `stock_box`.
 - **Operations:**
   - `opTypes()` lists the operation types;
   - `opDefaults(doc, {type, setup, tool, geometry, machine}, mesh)` returns a new operation
@@ -50,7 +59,8 @@ All calls take and return JSON. No wasm-bindgen is needed.
   - `faceRegions(doc, model, mesh)` returns the model's faces with stable ids;
   - `wizardKnurl(doc, params, mesh)` runs the knurl wizard.
 - **Simulation:**
-  - `simulate(doc, {dx, na}, mesh)` simulates material removal for the whole job;
+  - `simulate(doc, {dx, na}, mesh)` simulates material removal for the whole job (rotary
+    setups only for now; box setups return an error);
   - `simOpen(doc, {setup, dx, na}, mesh)` and `simSeek(n)` play it back move by move.
 - **Profiles:**
   - `profileList()` lists the built-in machines and tool libraries;

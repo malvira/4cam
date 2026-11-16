@@ -48,6 +48,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   const opById = (id) => (t.draft && t.draft.op.id === id ? t.draft.op : setup().operations.find((o) => o.id === id));
   const typeOf = (kind) => t.types.find((x) => x.kind === kind);
   const colorOf = (op, i) => op.color || PALETTE[i % PALETTE.length];
+  // 3-axis types need box stock (a vise setup); rotary types need bar stock
+  const isBox = (s) => s?.stock?.shape === "box";
+  const fits = (ty, s) => ty.machine_needs.includes("xyz") === isBox(s);
+  const pointsText = (v) => v.map((q) => q.join(" ")).join("; ");
 
   function render() {
     const box = $("tree");
@@ -78,7 +82,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       });
       html += `</div>`;
     }
-    const opts = t.types.map((x) => `<option value="${x.kind}">${esc(x.title)}</option>`).join("");
+    const opts = t.types.filter((x) => fits(x, s)).map((x) => `<option value="${x.kind}">${esc(x.title)}</option>`).join("");
     const outs = s.outputs.map((o) => `<option value="${esc(o.name)}">${esc(o.name)}</option>`).join("");
     html += `<div class="row small"><select id="treeAddType" aria-label="Operation type">${opts}</select>
       <select id="treeAddOut" aria-label="Output file">${outs}<option value="__new">new file</option></select>
@@ -115,6 +119,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         html += `<label>${label}<select name="${p.name}">${p.choices.map((c) => `<option ${c === v ? "selected" : ""}>${c}</option>`).join("")}</select></label>`;
       } else if (p.kind === "boolean") {
         html += `<label>${label}<input type="checkbox" name="${p.name}" ${(v ?? p.default) ? "checked" : ""}></label>`;
+      } else if (p.kind === "points") {
+        html += `<label title="${esc(p.help)}">${label} <span class="muted">x y; x y; ...</span><input name="${p.name}" value="${esc(Array.isArray(v) ? pointsText(v) : "")}" placeholder="required"></label>`;
       } else {
         const text = v == null ? "" : Array.isArray(v) ? v.join(", ") : v;
         html += `<label title="${esc(p.help)}">${label}<input name="${p.name}" value="${esc(text)}" placeholder="${p.default != null ? esc(Array.isArray(p.default) ? p.default.join(", ") : p.default) : p.required ? "required" : ""}"></label>`;
@@ -122,7 +128,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     const faces = op.geometry?.find((g) => g.kind === "faces");
     const ax = op.geometry?.find((g) => g.kind === "axial_range");
-    if (ty.geometry.some((g) => g === "mesh" || g === "profile" || g === "axial_range")) {
+    // face and axial selections bound rotary operations (X/A); 3-axis types take their area as parameters
+    if (!ty.machine_needs.includes("xyz") && ty.geometry.some((g) => g === "mesh" || g === "profile" || g === "axial_range")) {
       html += `<div class="row small"><button type="button" id="pickFaces">${t.picking ? "Done picking" : "Pick faces on the model"}</button>
         <span id="pickInfo">${faces ? `${faces.ids.length} face(s): ${faces.ids.map(esc).join(", ")}` : "whole model"}</span>
         ${faces ? '<button type="button" id="clearFaces">Clear</button>' : ""}</div>
@@ -145,7 +152,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (p.kind === "boolean") out[p.name] = el.checked;
       else if (p.name === "tool" || p.kind === "integer") out[p.name] = el.value === "" ? undefined : parseInt(el.value, 10);
       else if (p.kind === "choice") out[p.name] = el.value;
-      else if (["vec2", "numbers", "integers"].includes(p.kind)) {
+      else if (p.kind === "points") {
+        const pts = el.value.split(";").map((q) => q.split(/[,\s]+/).filter(Boolean).map(Number)).filter((q) => q.length);
+        out[p.name] = pts.length ? pts : undefined;
+      } else if (["vec2", "rect", "numbers", "integers"].includes(p.kind)) {
         const nums = el.value.split(/[,\s]+/).filter(Boolean).map(Number);
         out[p.name] = nums.length ? nums : undefined;
       } else out[p.name] = el.value === "" ? undefined : Number(el.value);

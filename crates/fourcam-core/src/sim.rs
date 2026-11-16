@@ -294,7 +294,7 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
                     op = (id + 1).min(u16::MAX as u32) as u16;
                     continue;
                 }
-                Move::Comment { .. } => continue,
+                Move::Comment { .. } | Move::Rapid3 { .. } | Move::Line3 { .. } => continue,
                 Move::Rapid {
                     x: mx,
                     r: mr,
@@ -796,6 +796,8 @@ mod tests {
             reset_a: false,
             safe_r: 12.0,
             moves: b.moves,
+            origin_comment: None,
+            plunge_limit: None,
         };
         let st = simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1);
         assert!(st.rapid_hits.is_empty());
@@ -859,6 +861,8 @@ mod tests {
                     a: None,
                 },
             ],
+            origin_comment: None,
+            plunge_limit: None,
         };
         let st = simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1);
         assert_eq!(st.rapid_hits, vec![2]);

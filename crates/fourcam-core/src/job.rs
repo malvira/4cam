@@ -13,6 +13,9 @@ pub struct Job {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
     pub stock: Stock,
+    /// Box stock for 3-axis (vise) setups, in work coordinates (Z up).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_box: Option<StockBox>,
     /// Radial clearance above the stock for safe rapids (mm).
     #[serde(default = "default_clearance")]
     pub clearance: f64,
@@ -41,6 +44,13 @@ impl Job {
     pub fn tool(&self, number: u32) -> Option<&Tool> {
         self.tools.iter().find(|t| t.number == number)
     }
+}
+
+/// Rectangular block, held in a vise: corners in work coordinates (Z up).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct StockBox {
+    pub min: [f64; 3],
+    pub max: [f64; 3],
 }
 
 /// Round bar stock, held on the rotary axis.
@@ -131,6 +141,86 @@ pub enum Operation {
     FlankChamfer(FlankChamfer),
     RotaryFinish(RotaryFinish),
     RotaryRough(RotaryRough),
+    Face(Face),
+    Pocket(Pocket),
+    Drill(Drill),
+    Contour(Contour),
+    Raster3d(Raster3d),
+}
+
+/// 3-axis: face the top of the stock down by `depth`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Face {
+    pub tool: u32,
+    pub depth: f64,
+    pub step_down: f64,
+    /// Stepover as a fraction of the tool diameter.
+    pub stepover: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+}
+
+/// 3-axis: rectangular pocket `[x0, y0, x1, y1]`, `depth` below `top` (default: stock top).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Pocket {
+    pub tool: u32,
+    pub rect: [f64; 4],
+    pub depth: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    pub step_down: f64,
+    /// Fraction of the tool diameter.
+    pub stepover: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+}
+
+/// 3-axis: holes at `points`, pecking `peck` at a time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Drill {
+    pub tool: u32,
+    pub points: Vec<[f64; 2]>,
+    pub depth: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    pub peck: f64,
+    /// Clearance above the top for retracts between pecks.
+    pub retract: f64,
+    pub feed: f64,
+}
+
+/// 3-axis: follow a closed 2D path, outside / inside / on it, in step-down passes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Contour {
+    pub tool: u32,
+    pub path: Vec<[f64; 2]>,
+    /// "outside", "inside" or "on".
+    pub side: String,
+    pub depth: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    pub step_down: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+}
+
+/// 3-axis: drop-cutter raster over the part mesh (passes along X, stepping in Y), cut in
+/// step-down levels; `floor` is where there is no part.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Raster3d {
+    pub tool: u32,
+    pub x_range: [f64; 2],
+    pub y_range: [f64; 2],
+    pub stepover: f64,
+    pub sample: f64,
+    pub step_down: f64,
+    pub floor: f64,
+    #[serde(default)]
+    pub leave: f64,
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
 }
 
 impl Operation {
@@ -138,6 +228,11 @@ impl Operation {
         match self {
             Operation::RotaryFinish(o) => o.tool,
             Operation::RotaryRough(o) => o.tool,
+            Operation::Face(o) => o.tool,
+            Operation::Pocket(o) => o.tool,
+            Operation::Drill(o) => o.tool,
+            Operation::Contour(o) => o.tool,
+            Operation::Raster3d(o) => o.tool,
             Operation::RotaryTurning(o) => o.tool,
             Operation::HelicalKnurl(o) => o.tool,
             Operation::FlankChamfer(o) => o.tool,

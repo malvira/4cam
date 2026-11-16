@@ -7,6 +7,7 @@ struct State {
     x: Option<f64>,
     z: Option<f64>,
     a: f64,
+    y: Option<f64>,
 }
 
 fn fill(template: &str, tool: u32, rpm: u32, safe: &str) -> String {
@@ -27,7 +28,11 @@ pub fn post(tp: &Toolpath, machine: &Machine) -> String {
     if let Some((n, desc)) = &tp.tool {
         out.push(format!("(T{n} {desc})"));
     }
-    if let Some(c) = &machine.origin_comment {
+    if let Some(c) = tp
+        .origin_comment
+        .as_ref()
+        .or(machine.origin_comment.as_ref())
+    {
         out.push(format!("({c})"));
     }
     out.extend(machine.preamble.iter().cloned());
@@ -44,11 +49,38 @@ pub fn post(tp: &Toolpath, machine: &Machine) -> String {
         x: None,
         z: None,
         a: 0.0,
+        y: None,
     };
     for mv in &tp.moves {
         match mv {
             Move::Comment { text } => out.push(format!("({text})")),
             Move::Operation { .. } => {}
+            Move::Rapid3 { x, y, z } => {
+                let mut w = String::from("G0");
+                for (l, v, st) in [("X", x, &mut s.x), ("Y", y, &mut s.y), ("Z", z, &mut s.z)] {
+                    if let Some(v) = v {
+                        w += &format!(" {l}{}", num(*v));
+                        *st = Some(*v);
+                    }
+                }
+                out.push(w);
+            }
+            Move::Line3 { x, y, z, feed, .. } => {
+                let p0 = [s.x.unwrap_or(*x), s.y.unwrap_or(*y), s.z.unwrap_or(*z)];
+                let len = ((x - p0[0]).powi(2) + (y - p0[1]).powi(2) + (z - p0[2]).powi(2)).sqrt();
+                if len < 1e-6 {
+                    continue;
+                }
+                let fw = if machine.feed_mode == FeedMode::InverseTime {
+                    format!("{:.3}", feed / len)
+                } else {
+                    format!("{feed:.0}")
+                };
+                out.push(format!("G1 X{} Y{} Z{} F{fw}", num(*x), num(*y), num(*z)));
+                s.x = Some(*x);
+                s.y = Some(*y);
+                s.z = Some(*z);
+            }
             Move::ToolChange { tool, rpm } => {
                 out.push(fill(&machine.tool_change, *tool, *rpm, &safe));
                 out.push(fill(&machine.spindle_on, *tool, *rpm, &safe));

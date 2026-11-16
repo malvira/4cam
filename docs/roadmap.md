@@ -80,8 +80,24 @@ goldens are still byte-identical.
 5. **Knurl wizard. Done:** `crates/fourcam-core/src/wizards.rs` reads the model's faces (the body cone, extended to the front face, and the front face's edge for the chamfer) and adds turning, a diamond knurl and a V-bit flank chamfer as ordinary operations and outputs. On the knob it rebuilds the program byte-for-byte. `4cam wizard knurl`, WASM `wizardKnurl`.
 6. **Frontend setup/operation tree. Done:** the web app's Project panel (`web/tree.js`) shows setups, output files and operations; operations can be added from forms generated from the operation registry (validated by the engine before they join the project), edited, turned on/off, coloured, reordered and deleted; faces are picked by clicking the model; the knurl wizard runs from the tree; Generate and the machining simulation use the chosen setup and the operation colours. Originally planned as: type, tool, geometry chosen by clicking the model,
    reorder, enable, colour.
-7. The first 3-axis operations: a toolpath IR with XYZ plus tool direction; facing, contour,
-   pocket, drilling and 3D raster; Carvera vise setups.
+7. **First 3-axis operations. Done:**
+   - the toolpath IR has `Rapid3`/`Line3` moves (work XYZ plus a tool direction, `[0, 0, 1]`
+     for now), posted as G0/G1 X Y Z and checked by the verifier (Y included);
+   - box stock in a vise (`"stock": {"shape": "box", ...}`), with the setup's own zero
+     comment and a 3-axis machine-limit check (X/Y/Z spans, feed cap; no rotary checks);
+   - `face`, `pocket` (rectangle), `drill` (pecking), `contour` (outside/inside/on a closed
+     path) and `raster3d` (drop-cutter zigzag over the mesh in step-down levels, rows linked at
+     depth, descents slowed to the plunge feed) in `strategy/three_axis.rs`, with registry
+     entries and engine defaults from the block;
+   - `sim3::Heightmap3` simulates them. A test plans `examples/plate/plate.project.json`
+     (Carvera, 60x40x10 block, dome fixture) and checks each operation's result in the cut
+     block: faced depth, pocket floor and walls, hole depth and width, outline depth outside
+     and none inside, no gouge on the dome, no rapids through material, 0 verifier issues;
+   - CLI previews (top + front view), web app: example, setup-filtered operation types, forms
+     for rectangles and point lists, XYZ path and block in the 3D and side views.
+
+   Not yet: 3-axis machining simulation in the web app (the engine's is used by tests),
+   non-rectangular pockets, waterline, tool-holder checks.
 
 ## Next candidates
 

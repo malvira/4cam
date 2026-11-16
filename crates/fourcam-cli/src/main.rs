@@ -424,8 +424,11 @@ fn run_setup(
         std::fs::write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
         let profile = job.part.profile.as_ref().map(|p| p.points.as_slice());
         let png = out.join(format!("{}.png", tp.name));
-        std::fs::write(&png, render::preview_png(tp, job.stock.radius, profile))
-            .map_err(|e| format!("{}: {e}", png.display()))?;
+        let image = match &job.stock_box {
+            Some(sb) if render::is_xyz(tp) => render::preview_png3(tp, sb),
+            _ => render::preview_png(tp, job.stock.radius, profile),
+        };
+        std::fs::write(&png, image).map_err(|e| format!("{}: {e}", png.display()))?;
         let issues = verify_gcode(&text, &limits_for(tp, &machine));
         println!(
             "{}: {} lines, {} issue(s)",

@@ -630,7 +630,9 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
             );
         }
     }
-    if let Some(env) = m.rotary_envelope {
+    // a vise setup (box stock) uses neither the rotary envelope nor the A axis
+    let rotary_job = job.stock_box.is_none();
+    if let Some(env) = m.rotary_envelope.filter(|_| rotary_job) {
         let d = 2.0 * job.stock.radius;
         if d > env.max_diameter {
             push(
@@ -653,7 +655,9 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
             );
         }
     }
-    if m.kinematics.rotary.is_empty() {
+    if !rotary_job {
+        // 3-axis programs only need X, Y and Z
+    } else if m.kinematics.rotary.is_empty() {
         push(
             "error",
             None,
@@ -703,6 +707,51 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
     let a = m.kinematics.rotary("A");
     for tp in tps {
         let name = Some(tp.name.as_str());
+        if crate::render::is_xyz(tp) {
+            // 3-axis: spans of X, Y and Z against the travels, feeds against the cap
+            let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            let mut p: [Option<f64>; 3] = [None; 3];
+            let mut fmax = 0.0f64;
+            for mv in &tp.moves {
+                match *mv {
+                    Move::Rapid3 { x, y, z } => {
+                        for (k, v) in [x, y, z].into_iter().enumerate() {
+                            p[k] = v.or(p[k]);
+                        }
+                    }
+                    Move::Line3 { x, y, z, feed, .. } => {
+                        p = [Some(x), Some(y), Some(z)];
+                        fmax = fmax.max(feed);
+                    }
+                    _ => continue,
+                }
+                for k in 0..3 {
+                    if let Some(v) = p[k] {
+                        lo[k] = lo[k].min(v);
+                        hi[k] = hi[k].max(v);
+                    }
+                }
+            }
+            for (k, letter) in ["X", "Y", "Z"].into_iter().enumerate() {
+                let t = m.kinematics.linear(letter).and_then(LinearAxis::travel);
+                if let Some(t) = t.filter(|&t| hi[k] - lo[k] > t) {
+                    push(
+                        "error",
+                        name,
+                        format!(
+                            "uses {:.1} mm of {letter}; the machine has {t} mm",
+                            hi[k] - lo[k]
+                        ),
+                    );
+                }
+            }
+            if let Some(max) = m.max_feed {
+                if fmax > max * 1.001 {
+                    push("warning", name, format!("feeds reach F{fmax:.0}; the controller caps feeds at {max:.0} mm/min, so those moves run slower than planned"));
+                }
+            }
+            continue;
+        }
         let (mut xlo, mut xhi, mut rhi) = (f64::INFINITY, f64::NEG_INFINITY, 0.0f64);
         let (mut alo, mut ahi) = (f64::INFINITY, f64::NEG_INFINITY);
         let mut fmax = 0.0f64;

@@ -1,0 +1,182 @@
+{
+  "schema_version": "0.2",
+  "name": "plate (3-axis, Carvera vise)",
+  "models": [
+    {
+      "id": "dome",
+      "name": "dome.stl",
+      "kind": "mesh",
+      "file": "dome.stl"
+    }
+  ],
+  "tools": [
+    {
+      "number": 1,
+      "library": "makera-starter",
+      "tool": "spiral-o-metal-3.175x12"
+    },
+    {
+      "number": 3,
+      "library": "makera-starter",
+      "tool": "ball-metal-3.175x10"
+    }
+  ],
+  "setups": [
+    {
+      "id": "vise1",
+      "name": "Vise, top side",
+      "machine": "makera-carvera-4axis",
+      "stock": {
+        "shape": "box",
+        "min": [
+          0.0,
+          0.0,
+          -10.0
+        ],
+        "max": [
+          60.0,
+          40.0,
+          0.0
+        ]
+      },
+      "clearance": 3.0,
+      "holding": {
+        "kind": "vise",
+        "tailstock": false
+      },
+      "part": [
+        "dome"
+      ],
+      "spindle_rpm": 12000,
+      "operations": [
+        {
+          "id": "op1",
+          "name": "Face the top",
+          "type": "face",
+          "tool": 1,
+          "depth": 0.5,
+          "step_down": 0.5,
+          "stepover": 0.6,
+          "feed": 300.0,
+          "plunge_feed": 60.0
+        },
+        {
+          "id": "op2",
+          "name": "Pocket",
+          "type": "pocket",
+          "tool": 1,
+          "rect": [
+            5.0,
+            5.0,
+            25.0,
+            35.0
+          ],
+          "depth": 3.0,
+          "top": -0.5,
+          "step_down": 1.0,
+          "stepover": 0.5,
+          "feed": 300.0,
+          "plunge_feed": 60.0
+        },
+        {
+          "id": "op3",
+          "name": "Holes",
+          "type": "drill",
+          "tool": 1,
+          "points": [
+            [
+              40.0,
+              6.0
+            ],
+            [
+              54.0,
+              6.0
+            ],
+            [
+              40.0,
+              34.0
+            ],
+            [
+              54.0,
+              34.0
+            ]
+          ],
+          "depth": 4.0,
+          "top": -0.5,
+          "peck": 1.5,
+          "retract": 1.0,
+          "feed": 60.0
+        },
+        {
+          "id": "op4",
+          "name": "Outline",
+          "type": "contour",
+          "tool": 1,
+          "path": [
+            [
+              2.0,
+              2.0
+            ],
+            [
+              58.0,
+              2.0
+            ],
+            [
+              58.0,
+              38.0
+            ],
+            [
+              2.0,
+              38.0
+            ]
+          ],
+          "side": "outside",
+          "depth": 2.0,
+          "top": -0.5,
+          "step_down": 1.0,
+          "feed": 300.0,
+          "plunge_feed": 60.0
+        },
+        {
+          "id": "op5",
+          "name": "Dome",
+          "type": "raster3d",
+          "tool": 3,
+          "x_range": [
+            37.0,
+            55.0
+          ],
+          "y_range": [
+            11.0,
+            29.0
+          ],
+          "stepover": 0.3,
+          "sample": 0.2,
+          "step_down": 1.5,
+          "floor": -4.5,
+          "feed": 400.0,
+          "plunge_feed": 60.0
+        }
+      ],
+      "outputs": [
+        {
+          "name": "plate_1_flat",
+          "title": "Plate: face, pocket, holes, outline (T1 flat)",
+          "operations": [
+            "op1",
+            "op2",
+            "op3",
+            "op4"
+          ]
+        },
+        {
+          "name": "plate_2_dome",
+          "title": "Plate: dome (T3 ball)",
+          "operations": [
+            "op5"
+          ]
+        }
+      ]
+    }
+  ]
+}

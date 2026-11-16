@@ -5,6 +5,7 @@ mod helical_knurl;
 mod rotary_finish;
 mod rotary_rough;
 mod rotary_turning;
+pub mod three_axis;
 
 pub use flank_chamfer::flank_chamfer;
 pub use helical_knurl::helical_knurl;
