@@ -79,7 +79,21 @@ fn kind_of(c: &Cutter) -> (u32, f64) {
         Cutter::Flat { .. } => (0, 0.0),
         Cutter::Ball { .. } => (1, 0.0),
         Cutter::Cone { half_angle, .. } => (2, 1.0 / half_angle.tan()),
+        // refused before any position is written (see `cpu_only`)
+        Cutter::TaperedBall { .. } => (u32::MAX, 0.0),
     }
+}
+
+/// Tools the GPU shader has no shape for: their programs are simulated on the CPU.
+fn cpu_only(tps: &[Toolpath], cutter_for: &dyn Fn(u32) -> Option<Cutter>) -> Result<(), String> {
+    let tapered = tps.iter().flat_map(|tp| &tp.moves).any(|m| {
+        matches!(m, crate::Move::ToolChange { tool, .. }
+            if matches!(cutter_for(*tool), Some(Cutter::TaperedBall { .. })))
+    });
+    if tapered {
+        return Err("tapered ball tools are simulated on the CPU".into());
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -121,6 +135,7 @@ pub fn rotary(
     cutter_for: &dyn Fn(u32) -> Option<Cutter>,
     step: f64,
 ) -> Result<GpuInput, String> {
+    cpu_only(tps, cutter_for)?;
     let g = grid;
     let dphi = TAU / g.na as f64;
     let mut words = Vec::new();
@@ -201,6 +216,7 @@ pub fn block(
     cutter_for: &dyn Fn(u32) -> Option<Cutter>,
     step: f64,
 ) -> Result<GpuInput, String> {
+    cpu_only(tps, cutter_for)?;
     let mut words = Vec::new();
     let mut seg_start = Vec::new();
     let mut prog_seg = Vec::new();

@@ -389,6 +389,7 @@ impl Project {
                     diameter / 2.0
                 }
                 job::ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0) / 2.0,
+                job::ToolShape::TaperedBall { tip_diameter, .. } => tip_diameter / 2.0,
             });
         let boundary = if geometry.is_empty() {
             None
@@ -484,6 +485,7 @@ impl Project {
                         diameter / 2.0
                     }
                     job::ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0) / 2.0,
+                    job::ToolShape::TaperedBall { tip_diameter, .. } => tip_diameter / 2.0,
                 })
                 .unwrap_or(0.0);
             let b =

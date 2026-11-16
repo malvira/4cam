@@ -129,6 +129,18 @@ const tags = new Uint16Array(Uint8Array.from(atob(end.op), (c) => c.charCodeAt(0
 assert.equal(tags[Math.floor(20 / 0.25) * 240 + Math.floor(15 / 0.25)], 2, "pocket floor cut by op 2");
 console.log(`3-axis simulation: ${po.segments} moves, ${po.ops.length} operations, dome max left ${psim.stocks[1].max_left.toFixed(3)} mm`);
 console.log(`3-axis plate: ${pl.programs.map((p) => `${p.name} ${p.lines} lines`).join(", ")}`);
+// the dome raster with a tapered ball (1 mm tip, 5 deg a side) instead of the ball
+{
+  const tb = JSON.parse(JSON.stringify(plate));
+  tb.tools[1] = { number: 3, description: "tapered ball", kind: "tapered_ball", tip_diameter: 1, taper_angle: 5, diameter: 3.175, flute_length: 12 };
+  const r = cam.planAndPost(tb, "", dome, { max_points: 1000 });
+  assert.ok(!r.error, r.error);
+  assert.deepEqual(r.programs.map((p) => p.issues.length), [0, 0]);
+  const ps = cam.simulate(tb, {}, dome);
+  assert.ok(!ps.error, ps.error);
+  assert.ok(ps.stocks[1].max_gouge < 0.03 && ps.stocks[1].rapid_hits === 0, JSON.stringify({ g: ps.stocks[1].max_gouge, r: ps.stocks[1].rapid_hits }));
+  console.log(`tapered ball dome: ${r.programs[1].lines} lines, deepest gouge ${ps.stocks[1].max_gouge.toFixed(3)} mm`);
+}
 // a pocket of any shape: an L with a round island, from paths instead of the rectangle
 {
   const shaped = JSON.parse(JSON.stringify(plate));

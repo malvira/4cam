@@ -495,16 +495,11 @@ impl DropCutter3 {
 }
 
 /// Stepover for a raster: from the scallop target when one is set and the tool has a
-/// curved or pointed tip (ball: 2 sqrt(h (2R - h)); V-bit: 2 h tan(half angle)), else the
-/// operation's stepover.
+/// curved or pointed tip ([`Cutter::scallop_width`]: ball 2 sqrt(h (2R - h)), V-bit
+/// 2 h tan(half angle), tapered ball by its ball and then its cone), else the operation's
+/// stepover.
 pub fn raster_stepover(op: &Raster3d, c: &Cutter) -> f64 {
-    let h = op.scallop;
-    let s = match *c {
-        Cutter::Ball { radius } if h > 0.0 => 2.0 * (h * (2.0 * radius - h.min(radius))).sqrt(),
-        Cutter::Cone { half_angle, .. } if h > 0.0 => 2.0 * h * half_angle.tan(),
-        _ => op.stepover,
-    };
-    s.max(0.01)
+    c.scallop_width(op.scallop).unwrap_or(op.stepover).max(0.01)
 }
 
 /// Clip the line t*u + v*w (u, w unit, perpendicular) to the rectangle; the t range.

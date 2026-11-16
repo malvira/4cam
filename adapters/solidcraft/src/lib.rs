@@ -155,6 +155,16 @@ fn param_schema(p: &ops::ParamSpec) -> Value {
     }
 }
 
+/// Tool kinds an entry offers: the operation's, but the tapered ball (the plugin's inputs
+/// have no tip or taper; use the 4cam project or a tool library for one).
+fn tool_kinds(t: &ops::OperationType) -> Vec<&'static str> {
+    t.tool_shapes
+        .iter()
+        .copied()
+        .filter(|k| *k != "tapered_ball")
+        .collect()
+}
+
 /// Input schema of the entry for `t`: the common inputs, then the operation's fields.
 pub fn input_schema(t: &ops::OperationType) -> Value {
     let machines: Vec<String> = profiles::builtin_machines()
@@ -180,7 +190,7 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
     );
     props.insert(
         "tool_kind".into(),
-        json!({"enum": t.tool_shapes, "default": t.tool_shapes.first()}),
+        json!({"enum": tool_kinds(t), "default": t.tool_shapes.first()}),
     );
     props.insert(
         "tool_diameter".into(),
@@ -450,10 +460,10 @@ pub fn build_project(entry: &str, params: &Value, stl: &[u8]) -> Result<(Value, 
     };
 
     let tool_kind = opt_str(params, "tool_kind")?.unwrap_or(t.tool_shapes[0]);
-    if !t.tool_shapes.contains(&tool_kind) {
+    if !tool_kinds(&t).contains(&tool_kind) {
         return Err(input(
             "tool_kind",
-            format!("{kind} takes {}", t.tool_shapes.join(", ")),
+            format!("{kind} takes {}", tool_kinds(&t).join(", ")),
         ));
     }
     let diameter = opt_f64(params, "tool_diameter")?.unwrap_or(DEFAULT_TOOL_DIAMETER);

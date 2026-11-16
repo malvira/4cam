@@ -119,7 +119,7 @@ These are the shapes a tool can have, and how the strategies use each:
 | `ball` | `diameter` | a ball end mill |
 | `bull` | `diameter`, `corner_radius` | a flat end mill (conservative: a flat cutter never goes lower than the bull nose could) |
 | `vbit` | `angle` (included), `diameter`, optional `tip_diameter` | a sharp cone (the tip flat is ignored) |
-| `tapered_ball` | `tip_diameter`, `taper_angle`, `diameter` | stored only; not usable yet |
+| `tapered_ball` | `tip_diameter`, `taper_angle` (each side from the axis, deg), `diameter` | a ball of the tip's size blending (tangent) into a cone up to the diameter; drop-cutter, scallop stepover and simulation use the true shape (a taper of 0 is a plain ball). The GPU simulation has no such shape, so these programs run on the CPU |
 | `drill` | `diameter`, `point_angle` | stored only; not usable yet |
 
 ### What is above the flutes: shank, stickout, holder

@@ -151,7 +151,7 @@ pub fn registry() -> Vec<OperationType> {
                 feed(),
                 plunge(),
             ],
-            tool_shapes: &["flat", "ball", "vbit"],
+            tool_shapes: &["flat", "ball", "vbit", "tapered_ball"],
             geometry: &["mesh", "profile", "axial_range"],
             machine_needs: &["rotary_a"],
             shapes_part: false,
@@ -177,7 +177,7 @@ pub fn registry() -> Vec<OperationType> {
                 feed(),
                 plunge(),
             ],
-            tool_shapes: &["flat", "ball", "vbit"],
+            tool_shapes: &["flat", "ball", "vbit", "tapered_ball"],
             geometry: &["mesh", "profile", "axial_range"],
             machine_needs: &["rotary_a"],
             shapes_part: false,
@@ -315,7 +315,7 @@ pub fn registry() -> Vec<OperationType> {
             description: "Drop-cutter passes over the part mesh (or an image relief) at an angle, zigzag or one-way, stepover from a scallop target; in step-down levels if the stock is above it.",
             group: "finishing",
             params: raster_params(),
-            tool_shapes: &["ball", "flat", "vbit"],
+            tool_shapes: &["ball", "flat", "vbit", "tapered_ball"],
             geometry: &["mesh"],
             machine_needs: &["xyz"],
             shapes_part: false,
@@ -326,7 +326,7 @@ pub fn registry() -> Vec<OperationType> {
             description: "Clears the stock down to the part mesh (or an image relief) in step-down levels with parallel passes, leaving stock for the finish.",
             group: "roughing",
             params: raster_params(),
-            tool_shapes: &["flat", "ball"],
+            tool_shapes: &["flat", "ball", "tapered_ball"],
             geometry: &["mesh"],
             machine_needs: &["xyz"],
             shapes_part: false,
@@ -349,7 +349,7 @@ pub fn registry() -> Vec<OperationType> {
                 feed(),
                 plunge(),
             ],
-            tool_shapes: &["vbit", "ball", "flat"],
+            tool_shapes: &["vbit", "ball", "flat", "tapered_ball"],
             geometry: &["curve"],
             machine_needs: &[],
             shapes_part: true,
@@ -387,6 +387,7 @@ fn tool_kind(s: &ToolShape) -> &'static str {
         ToolShape::Flat { .. } => "flat",
         ToolShape::Ball { .. } => "ball",
         ToolShape::Vbit { .. } => "vbit",
+        ToolShape::TaperedBall { .. } => "tapered_ball",
     }
 }
 
@@ -563,6 +564,8 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
     let d = match tool.shape {
         ToolShape::Flat { diameter } | ToolShape::Ball { diameter } => diameter,
         ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(3.175),
+        // the tip does the cutting that depths and stepovers are sized for
+        ToolShape::TaperedBall { tip_diameter, .. } => tip_diameter,
     };
     // feeds: 0.025 mm per tooth (single flute) at the job's rpm, capped by the machine
     let cap = cx.machine.and_then(|m| m.max_feed).unwrap_or(f64::INFINITY);
@@ -847,7 +850,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                     } else {
                         // finishing: a ball or V-bit works to a scallop target (the stepover
                         // shown is what it gives), a flat tool to 15% of its diameter
-                        let scallop = if matches!(shape, "ball" | "vbit") {
+                        let scallop = if matches!(shape, "ball" | "vbit" | "tapered_ball") {
                             0.01
                         } else {
                             0.0
@@ -858,6 +861,12 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                             }
                             ToolShape::Vbit { angle, .. } if scallop > 0.0 => {
                                 2.0 * scallop * (angle / 2.0).to_radians().tan()
+                            }
+                            ToolShape::TaperedBall { .. } if scallop > 0.0 => {
+                                crate::cutter_for(tool.number, tool.shape)
+                                    .ok()
+                                    .and_then(|c| c.scallop_width(scallop))
+                                    .unwrap_or(0.15 * d)
                             }
                             _ => 0.15 * d,
                         };

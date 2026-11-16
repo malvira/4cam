@@ -174,6 +174,14 @@ pub enum ToolShape {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         diameter: Option<f64>,
     },
+    /// Tapered ball end mill: a ball of `tip_diameter` blending into a cone whose sides are
+    /// `taper_angle` (deg) from the axis, up to `diameter`. A taper of 0 is a ball end mill
+    /// of the tip's size.
+    TaperedBall {
+        tip_diameter: f64,
+        taper_angle: f64,
+        diameter: f64,
+    },
 }
 
 /// One output file.

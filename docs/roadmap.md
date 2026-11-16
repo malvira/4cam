@@ -20,8 +20,8 @@
   each with an axis of rotation, letter, limits or wrap, and whether it carries the work or
   the tool (`docs/profiles.md`). That covers 3-axis mills, 3+1 rotary machines, and later
   5-axis trunnion and head-head machines without a format change.
-- **Tools.** Tool libraries don't depend on the machine type. Shapes the strategies don't use
-  yet (tapered ball, drill) are stored already.
+- **Tools.** Tool libraries don't depend on the machine type. Drills are stored but not used
+  by the strategies yet.
 - **Toolpaths.** The toolpath IR is machine-neutral. Today a move is `(x, r, a)`, the radial
   form of a 4-axis move. The plan is to add a general move with a tool-tip position and a tool
   axis `(x, y, z, i, j, k)` beside it. Rotary strategies keep emitting `(x, r, a)`, which
@@ -134,7 +134,9 @@ goldens are still byte-identical.
     0.2 mm left, no gouge) and finish (no gouge beyond 0.003 mm, mean 0.012 mm left), and a
     wrapped relief roughed and finished on the rotary with no gouge.
 
-  Not yet: tapered ball tools; face selections as raster boundaries on 3-axis setups.
+  Tapered ball tools: done (rotary rough/finish, raster3d, rough3d, engrave; drop-cutter
+  checked against brute force, scallop stepover checked by a simulated cut).
+  Not yet: face selections as raster boundaries on 3-axis setups.
 - **Engraving (part 2). Done:**
   - `engrave` follows polylines and text in a built-in single-stroke font (A-Z, 0-9, some
     punctuation; an original design) at a depth in `step_down` passes, with a V-bit, ball or

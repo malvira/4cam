@@ -301,6 +301,12 @@ try {
   const head = await js("document.getElementById('gcode').value.split('\\n').slice(0, 3).join(' | ')");
   const issues0 = await js("document.querySelector('#summary .issues').textContent");
   check("generates with the edited tool", head.includes("(T1 Edited Flat 3.0)") && issues0.includes("0 issues"), head);
+  // a tapered ball: edited in the form, then added to the job as a new tool number
+  await js("document.querySelector('#toolTable button[data-edit=\"1\"]').click(); document.getElementById('tfKind').value = 'tapered_ball'; document.getElementById('tfDiameter').value = '3.175'; document.getElementById('tfTip').value = '1'; document.getElementById('tfTaper').value = '5'; document.getElementById('tfSave').click(); true");
+  const tbRow = await js("document.querySelectorAll('#toolTable tr[data-tool]')[1].innerText");
+  await js("const s = document.querySelector('#toolTable select[data-use=\"1\"]'); s.value = 'new'; s.dispatchEvent(new Event('change', { bubbles: true })); true");
+  const tbTool = await js("JSON.parse(document.getElementById('job').value).tools.find(t => t.kind === 'tapered_ball')");
+  check("a tapered ball tool is edited and joins the job", /tapered ball tip Ø1 5°/.test(tbRow) && tbTool && tbTool.tip_diameter === 1 && tbTool.taper_angle === 5 && tbTool.diameter === 3.175, `${tbRow.replace(/\s+/g, " ")} ${JSON.stringify(tbTool)}`);
   await shot("07_tool_library");
   await S("Page.reload");
   await waitFor(async () => (await state()) === "ready", "reload", 30000);

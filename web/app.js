@@ -874,7 +874,10 @@ function renderLibraries(selected) {
 }
 
 const shapeText = (s) =>
-  s.kind === "vbit" ? `V ${s.angle}° Ø${s.diameter}` : s.kind === "bull" ? `bull Ø${s.diameter} r${s.corner_radius}` : `${s.kind} Ø${s.diameter}`;
+  s.kind === "vbit" ? `V ${s.angle}° Ø${s.diameter}`
+  : s.kind === "bull" ? `bull Ø${s.diameter} r${s.corner_radius}`
+  : s.kind === "tapered_ball" ? `tapered ball tip Ø${s.tip_diameter} ${s.taper_angle}°/side Ø${s.diameter}`
+  : `${s.kind} Ø${s.diameter}`;
 
 function renderTools() {
   const lib = currentLibrary();
@@ -903,9 +906,13 @@ function toJobTool(t, number) {
   const s = t.shape;
   const base = { number, description: t.name };
   if (t.flute_length) base.flute_length = t.flute_length;
+  if (t.shank_diameter) base.shank_diameter = t.shank_diameter;
+  if (t.stickout) base.stickout = t.stickout;
   if (s.kind === "flat" || s.kind === "bull") return { ...base, kind: "flat", diameter: s.diameter };
   if (s.kind === "ball") return { ...base, kind: "ball", diameter: s.diameter };
   if (s.kind === "vbit") return { ...base, kind: "vbit", angle: s.angle, diameter: s.diameter };
+  if (s.kind === "tapered_ball")
+    return { ...base, kind: "tapered_ball", tip_diameter: s.tip_diameter, taper_angle: s.taper_angle, diameter: s.diameter };
   throw new Error(`${t.name}: ${s.kind} tools are not used by the strategies yet`);
 }
 
@@ -933,7 +940,9 @@ function openForm(i) {
   editing = i;
   const t = i >= 0 ? currentLibrary().tools[i] : { name: "", shape: { kind: "flat", diameter: 3.175 } };
   $("tfName").value = t.name;
-  $("tfKind").value = ["flat", "ball", "bull", "vbit", "drill"].includes(t.shape.kind) ? t.shape.kind : "ball";
+  $("tfKind").value = ["flat", "ball", "bull", "vbit", "tapered_ball", "drill"].includes(t.shape.kind) ? t.shape.kind : "ball";
+  $("tfTip").value = t.shape.tip_diameter ?? "";
+  $("tfTaper").value = t.shape.taper_angle ?? "";
   $("tfDiameter").value = t.shape.diameter;
   $("tfAngle").value = t.shape.angle ?? "";
   $("tfCorner").value = t.shape.corner_radius ?? "";
@@ -953,6 +962,12 @@ function saveForm(ev) {
   if (kind === "vbit") shape.angle = num("tfAngle") ?? 90;
   if (kind === "bull") shape.corner_radius = num("tfCorner") ?? 0;
   if (kind === "drill") shape.point_angle = 118;
+  if (kind === "tapered_ball") {
+    shape.tip_diameter = num("tfTip") ?? shape.diameter;
+    shape.taper_angle = num("tfTaper") ?? 0;
+    if (!(shape.tip_diameter > 0 && shape.tip_diameter <= shape.diameter && shape.taper_angle >= 0 && shape.taper_angle < 90))
+      return showError("Tapered ball: 0 < tip Ø <= diameter, 0 <= taper < 90°");
+  }
   if (!(shape.diameter > 0)) return showError("Diameter must be > 0");
   if (kind === "vbit" && !(shape.angle > 0 && shape.angle < 180)) return showError("V-bit angle must be between 0 and 180");
   const old = editing >= 0 ? lib.tools[editing] : {};

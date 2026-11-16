@@ -49,7 +49,9 @@ pub struct ToolBody {
 
 fn cutting_diameter(shape: &ToolShape) -> f64 {
     match *shape {
-        ToolShape::Flat { diameter } | ToolShape::Ball { diameter } => diameter,
+        ToolShape::Flat { diameter }
+        | ToolShape::Ball { diameter }
+        | ToolShape::TaperedBall { diameter, .. } => diameter,
         ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(3.175),
     }
 }

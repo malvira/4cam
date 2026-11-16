@@ -185,6 +185,30 @@ pub fn cutter_for(number: u32, shape: ToolShape) -> Result<Cutter, Error> {
                 "T{number}: rotary_finish with a V-bit needs the tool's diameter"
             )))
         }
+        ToolShape::TaperedBall {
+            tip_diameter,
+            taper_angle,
+            diameter,
+        } => {
+            if !(tip_diameter > 0.0 && (0.0..90.0).contains(&taper_angle))
+                || diameter < tip_diameter
+            {
+                return Err(Error::Invalid(format!(
+                    "T{number}: a tapered ball needs tip_diameter > 0, 0 <= taper_angle < 90 deg                      (each side from the axis) and diameter >= tip_diameter"
+                )));
+            }
+            if taper_angle < 1e-6 {
+                // straight sides: a ball end mill of the tip's size
+                return Ok(Cutter::Ball {
+                    radius: tip_diameter / 2.0,
+                });
+            }
+            Cutter::TaperedBall {
+                tip_radius: tip_diameter / 2.0,
+                half_angle: taper_angle.to_radians(),
+                radius: diameter / 2.0,
+            }
+        }
     })
 }
 
@@ -441,6 +465,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let d = match shape {
                     ToolShape::Flat { diameter } | ToolShape::Ball { diameter } => diameter,
                     ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0),
+                    ToolShape::TaperedBall { tip_diameter, .. } => tip_diameter,
                 };
                 let err = |e: String| Error::Invalid(format!("program {}: {e}", prog.name));
                 use strategy::three_axis as t3;

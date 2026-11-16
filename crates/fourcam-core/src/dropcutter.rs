@@ -28,14 +28,22 @@ pub enum Cutter {
         radius: f64,
         half_angle: f64,
     },
+    /// Tapered ball: a ball of `tip_radius` blending (tangent) into a cone of `half_angle`
+    /// (radians) up to `radius`.
+    TaperedBall {
+        tip_radius: f64,
+        half_angle: f64,
+        radius: f64,
+    },
 }
 
 impl Cutter {
     pub fn radius(&self) -> f64 {
         match *self {
-            Cutter::Flat { radius } | Cutter::Ball { radius } | Cutter::Cone { radius, .. } => {
-                radius
-            }
+            Cutter::Flat { radius }
+            | Cutter::Ball { radius }
+            | Cutter::Cone { radius, .. }
+            | Cutter::TaperedBall { radius, .. } => radius,
         }
     }
 
@@ -45,6 +53,48 @@ impl Cutter {
             Cutter::Flat { .. } => 0.0,
             Cutter::Ball { radius } => radius - (radius * radius - d * d).max(0.0).sqrt(),
             Cutter::Cone { half_angle, .. } => d / half_angle.tan(),
+            Cutter::TaperedBall {
+                tip_radius: rb,
+                half_angle,
+                ..
+            } => {
+                // the ball meets the cone where its slope is the cone's
+                let (s, c) = half_angle.sin_cos();
+                let dt = rb * c;
+                if d <= dt {
+                    rb - (rb * rb - d * d).max(0.0).sqrt()
+                } else {
+                    rb * (1.0 - s) + (d - dt) * c / s
+                }
+            }
+        }
+    }
+
+    /// Stepover that leaves cusps `h` high between parallel passes on a flat floor: ball
+    /// 2 sqrt(h (2R - h)), cone 2 h tan(half angle), a tapered ball as its ball while the
+    /// cusp is on it and then up its cone. None for a flat end mill or `h <= 0`.
+    pub fn scallop_width(&self, h: f64) -> Option<f64> {
+        if h <= 0.0 {
+            return None;
+        }
+        let ball = |r: f64| 2.0 * (h * (2.0 * r - h.min(r))).sqrt();
+        match *self {
+            Cutter::Flat { .. } => None,
+            Cutter::Ball { radius } => Some(ball(radius)),
+            Cutter::Cone { half_angle, .. } => Some(2.0 * h * half_angle.tan()),
+            Cutter::TaperedBall {
+                tip_radius: rb,
+                half_angle,
+                ..
+            } => {
+                let (s, c) = half_angle.sin_cos();
+                let zt = rb * (1.0 - s);
+                Some(if h <= zt {
+                    ball(rb)
+                } else {
+                    2.0 * (rb * c + (h - zt) * s / c)
+                })
+            }
         }
     }
 
@@ -59,6 +109,17 @@ impl Cutter {
                     radius
                 } else {
                     0.0
+                }
+            }
+            Cutter::TaperedBall {
+                tip_radius,
+                half_angle,
+                radius,
+            } => {
+                if slope > 1.0 / half_angle.tan() {
+                    radius
+                } else {
+                    tip_radius * slope / (1.0 + slope * slope).sqrt()
                 }
             }
         }

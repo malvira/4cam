@@ -458,8 +458,8 @@ pub struct LibTool {
 
 impl LibTool {
     /// The tool as a job tool with `number`. Bull-nose tools are planned as flat end mills
-    /// (conservative: a flat drop-cutter never goes lower than the bull nose could); tapered
-    /// balls and drills are not usable by the strategies yet.
+    /// (conservative: a flat drop-cutter never goes lower than the bull nose could); drills
+    /// are not usable by the strategies yet.
     pub fn to_job_tool(&self, number: u32) -> Result<Tool, String> {
         let shape = match self.shape {
             LibShape::Flat { diameter } | LibShape::Bull { diameter, .. } => {
@@ -472,7 +472,16 @@ impl LibTool {
                 angle,
                 diameter: Some(diameter),
             },
-            LibShape::TaperedBall { .. } | LibShape::Drill { .. } => {
+            LibShape::TaperedBall {
+                tip_diameter,
+                taper_angle,
+                diameter,
+            } => ToolShape::TaperedBall {
+                tip_diameter,
+                taper_angle,
+                diameter,
+            },
+            LibShape::Drill { .. } => {
                 return Err(format!(
                     "tool {:?} ({}): this shape is not supported by the strategies yet",
                     self.id, self.name
@@ -761,7 +770,9 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
     if let Some(tc) = &m.tool_changer {
         for t in &job.tools {
             let d = match t.shape {
-                ToolShape::Flat { diameter } | ToolShape::Ball { diameter } => Some(diameter),
+                ToolShape::Flat { diameter }
+                | ToolShape::Ball { diameter }
+                | ToolShape::TaperedBall { diameter, .. } => Some(diameter),
                 ToolShape::Vbit { diameter, .. } => diameter,
             };
             if let (Some(d), Some(max)) = (d, tc.max_tool_diameter) {
