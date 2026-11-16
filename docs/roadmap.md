@@ -178,6 +178,19 @@ goldens are still byte-identical.
   A90 after the knob's turning and knurl, whose G-code stays identical to the goldens. Tests
   check the flat's chord shape, the hole's depth and width, 0 rapids through stock, the
   verifier and the machine limits (Y travel included).
-- General moves and kinematics-aware posts. After that come simultaneous 4-axis wrapping and
+- **General moves and kinematics-aware posts. Done (4-axis):**
+  - `Move::Pose` carries a tool tip and a tool direction in the part frame.
+    `kinematics::solve_a` finds the A that turns the direction onto the spindle (the turn
+    nearest the previous A); the post writes the tip in the machine frame, through the
+    machine's axis map.
+  - Feeds are the tip's speed along the part, written as each controller reads F.
+  - A direction leaning along X needs a fifth axis: the post writes a comment and M0.
+  - Indexed 3+1 operations now emit general moves. Their G-code is unchanged apart from
+    redundant rapid words.
+  - Axis words follow the machine's kinematics (`AxisMap`, see docs/profiles.md).
+
+  Still to come: a second rotary axis (5-axis heads and tables), and simultaneous 4-axis
+  wrapping.
+- (older note) General moves and kinematics-aware posts. After that come simultaneous 4-axis wrapping and
   5-axis.
 - Tool-holder collision checks against the stock model.

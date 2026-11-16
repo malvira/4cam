@@ -64,6 +64,81 @@ pub fn post_marked(tp: &Toolpath, machine: &Machine) -> (String, Vec<(u32, Strin
         match mv {
             Move::Comment { text } => out.push(format!("({text})")),
             Move::Operation { id, kind } => marks.push((*id, kind.clone(), out.len())),
+            Move::Pose { tip, axis, feed } => {
+                let a = match crate::kinematics::solve_a(*axis, s.a) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        // planning checks this; a hand-made toolpath gets a visible stop
+                        out.push(format!("(4cam: {e})"));
+                        out.push("M0".into());
+                        continue;
+                    }
+                };
+                let m = crate::kinematics::to_machine(*tip, a);
+                let changed = |old: Option<f64>, new: f64| old.is_none_or(|o| num(o) != num(new));
+                match feed {
+                    None => {
+                        let mut w = String::from("G0");
+                        for (k, v, old) in [
+                            (0, m[0], s.x),
+                            (1, m[1], s.y),
+                            (2, m[2], s.z),
+                            (3, a, Some(s.a)),
+                        ] {
+                            if changed(old, v) {
+                                w += &format!(" {}", word(k, v));
+                            }
+                        }
+                        if w != "G0" {
+                            out.push(w);
+                        }
+                    }
+                    Some(feed) => {
+                        // the feed is the tip's speed along the part; F as this controller reads it
+                        let prev = [
+                            s.x.unwrap_or(m[0]),
+                            s.y.unwrap_or(m[1]),
+                            s.z.unwrap_or(m[2]),
+                        ];
+                        let p0 = crate::kinematics::to_part(prev, s.a);
+                        let len = ((tip[0] - p0[0]).powi(2)
+                            + (tip[1] - p0[1]).powi(2)
+                            + (tip[2] - p0[2]).powi(2))
+                        .sqrt();
+                        if len < 1e-6 && (a - s.a).abs() < 1e-9 {
+                            continue;
+                        }
+                        let time = len.max(1e-9) / feed;
+                        let (dx, dy, dz, da) =
+                            (m[0] - prev[0], m[1] - prev[1], m[2] - prev[2], a - s.a);
+                        let lin = (dx * dx + dy * dy + dz * dz).sqrt();
+                        let fw = match machine.feed_mode {
+                            FeedMode::InverseTime => format!("{:.3}", 1.0 / time),
+                            FeedMode::DegreesAsLength => {
+                                format!("{:.0}", (lin * lin + da * da).sqrt() / time)
+                            }
+                            FeedMode::LinearOnly => {
+                                format!("{:.0}", if lin > 1e-9 { lin } else { da.abs() } / time)
+                            }
+                        };
+                        let aw = if changed(Some(s.a), a) {
+                            format!(" {}", word(3, a))
+                        } else {
+                            String::new()
+                        };
+                        out.push(format!(
+                            "G1 {} {} {}{aw} F{fw}",
+                            word(0, m[0]),
+                            word(1, m[1]),
+                            word(2, m[2])
+                        ));
+                    }
+                }
+                s.x = Some(m[0]);
+                s.y = Some(m[1]);
+                s.z = Some(m[2]);
+                s.a = a;
+            }
             Move::Rapid3 { x, y, z } => {
                 let mut w = String::from("G0");
                 for (k, v, st) in [(0, x, &mut s.x), (1, y, &mut s.y), (2, z, &mut s.z)] {

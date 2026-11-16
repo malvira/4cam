@@ -27,6 +27,15 @@ pub enum Move {
         axis: [f64; 3],
         feed: f64,
     },
+    /// General move: the tool tip and the tool direction (unit, tip towards spindle) in the
+    /// part frame; a rapid without `feed`. The post solves the axes for the machine
+    /// (`crate::kinematics`).
+    Pose {
+        tip: [f64; 3],
+        axis: [f64; 3],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feed: Option<f64>,
+    },
     /// Start of an operation: the moves until the next marker belong to it. `id` numbers the
     /// job's operations in order (0, 1, ...); `kind` is the operation type. Posts ignore it.
     Operation { id: u32, kind: String },

@@ -883,6 +883,21 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
                     pr = Some(nr);
                     pa = na;
                 }
+                // general moves: solved for the machine
+                Move::Pose { tip, axis, feed } => {
+                    let Ok(na) = crate::kinematics::solve_a(axis, pa) else {
+                        continue;
+                    };
+                    let q = crate::kinematics::to_machine(tip, na);
+                    px = Some(q[0]);
+                    pr = Some(q[2]);
+                    pa = na;
+                    ylo = ylo.min(q[1]);
+                    yhi = yhi.max(q[1]);
+                    if let Some(f) = feed {
+                        fmax = fmax.max(f);
+                    }
+                }
                 // indexed 3+1: machine X/Y/Z with A held
                 Move::Rapid3 {
                     x: nx,

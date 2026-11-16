@@ -11,6 +11,7 @@ pub mod geom;
 pub mod geometry;
 pub mod gpu_input;
 pub mod job;
+pub mod kinematics;
 pub mod machine;
 pub mod mesh;
 pub mod numeric;
@@ -195,6 +196,41 @@ fn is_three_axis(op: &Operation) -> bool {
             | Operation::Raster3d(_)
             | Operation::Rough3d(_)
     )
+}
+
+/// Turn machine-frame 3-axis moves made with the rotary at `a_deg` into general moves in
+/// the part frame (`Move::Pose`); `start` is the machine position before them. Rapids that do
+/// not move are dropped.
+fn general_moves(moves: Vec<Move>, start: [f64; 3], a_deg: f64) -> Vec<Move> {
+    let axis = kinematics::to_part([0.0, 0.0, 1.0], a_deg);
+    let mut p = start;
+    let mut out = Vec::with_capacity(moves.len());
+    for m in moves {
+        let feed = match m {
+            Move::Rapid3 { x, y, z } => {
+                let q = [x.unwrap_or(p[0]), y.unwrap_or(p[1]), z.unwrap_or(p[2])];
+                if q == p {
+                    continue;
+                }
+                p = q;
+                None
+            }
+            Move::Line3 { x, y, z, feed, .. } => {
+                p = [x, y, z];
+                Some(feed)
+            }
+            other => {
+                out.push(other);
+                continue;
+            }
+        };
+        out.push(Move::Pose {
+            tip: kinematics::to_part(p, a_deg),
+            axis,
+            feed,
+        });
+    }
+    out
 }
 
 /// Operations that work on either setup: flat on a vise, wrapped on a rotary setup.
@@ -392,11 +428,13 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             (op3, shape) if is_three_axis(op3) => {
                 let sb = stock_box.as_ref().expect("set above");
                 let index = op3.index_a().unwrap_or(0.0);
+                let indexed_from = b.moves.len();
+                let indexed_start = [b.x.unwrap_or(sb.min[0]), 0.0, safe_r];
                 if !three {
                     // indexed 3+1: up to the safe radius, turn A, then cut in X/Y/Z
                     b.rapid_r(safe_r);
                     b.rapid(None, None, Some(index));
-                    b.p3 = Some([b.x.unwrap_or(sb.min[0]), 0.0, safe_r]);
+                    b.p3 = Some(indexed_start);
                 }
                 let d = match shape {
                     ToolShape::Flat { diameter } | ToolShape::Ball { diameter } => diameter,
@@ -435,6 +473,10 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     b.rapid3(None, Some(0.0), None);
                     b.x = b.p3.map(|p| p[0]);
                     b.r = Some(safe_r);
+                    // the strategy worked in the machine frame at A = index: hand the post
+                    // general moves (tip and tool direction in the part frame) to solve
+                    let tail = b.moves.split_off(indexed_from);
+                    b.moves.extend(general_moves(tail, indexed_start, index));
                 }
             }
             _ => unreachable!("tool shape validated above"),
@@ -658,7 +700,8 @@ pub fn gouge_check(
                 Move::Comment { .. }
                 | Move::Operation { .. }
                 | Move::Rapid3 { .. }
-                | Move::Line3 { .. } => {}
+                | Move::Line3 { .. }
+                | Move::Pose { .. } => {}
             }
         }
         out.push(rep);

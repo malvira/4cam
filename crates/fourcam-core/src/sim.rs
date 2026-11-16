@@ -289,8 +289,16 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
         let mut tool = None;
         let mut op = 0u16;
         for (idx, m) in tp.moves.iter().enumerate() {
-            // indexed 3+1 moves: machine X/Y/Z with A held
+            // indexed 3+1 moves: machine X/Y/Z with A held; general moves solve their A
             let xyz = match *m {
+                Move::Pose { tip, axis, feed } => match crate::kinematics::solve_a(axis, a) {
+                    Ok(na) => {
+                        a = na;
+                        let q = crate::kinematics::to_machine(tip, na);
+                        Some((Some(q[0]), q[1], Some(q[2]), feed.is_none()))
+                    }
+                    Err(_) => None,
+                },
                 Move::Rapid3 {
                     x: mx,
                     y: my,
@@ -331,7 +339,10 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
                     op = (id + 1).min(u16::MAX as u32) as u16;
                     continue;
                 }
-                Move::Comment { .. } | Move::Rapid3 { .. } | Move::Line3 { .. } => continue,
+                Move::Comment { .. }
+                | Move::Rapid3 { .. }
+                | Move::Line3 { .. }
+                | Move::Pose { .. } => continue,
                 Move::Rapid {
                     x: mx,
                     r: mr,

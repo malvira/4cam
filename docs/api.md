@@ -34,6 +34,7 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
 | `plan_with_mesh(&job, mesh)` | Plan a setup into toolpaths (machine-neutral). |
 | `post(&toolpath, &machine)` | Toolpath to G-code. |
 | `verify_gcode(text, &limits)` | Unsafe-move check. |
+| `kinematics::solve_a` / `to_machine` | General moves (`Move::Pose`: tip and tool direction in the part frame) solved for a machine. |
 | `profiles::check_limits` | Check a job against a machine profile's limits. |
 | `estimate::estimate_toolpath` / `estimate::estimate_gcode` | Machining time of a program (split by operation) or of any G-code text, for a machine profile. |
 | `gouge_check` | Check toolpaths against the part. |

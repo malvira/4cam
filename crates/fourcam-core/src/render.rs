@@ -274,6 +274,18 @@ pub fn polyline(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
     let mut y = 0.0f64;
     let mut pts = Vec::new();
     for m in &tp.moves {
+        if let Move::Pose { tip, axis, feed } = *m {
+            if let Ok(na) = crate::kinematics::solve_a(axis, a) {
+                a = na;
+                let q = crate::kinematics::to_machine(tip, na);
+                x = Some(q[0]);
+                y = q[1];
+                r = Some(q[2]);
+                let phi = tip[2].atan2(tip[1]).to_degrees();
+                pts.push((tip[0], tip[1].hypot(tip[2]), 90.0 - phi, feed.is_some()));
+            }
+            continue;
+        }
         let xyz = match *m {
             Move::Rapid3 {
                 x: mx,
@@ -339,9 +351,12 @@ pub fn polyline(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
 
 /// True when the toolpath moves in work XYZ (3-axis) rather than X/radius/A.
 pub fn is_xyz(tp: &Toolpath) -> bool {
-    tp.moves
-        .iter()
-        .any(|m| matches!(m, Move::Rapid3 { .. } | Move::Line3 { .. }))
+    tp.moves.iter().any(|m| {
+        matches!(
+            m,
+            Move::Rapid3 { .. } | Move::Line3 { .. } | Move::Pose { .. }
+        )
+    })
 }
 
 /// Tool-tip polyline of a 3-axis toolpath: `(x, y, z, is_cut)` per move once XYZ is known.

@@ -93,3 +93,73 @@ fn a_left_handed_rotary_gets_the_knob_with_every_a_negated() {
         assert!(changed > 100, "{}: {changed} lines with A", tp.name);
     }
 }
+
+fn pose_program(moves: Vec<fourcam::Move>) -> fourcam::Toolpath {
+    fourcam::Toolpath {
+        name: "t".into(),
+        title: "t".into(),
+        tool: None,
+        notes: vec![],
+        reset_a: false,
+        safe_r: 20.0,
+        moves,
+        origin_comment: None,
+        plunge_limit: None,
+    }
+}
+
+#[test]
+fn general_moves_are_solved_for_the_machine() {
+    use fourcam::Move;
+    let z1 = fourcam::profiles::builtin_machine("makera-z1-4axis").unwrap();
+    // the tool along the part's +Y: A90; the part point (0, 0, 10) is then at machine Y -10
+    let tp = pose_program(vec![
+        Move::Pose {
+            tip: [0.0, 0.0, 10.0],
+            axis: [0.0, 1.0, 0.0],
+            feed: None,
+        },
+        // 10 mm along the part's X at F300: the controller's F is 300 (A does not move)
+        Move::Pose {
+            tip: [10.0, 0.0, 10.0],
+            axis: [0.0, 1.0, 0.0],
+            feed: Some(300.0),
+        },
+        // a direction leaning along X needs a fifth axis: the program stops, visibly
+        Move::Pose {
+            tip: [10.0, 0.0, 10.0],
+            axis: [0.5, 0.0, 1.0],
+            feed: None,
+        },
+    ]);
+    let g = post(&tp, &z1.post);
+    assert!(g.contains("G0 X0.000 Y-10.000 Z0.000 A90.000\n"), "{g}");
+    assert!(g.contains("G1 X10.000 Y-10.000 Z0.000 F300\n"), "{g}");
+    assert!(
+        g.contains("second rotary axis") && g.contains("\nM0\n"),
+        "{g}"
+    );
+    // a machine whose A turns the other way gets A-90 for the same pose
+    let left = z1_with(|v| v["kinematics"]["rotary"][0]["handedness"] = "left".into()).unwrap();
+    assert!(post(&tp, &left.post).contains("A-90.000"));
+}
+
+#[test]
+fn the_indexed_knob_runs_on_a_left_handed_machine_with_a_negated() {
+    let text = include_str!("../../../examples/knob/knob_indexed.project.json");
+    let libs = fourcam::profiles::builtin_libraries();
+    let job = fourcam::project::jobs_from_any_with(text, &libs, &|_| None)
+        .unwrap()
+        .remove(0)
+        .1;
+    let tps = plan(&job).unwrap();
+    let z1 = fourcam::profiles::builtin_machine("makera-z1-4axis").unwrap();
+    let left = z1_with(|v| v["kinematics"]["rotary"][0]["handedness"] = "left".into()).unwrap();
+    let (a, b) = (post(&tps[2], &z1.post), post(&tps[2], &left.post));
+    assert!(a.contains("G0 A90.000") && b.contains("G0 A-90.000"));
+    for (la, lb) in a.lines().zip(b.lines()) {
+        if !la.contains(" A") && !la.starts_with("G0 A") {
+            assert_eq!(la, lb);
+        }
+    }
+}
