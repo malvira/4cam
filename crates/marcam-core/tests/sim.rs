@@ -340,7 +340,7 @@ fn playback_matches_batch_and_tags_operations() {
         .iter()
         .flat_map(|tp| tp.moves.iter())
         .filter_map(|m| match m {
-            marcam::Move::Operation { id, kind } => Some((*id, kind.clone())),
+            marcam::Move::Operation { id, kind, .. } => Some((*id, kind.clone())),
             _ => None,
         })
         .collect();

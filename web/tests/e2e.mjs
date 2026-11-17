@@ -356,7 +356,7 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
   const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 13 && String(typesAll).split(",").length === 13, `${typesAll}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 14 && String(typesAll).split(",").length === 14, `${typesAll}`);
   const filled = [];
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
@@ -372,7 +372,7 @@ try {
     await treeAct(id, "delete");
     await settle();
   }
-  check("every operation type's new form is fully filled and applies cleanly", filled.length === 13 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
+  check("every operation type's new form is fully filled and applies cleanly", filled.length === 14 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 15000);
@@ -481,7 +481,7 @@ try {
   await settle();
   const plateMachine = await js("document.getElementById('machine').value");
   const plateTypes = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
-  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,contour,raster3d,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
+  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,bore,contour,raster3d,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
   await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 15000);
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
@@ -526,7 +526,7 @@ try {
   const ptags = await js("[...new Set(window.__marcam.state.machining.op)].sort((a, b) => a - b).join(',')");
   const pz = await js("(() => { const m = window.__marcam.state.machining; const nx = m.session.grid.nx; const at = (x, y) => m.r[Math.floor(y / 0.25) * nx + Math.floor(x / 0.25)]; return [at(15, 20), at(40, 6), at(46, 20)].map(v => v.toFixed(2)).join(','); })()");
   const vtx = await js("(() => { const m = window.__marcam.state.machining; const nx = m.session.grid.nx; const k = Math.floor(20 / 0.25) * nx + Math.floor(15 / 0.25); return m.stockMesh.geometry.attributes.position.array[3 * k + 2].toFixed(2); })()");
-  check("plate playback: block cut by all seven operations (five + the added drill and V-carve), mesh follows the engine", ptags === "1,2,3,4,5,6,7" && pz.startsWith("-3.50,-4.50,") && Math.abs(parseFloat(pz.split(",")[2]) + 0.5) < 0.03 && vtx === "-3.50", `tags ${ptags}; pocket, hole, dome top ${pz}; vertex ${vtx}`);
+  check("plate playback: block cut by all eight operations (six + the added drill and V-carve), mesh follows the engine", ptags === "1,2,3,4,5,6,7,8" && pz.startsWith("-3.50,-4.50,") && Math.abs(parseFloat(pz.split(",")[2]) + 0.5) < 0.03 && vtx === "-3.50", `tags ${ptags}; pocket, hole, dome top ${pz}; vertex ${vtx}`);
   await sleep(800);
   await shot("09_plate_machining");
   await js("document.getElementById('simClose').click(); true");
@@ -1182,8 +1182,8 @@ try {
     await js(`window.__marcam.project.openText(${JSON.stringify(file)}, "bracket.marcam.json").then(() => true)`);
     await waitFor(() => js("document.querySelectorAll('#detected .detected-btn').length === 3"), "the detected features", 30000);
     const detectedText = await js("[...document.querySelectorAll('#detected .detected-btn')].map((b) => b.textContent)");
-    check("an imported part's holes and pockets are detected, holes grouped by size",
-      detectedText.includes("Drill 4 × 5.00 mm through") && detectedText.includes("Drill 1 × 6.00 mm blind") && detectedText.some((x) => /^Pocket 20\.00 x 24\.00/.test(x)), detectedText.join(" | "));
+    check("an imported part's holes and pockets are detected, holes grouped by size (drilled with a tool of their size, else bored)",
+      detectedText.includes("Drill 4 × 5.00 mm through") && detectedText.includes("Bore 1 × 6.00 mm blind") && detectedText.some((x) => /^Pocket 20\.00 x 24\.00/.test(x)), detectedText.join(" | "));
     await shot("17a_detected_features");
     const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
     // Drill 4 x 5.00: a drilling operation with the 5 mm tool, the four centres, through depth
@@ -1245,21 +1245,41 @@ try {
     await js("document.getElementById('pickFaces').click(); true");
     await sleep(400);
     check("done picking writes the picks once: three points", (await doc()).setups[0].operations[0].points.length === 3 && !(await js("!!window.__marcam.state.tree.pickMesh")));
-    // the blind 6 mm hole with the 5 mm tool: use Bore instead
-    await js("[...document.querySelectorAll('#detected .detected-btn')].find((b) => /6\\.00 mm blind/.test(b.textContent)).click(); true");
-    await waitFor(async () => (await doc()).setups[0].operations.length === 2, "the blind-hole drilling", 15000);
-    const bore = await js("document.getElementById('error').textContent");
+    // the blind 6 mm hole: no 6 mm tool, so it is bored (with the largest that fits: 5 mm)
+    await js("[...document.querySelectorAll('#detected .detected-btn')].find((b) => /^Bore 1 × 6\.00 mm blind/.test(b.textContent)).click(); true");
+    await waitFor(async () => (await doc()).setups[0].operations.length === 2, "the boring", 15000);
+    const bored = (await doc()).setups[0].operations[1];
+    // a drilling picked on it says use Bore instead, and becomes a bore
+    await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAdd').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.draft && !!document.getElementById('pickFaces')"), "the drilling draft", 15000);
+    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking for the draft", 30000);
+    await sleep(300);
+    const blindAt = await screenOf("(x) => x.kind === 'hole' && !x.data.through");
+    await js(`const pr = await window.__marcam.tree.pickAt(${blindAt[2]}, ${blindAt[3]}); true`);
+    await waitFor(() => js("!!document.getElementById('boreInstead')"), "the Bore instead button", 10000);
+    const boreNote = await js("document.getElementById('pickNotes').textContent");
+    await js("document.getElementById('boreInstead').click(); true");
+    await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'bore'"), "the draft bored", 10000);
+    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await waitFor(async () => (await doc()).setups[0].operations.length === 3, "the bore applied", 15000);
+    const converted = (await doc()).setups[0].operations[2];
+    check("holes without a tool of their size are bored; a drilling on one says use Bore instead, and Bore instead makes it a bore",
+      bored.type === "bore" && bored.tool === 1 && bored.diameter === 6 && bored.depth === 6 && JSON.stringify(bored.points) === "[[46,20]]" &&
+      /Bore/.test(boreNote) && converted.type === "bore" && converted.diameter === 6 && JSON.stringify(converted.points) === "[[46,20]]",
+      `${JSON.stringify({ type: bored.type, tool: bored.tool, d: bored.diameter, depth: bored.depth })} | ${boreNote} | ${converted.type}`);
     // the pocket: its outline and island, its depth
     await js("[...document.querySelectorAll('#detected .detected-btn')].find((b) => b.dataset.start === 'pocket').click(); true");
-    await waitFor(async () => (await doc()).setups[0].operations.length === 3, "the pocket operation", 15000);
-    const pocket = (await doc()).setups[0].operations[2];
-    check("a hole the tool cannot drill says use Bore instead; the pocket takes its outline, island and depth",
-      /Bore/.test(bore) && pocket.type === "pocket" && pocket.paths.length === 2 && pocket.depth === 5 && pocket.top === 0, `${bore} | ${JSON.stringify({ paths: pocket.paths?.length, depth: pocket.depth })}`);
+    await waitFor(async () => (await doc()).setups[0].operations.length === 4, "the pocket operation", 15000);
+    const pocket = (await doc()).setups[0].operations.find((o) => o.type === "pocket");
+    check("the pocket takes its outline, island and depth",
+      pocket.paths.length === 2 && pocket.depth === 5 && pocket.top === 0, JSON.stringify({ paths: pocket.paths?.length, depth: pocket.depth }));
     // it all plans and verifies
     await js("document.getElementById('error').textContent = ''; document.getElementById('generate').click(); true");
     await waitDone("generation of the picked bracket", 240000);
     const tabs = await js("[...document.querySelectorAll('#tabs button')].map((b) => b.textContent)");
-    check("the picked operations plan and verify clean", tabs.length >= 1 && tabs.every((x) => x.endsWith("OK")), tabs.join(", "));
+    const arcs = await js("window.__marcam.state.result.programs.reduce((n, p) => n + p.gcode.split('\\n').filter((l) => l.startsWith('G3 ')).length, 0)");
+    check("the picked operations plan and verify clean; the bores are written as G3 arcs", tabs.length >= 1 && tabs.every((x) => x.endsWith("OK")) && arcs > 0, `${tabs.join(", ")}; ${arcs} arcs`);
     await shot("17c_picked_generated");
   }
 

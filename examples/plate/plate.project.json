@@ -161,6 +161,30 @@
           "floor": -4.5,
           "feed": 400.0,
           "plunge_feed": 60.0
+        },
+        {
+          "id": "op6",
+          "name": "Bore",
+          "type": "bore",
+          "tool": 1,
+          "points": [
+            [
+              30.0,
+              31.0
+            ]
+          ],
+          "diameter": 6.0,
+          "depth": 10.5,
+          "top": 0.0,
+          "helix_pitch": 0.5,
+          "stepover": 0.4,
+          "finish_allowance": 0.1,
+          "spring_passes": 1,
+          "direction": "climb",
+          "arcs": true,
+          "tolerance": 0.002,
+          "feed": 300.0,
+          "plunge_feed": 60.0
         }
       ],
       "outputs": [
@@ -171,6 +195,7 @@
             "op1",
             "op2",
             "op3",
+            "op6",
             "op4"
           ]
         },

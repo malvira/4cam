@@ -106,6 +106,16 @@ fn plate_cuts_what_each_operation_promises() {
         near(x + 1.4, y, -4.5, 1e-6, "hole bottom near the wall");
         near(x + 1.9, y, -0.5, 1e-6, "material beside the hole");
     }
+    // bore: a 6 mm hole through at (30, 31), bored with the 3.175 mm endmill
+    near(
+        30.0,
+        31.0,
+        -10.5,
+        1e-6,
+        "bore through the block (0.5 past the bottom)",
+    );
+    near(32.9, 31.0, -10.5, 1e-6, "bore near its wall");
+    near(33.2, 31.0, -0.5, 1e-6, "material beside the bore");
     // outline: 2 deep outside the 56 x 36 rectangle, nothing inside it
     near(1.0, 20.0, -2.5, 1e-6, "outside the outline");
     near(30.0, 0.5, -2.5, 1e-6, "outside the outline");

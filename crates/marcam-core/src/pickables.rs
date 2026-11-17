@@ -827,7 +827,7 @@ pub fn stock_top(p: &crate::project::Project, setup: &str) -> Option<f64> {
 /// The kinds an operation type takes, in order of preference (empty: picking does not apply).
 pub fn accepts(op_type: &str) -> &'static [&'static str] {
     match op_type {
-        "drill" => &["hole"],
+        "drill" | "bore" => &["hole"],
         "pocket" => &["pocket"],
         "contour" => &["edge_loop"],
         "face" => &["flat_face", "side_face"],
@@ -926,6 +926,32 @@ pub fn apply(
                     "the holes start at different heights: all are drilled from the highest".into(),
                 );
             }
+        }
+        "bore" => {
+            let points: Vec<Value> = picks.iter().map(|p| p.data["center"].clone()).collect();
+            let top = picks
+                .iter()
+                .map(|p| f(p, "top"))
+                .fold(f64::NEG_INFINITY, f64::max);
+            let depth = picks
+                .iter()
+                .map(|p| top - f(p, "bottom") + if p.data["through"] == true { 0.5 } else { 0.0 })
+                .fold(0.0, f64::max);
+            let d = f(picks[0], "diameter");
+            if picks.iter().any(|p| (f(p, "diameter") - d).abs() > 1e-3) {
+                notes.push(format!(
+                    "the holes are of different sizes: all are bored at {d:.2} mm (the first)"
+                ));
+            }
+            if let Some(td) = cx.tool_diameter {
+                if td >= d - 0.1 {
+                    notes.push(format!("the {td:.2} mm tool is too big to bore a {d:.2} mm hole: use a smaller one (or drill it)"));
+                }
+            }
+            v.insert("points".into(), Value::Array(points));
+            v.insert("diameter".into(), json!(round_um(d)));
+            v.insert("top".into(), json!(round_um(top)));
+            v.insert("depth".into(), json!(round_um(depth)));
         }
         "pocket" => {
             let p = picks[0];

@@ -208,6 +208,7 @@ pub enum Operation {
     Face(Face),
     Pocket(Pocket),
     Drill(Drill),
+    Bore(Bore),
     Contour(Contour),
     Raster3d(Raster3d),
     /// 3D roughing: the parallel raster with a flat (or ball) tool in step-down levels,
@@ -274,6 +275,67 @@ pub struct Drill {
     /// Clearance above the top for retracts between pecks.
     pub retract: f64,
     pub feed: f64,
+}
+
+/// 3-axis: bore round holes at `points` to `diameter` with an end mill smaller than them:
+/// helical entry, roughing rings out to the finishing allowance, the finish at the size and
+/// the spring passes; G2/G3 arcs (`arcs`) or straight segments within `tolerance`. See
+/// [`crate::strategy::bore`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Bore {
+    pub tool: u32,
+    /// Rotary setups: the A angle (deg) the part is indexed to (indexed 3+1, a radial hole).
+    #[serde(default)]
+    pub index_a: f64,
+    pub points: Vec<[f64; 2]>,
+    pub diameter: f64,
+    pub depth: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    /// Descent per turn of the helix (mm).
+    #[serde(default = "default_helix_pitch")]
+    pub helix_pitch: f64,
+    /// Roughing rings at most this far apart, as a fraction of the tool diameter.
+    #[serde(default = "default_bore_stepover")]
+    pub stepover: f64,
+    /// Radial stock the roughing leaves for the finish (mm).
+    #[serde(default = "default_bore_allowance")]
+    pub finish_allowance: f64,
+    /// Finishing passes repeated at the size (for the tool's deflection).
+    #[serde(default = "default_spring_passes")]
+    pub spring_passes: u32,
+    /// "climb" (counter-clockwise inside the hole, G3) or "conventional" (G2).
+    #[serde(default = "default_direction")]
+    pub direction: String,
+    /// Write the circles as G2/G3 arcs (else straight segments).
+    #[serde(default = "default_true")]
+    pub arcs: bool,
+    /// Largest distance between the segments and the circle (mm).
+    #[serde(default = "default_bore_tolerance")]
+    pub tolerance: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+    /// Descents gentler than this (degrees below the horizontal, along the path) run at
+    /// the cutting feed; steeper ones are slowed so the tip falls no faster than
+    /// `plunge_feed`. 0: every descent is slowed.
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
+}
+
+fn default_helix_pitch() -> f64 {
+    0.5
+}
+fn default_bore_stepover() -> f64 {
+    0.4
+}
+fn default_bore_allowance() -> f64 {
+    0.1
+}
+fn default_spring_passes() -> u32 {
+    1
+}
+fn default_bore_tolerance() -> f64 {
+    0.002
 }
 
 /// 3-axis: follow a closed 2D path, outside / inside / on it, in step-down passes.
@@ -444,6 +506,7 @@ impl Operation {
             Operation::Face(o) => Some(o.index_a),
             Operation::Pocket(o) => Some(o.index_a),
             Operation::Drill(o) => Some(o.index_a),
+            Operation::Bore(o) => Some(o.index_a),
             Operation::Contour(o) => Some(o.index_a),
             Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.index_a),
             _ => None,
@@ -461,6 +524,7 @@ impl Operation {
             Operation::FlankChamfer(o) => Some(o.ramp_angle),
             Operation::RotaryFinish(o) => Some(o.ramp_angle),
             Operation::RotaryRough(o) => Some(o.ramp_angle),
+            Operation::Bore(o) => Some(o.ramp_angle),
             _ => None,
         }
     }
@@ -472,6 +536,7 @@ impl Operation {
             Operation::Face(o) => o.tool,
             Operation::Pocket(o) => o.tool,
             Operation::Drill(o) => o.tool,
+            Operation::Bore(o) => o.tool,
             Operation::Contour(o) => o.tool,
             Operation::Raster3d(o) | Operation::Rough3d(o) => o.tool,
             Operation::Engrave(o) => o.tool,

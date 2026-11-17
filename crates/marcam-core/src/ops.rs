@@ -307,6 +307,34 @@ pub fn registry() -> Vec<OperationType> {
             shapes_part: false,
         },
         OperationType {
+            kind: "bore",
+            title: "Boring (3-axis)",
+            description: "Bore round holes bigger than the end mill: helical entry, roughing rings, the finish at the size and spring passes, as G2/G3 arcs or segments.",
+            group: "feature",
+            params: vec![
+                tool(),
+                p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1, a radial hole); 0 on a vise.").opt(json!(0.0)),
+                p("points", "points", "mm", "Hole centres as [[x, y], ...]."),
+                p("diameter", "number", "mm", "Hole diameter (bigger than the tool).").min(0.01),
+                p("depth", "number", "mm", "Hole depth below the top (through holes: a little past the bottom).").min(0.01),
+                p("top", "number", "mm", "Top (default: stock top).").opt(Value::Null),
+                p("helix_pitch", "number", "mm", "Descent per turn of the helix.").opt(json!(0.5)).min(0.01),
+                p("stepover", "number", "", "Roughing rings at most this far apart, as a fraction of the tool diameter.").opt(json!(0.4)).min(0.05).max(1.0),
+                p("finish_allowance", "number", "mm", "Radial stock the roughing leaves for the finish.").opt(json!(0.1)).min(0.0),
+                p("spring_passes", "integer", "", "Finishing passes repeated at the size.").opt(json!(1)).min(0.0).max(5.0),
+                p("direction", "choice", "", "Climb (counter-clockwise inside the hole, G3) or conventional (G2).").opt(json!("climb")).choices(&["climb", "conventional"]),
+                p("arcs", "boolean", "", "Write the circles as G2/G3 arcs (else straight segments).").opt(json!(true)),
+                p("tolerance", "number", "mm", "Largest distance between the segments and the circle.").opt(json!(0.002)).min(0.0001),
+                feed(),
+                plunge(),
+                ramp(),
+            ],
+            tool_shapes: &["flat"],
+            geometry: &["points"],
+            machine_needs: &["xyz"],
+            shapes_part: false,
+        },
+        OperationType {
             kind: "contour",
             title: "2D contour (3-axis)",
             description: "Follow a closed outline outside, inside or on it, in step-down passes.",
@@ -548,6 +576,7 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
         Operation::Drill(_) => "drill",
+        Operation::Bore(_) => "bore",
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
         Operation::Rough3d(_) => "rough3d",
@@ -808,7 +837,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("feed".into(), json!(feed));
             v.insert("plunge_feed".into(), json!(plunge));
         }
-        "face" | "pocket" | "drill" | "contour" | "raster3d" | "rough3d" => {
+        "face" | "pocket" | "drill" | "bore" | "contour" | "raster3d" | "rough3d" => {
             // the vise block, or around the bar over the part (indexed 3+1 on a rotary setup)
             let rad = job.stock.radius;
             let sb = job.stock_box.unwrap_or(crate::job::StockBox {
@@ -822,7 +851,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                 sb.max[2] - sb.min[2],
             );
             let (mx, my) = ((sb.min[0] + sb.max[0]) / 2.0, (sb.min[1] + sb.max[1]) / 2.0);
-            if matches!(kind, "pocket" | "drill" | "contour") {
+            if matches!(kind, "pocket" | "drill" | "bore" | "contour") {
                 v.insert("top".into(), json!(sb.max[2]));
             }
             match kind {
@@ -851,6 +880,13 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                     v.insert("peck".into(), json!(nice(d.max(0.5), 0.05)));
                     v.insert("retract".into(), json!(1.0));
                     v.insert("feed".into(), json!(plunge));
+                }
+                "bore" => {
+                    // a hole twice the tool's size, half the block deep
+                    v.insert("points".into(), json!([[nice(mx, 0.01), nice(my, 0.01)]]));
+                    v.insert("diameter".into(), json!(nice(2.0 * d, 0.1)));
+                    v.insert("depth".into(), json!(nice((0.5 * hz).max(0.5), 0.05)));
+                    v.insert("helix_pitch".into(), json!(nice((0.15 * d).max(0.1), 0.05)));
                 }
                 "contour" => {
                     let i = 2.0f64.min(w / 4.0).min(h / 4.0);

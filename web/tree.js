@@ -190,6 +190,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
           .map((x) => `<span class="pick-chip" data-chip="${esc(x.id)}">${esc(x.label)}<button type="button" data-unpick="${esc(x.id)}" aria-label="Remove ${esc(x.label)}">×</button></span>`)
           .join("")}</div>`;
         if (pk.notes.length) html += `<div id="pickNotes" class="pick-notes small">${pk.notes.map(esc).join("<br>")}</div>`;
+        if (op.type === "drill" && pk.notes.some((n) => /Bore/.test(n))) html += '<div class="row small"><button type="button" id="boreInstead" title="Bore the picked holes (the tool interpolates them)">Bore instead</button></div>';
       }
     }
     // face and axial selections bound rotary operations (X/A) and the 3D raster
@@ -442,6 +443,33 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     return { ...region, pickable: x };
   }
 
+  /** The drilling being picked becomes a bore of the same holes (same id, same file). */
+  async function boreInstead() {
+    const pk = t.pick;
+    const op = opById(t.selected);
+    const ids = [...pk.sel];
+    const d = Math.max(...ids.map((id) => pk.list.find((x) => x.id === id)?.data.diameter || 0));
+    const s = setup();
+    try {
+      const { result: def } = await engine("opDefaults", t.doc, { type: "bore", setup: s.id, tool: boreTool(d), machine: machineArg?.() ?? null }, state.mesh);
+      const { result: filled } = await engine("applyPicks", t.doc, { type: "bore", ids, setup: s.id, model: t.regions.model, tool: def.tool, index_a: op.index_a ?? 0 }, state.mesh);
+      const bore = { id: op.id, ...(op.name ? { name: op.name } : {}), ...(op.color ? { color: op.color } : {}), ...def, ...filled.params, index_a: op.index_a ?? 0 };
+      if (t.draft) {
+        t.draft.op = bore;
+        t.draft.title = typeOf("bore")?.title || "bore";
+      } else {
+        s.operations[s.operations.findIndex((o) => o.id === op.id)] = bore;
+        t.pickedChanged = true;
+      }
+      stopPicking();
+      if (!t.draft) await commit();
+      else renderEditor();
+      if (filled.notes.length) showError(filled.notes.join("; "));
+    } catch (e) {
+      showError(`Bore instead: ${e.message}`);
+    }
+  }
+
   /** Add every feature alike the picked ones. */
   async function pickSimilar() {
     const pk = t.pick;
@@ -488,10 +516,23 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     let html = "";
     for (const hs of groups.values()) {
       const h = hs[0].data;
-      html += `<button type="button" class="detected-btn" data-start="drill" data-ids="${esc(hs.map((x) => x.id).join(","))}">Drill ${hs.length} × ${h.diameter.toFixed(2)} mm ${h.through ? "through" : "blind"}</button>`;
+      // a flat tool of the holes' size drills them; else they are bored
+      const how = drillTool(h.diameter) != null ? "drill" : "bore";
+      html += `<button type="button" class="detected-btn" data-start="${how}" data-ids="${esc(hs.map((x) => x.id).join(","))}">${how === "drill" ? "Drill" : "Bore"} ${hs.length} × ${h.diameter.toFixed(2)} mm ${h.through ? "through" : "blind"}</button>`;
     }
     for (const x of detected.list.filter((x) => x.kind === "pocket")) html += `<button type="button" class="detected-btn" data-start="pocket" data-ids="${esc(x.id)}">${esc(x.label)}</button>`;
     if (setup() === s && $("detected")) $("detected").innerHTML = html ? `<span class="muted">Detected:</span> ${html}` : "";
+  }
+
+  /** The project's flat tool of a hole's size (drilling), or null. */
+  function drillTool(d) {
+    return (t.doc.tools || []).find((x) => x.kind === "flat" && Math.abs((x.diameter ?? -1) - d) <= 0.05)?.number ?? null;
+  }
+
+  /** The project's largest flat tool that fits a hole with room to bore it, or undefined. */
+  function boreTool(d) {
+    const fits = (t.doc.tools || []).filter((x) => x.kind === "flat" && x.diameter && x.diameter <= d - 0.2);
+    return fits.sort((a, b) => b.diameter - a.diameter)[0]?.number;
   }
 
   /** A new operation of `type` for the features `ids`: engine defaults, then the picks. */
@@ -504,13 +545,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         break;
       }
     try {
-      // drilling: the flat tool of the holes' size, if the project has one
+      // drilling: the flat tool of the holes' size; boring: the largest that fits inside
       let tool;
-      if (type === "drill") {
-        const d = detected.list.find((x) => x.id === ids[0])?.data.diameter;
-        const fits = (t.doc.tools || []).filter((x) => x.kind === "flat" && Math.abs((x.diameter ?? -1) - d) <= 0.05);
-        tool = fits[0]?.number;
-      }
+      const d = detected.list.find((x) => x.id === ids[0])?.data.diameter;
+      if (type === "drill") tool = drillTool(d) ?? undefined;
+      if (type === "bore") tool = boreTool(d);
       const { result: op } = await engine("opDefaults", t.doc, { type, setup: s.id, tool, machine: machineArg?.() ?? null }, state.mesh);
       const { result: filled } = await engine("applyPicks", t.doc, { type, ids, setup: s.id, model: partModel(s), tool: op.tool }, state.mesh);
       const full = { id, ...op, ...filled.params };
@@ -584,6 +623,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.id === "pickFaces") return t.picking ? stopPicking() : startPicking();
     if (el.id === "pickSimilar") return pickSimilar();
+    if (el.id === "boreInstead") return boreInstead();
     if (el.dataset?.unpick && t.pick) {
       t.pick.sel.delete(el.dataset.unpick);
       return applySel();

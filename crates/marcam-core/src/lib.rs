@@ -112,6 +112,7 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
         Operation::Drill(_) => "drill",
+        Operation::Bore(_) => "bore",
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
         Operation::Rough3d(_) => "rough3d",
@@ -244,6 +245,7 @@ fn is_three_axis(op: &Operation) -> bool {
         Operation::Face(_)
             | Operation::Pocket(_)
             | Operation::Drill(_)
+            | Operation::Bore(_)
             | Operation::Contour(_)
             | Operation::Raster3d(_)
             | Operation::Rough3d(_)
@@ -398,6 +400,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 Operation::Face(_)
                 | Operation::Pocket(_)
                 | Operation::Drill(_)
+                | Operation::Bore(_)
                 | Operation::Contour(_),
                 ToolShape::Flat { .. },
             ) => None,
@@ -408,11 +411,20 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 Operation::Face(_)
                 | Operation::Pocket(_)
                 | Operation::Drill(_)
+                | Operation::Bore(_)
                 | Operation::Contour(_),
                 _,
             ) => return Err(wrong("flat")),
         };
         b.operation(*next_op, op_name(op));
+        // boring on a vise (not indexed): the post writes its circles as arcs
+        if let Operation::Bore(o) = op {
+            if o.arcs && o.index_a == 0.0 {
+                if let Some(Move::Operation { arcs, .. }) = b.moves.last_mut() {
+                    *arcs = Some(o.tolerance.max(1e-4));
+                }
+            }
+        }
         *next_op += 1;
         if current != Some(number) {
             b.tool_change(number, job.spindle_rpm);
@@ -517,6 +529,9 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     Operation::Face(o) => t3::face(&mut b, d, sb, safe_r, o),
                     Operation::Pocket(o) => t3::pocket(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Drill(o) => t3::drill(&mut b, sb, safe_r, o),
+                    Operation::Bore(o) => {
+                        strategy::bore::bore(&mut b, d, sb, safe_r, o).map_err(err)?
+                    }
                     Operation::Contour(o) => t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Raster3d(o) | Operation::Rough3d(o) => {
                         let mesh: &Mesh = if three {
@@ -601,6 +616,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         Operation::Face(o) => Some(o.plunge_feed),
                         Operation::Pocket(o) => Some(o.plunge_feed),
                         Operation::Drill(o) => Some(o.feed),
+                        Operation::Bore(o) => Some(o.plunge_feed),
                         Operation::Contour(o) => Some(o.plunge_feed),
                         Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.plunge_feed),
                         Operation::Engrave(o) => Some(o.plunge_feed),
@@ -821,7 +837,7 @@ pub fn intended_tags(job: &Job, tps: &[Toolpath]) -> std::collections::HashSet<u
     let mut out = std::collections::HashSet::new();
     for tp in tps {
         for m in &tp.moves {
-            if let Move::Operation { id, kind } = m {
+            if let Move::Operation { id, kind, .. } = m {
                 let t = ops::find(kind);
                 let feature = t.is_some_and(|t| {
                     t.shapes_part || (job.stock_box.is_none() && t.machine_needs.contains(&"xyz"))

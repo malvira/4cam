@@ -72,7 +72,7 @@ assert.ok(lim.limits.some((i) => i.message.includes("5209 deg/min") && i.message
 console.log(`profiles: ${reg.machines.length} machines, ${reg.libraries[0].tools.length} starter tools, limits ${lim.limits.length}`);
 // operation registry and 0.2 projects
 const types = cam.opTypes();
-assert.deepEqual(types.map((t) => t.kind).sort(), ["contour", "drill", "engrave", "face", "flank_chamfer", "helical_knurl", "pocket", "raster3d", "rotary_finish", "rotary_rough", "rotary_turning", "rough3d", "vcarve"]);
+assert.deepEqual(types.map((t) => t.kind).sort(), ["bore", "contour", "drill", "engrave", "face", "flank_chamfer", "helical_knurl", "pocket", "raster3d", "rotary_finish", "rotary_rough", "rotary_turning", "rough3d", "vcarve"]);
 const chk = cam.checkProject(JSON.parse(readFileSync(join(root, "examples", "knob", "knob.job.json"), "utf8")));
 assert.equal(chk.upgraded, true);
 assert.deepEqual(chk.problems, []);
@@ -122,7 +122,7 @@ assert.ok(Math.abs(top(psim.stocks[0], 40, 6) + 4.5) < 1e-5, "hole bottom");
 const po = cam.simOpen(plate, {}, dome);
 assert.ok(!po.error, po.error);
 assert.equal(po.kind, "xyz");
-assert.deepEqual(po.ops.map((o) => o.kind), ["face", "pocket", "drill", "contour", "raster3d"]);
+assert.deepEqual(po.ops.map((o) => o.kind), ["face", "pocket", "drill", "bore", "contour", "raster3d"]);
 const end = cam.simSeek(po.segments);
 assert.deepEqual(end.rows, [0, 159]);
 const zEnd = new Float32Array(Uint8Array.from(atob(end.z), (c) => c.charCodeAt(0)).buffer);

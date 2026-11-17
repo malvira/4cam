@@ -25,6 +25,115 @@ fn fine_feed(f: f64) -> String {
     format!("{f:.digits$}")
 }
 
+/// An arc the post writes for a run of straight moves.
+struct Arc {
+    /// How many moves it replaces.
+    moves: usize,
+    end: [f64; 3],
+    center: [f64; 2],
+    ccw: bool,
+    feed: f64,
+    /// Helical length (mm).
+    length: f64,
+}
+
+/// The longest run of `Line3` moves (equal feed) from `p0` that lies on one circle in XY,
+/// within `tol`, with Z linear in the angle (a helix), at least 3 moves and at most half a
+/// turn.
+fn fit_arc(p0: [f64; 3], moves: &[Move], tol: f64) -> Option<Arc> {
+    let mut pts = vec![p0];
+    let mut feed = None;
+    for m in moves {
+        match m {
+            Move::Line3 {
+                x, y, z, feed: f, ..
+            } if feed.is_none_or(|g| g == *f) && pts.len() < 2000 => {
+                feed = Some(*f);
+                pts.push([*x, *y, *z]);
+            }
+            _ => break,
+        }
+    }
+    let feed = feed?;
+    let circle = |a: [f64; 3], b: [f64; 3], c: [f64; 3]| -> Option<([f64; 2], f64)> {
+        let d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+        if d.abs() < 1e-12 {
+            return None;
+        }
+        let (a2, b2, c2) = (
+            a[0] * a[0] + a[1] * a[1],
+            b[0] * b[0] + b[1] * b[1],
+            c[0] * c[0] + c[1] * c[1],
+        );
+        let ux = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d;
+        let uy = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d;
+        Some(([ux, uy], (a[0] - ux).hypot(a[1] - uy)))
+    };
+    let mut best: Option<Arc> = None;
+    for m in 3..pts.len() {
+        let Some((c, r)) = circle(pts[0], pts[m / 2], pts[m]) else {
+            break;
+        };
+        if r < 10.0 * tol {
+            break;
+        }
+        // one direction all the way, every point on the circle, at most half a turn
+        let turn = |i: usize| {
+            let (u, v) = (pts[i], pts[i + 1]);
+            let (a0, a1) = (
+                (u[1] - c[1]).atan2(u[0] - c[0]),
+                (v[1] - c[1]).atan2(v[0] - c[0]),
+            );
+            let mut d = a1 - a0;
+            if d > std::f64::consts::PI {
+                d -= std::f64::consts::TAU;
+            } else if d < -std::f64::consts::PI {
+                d += std::f64::consts::TAU;
+            }
+            d
+        };
+        let steps: Vec<f64> = (0..m).map(turn).collect();
+        let ccw = steps[0] > 0.0;
+        if steps.iter().any(|d| (*d > 0.0) != ccw || d.abs() < 1e-9) {
+            break;
+        }
+        let sweep: f64 = steps.iter().sum();
+        if sweep.abs() > std::f64::consts::PI + 1e-9 {
+            break;
+        }
+        if pts[..=m]
+            .iter()
+            .any(|p| ((p[0] - c[0]).hypot(p[1] - c[1]) - r).abs() > tol)
+        {
+            break;
+        }
+        // Z linear in the angle
+        let (z0, z1) = (pts[0][2], pts[m][2]);
+        let mut acc = 0.0;
+        let mut helix = true;
+        for (i, d) in steps.iter().enumerate() {
+            acc += d;
+            let want = z0 + (z1 - z0) * acc / sweep;
+            if (pts[i + 1][2] - want).abs() > tol {
+                helix = false;
+                break;
+            }
+        }
+        if !helix {
+            break;
+        }
+        best = Some(Arc {
+            moves: m,
+            end: pts[m],
+            center: c,
+            ccw,
+            feed,
+            length: (r * sweep).hypot(z1 - z0),
+        });
+    }
+    best
+}
+
 pub fn post(tp: &Toolpath, machine: &Machine) -> String {
     post_marked(tp, machine).0
 }
@@ -78,11 +187,25 @@ pub fn post_lines(
         a: 0.0,
         y: None,
     };
-    for mv in &tp.moves {
+    // inside an operation that asks for arcs: its tolerance; moves folded into an arc
+    let mut arc_tol: Option<f64> = None;
+    let mut skip = 0usize;
+    for (mi, mv) in tp.moves.iter().enumerate() {
         before.push(out.len());
+        if skip > 0 {
+            skip -= 1;
+            continue;
+        }
         match mv {
             Move::Comment { text } => out.push(format!("({text})")),
-            Move::Operation { id, kind } => marks.push((*id, kind.clone(), out.len())),
+            Move::Operation {
+                id,
+                kind,
+                arcs: fit,
+            } => {
+                marks.push((*id, kind.clone(), out.len()));
+                arc_tol = *fit;
+            }
             Move::Pose { tip, axis, feed } => {
                 let a = match crate::kinematics::solve_a(*axis, s.a) {
                     Ok(a) => a,
@@ -186,6 +309,33 @@ pub fn post_lines(
                 let len = ((x - p0[0]).powi(2) + (y - p0[1]).powi(2) + (z - p0[2]).powi(2)).sqrt();
                 if len < 1e-6 {
                     continue;
+                }
+                // a run of moves on one circle (a helix): one G2/G3
+                if let Some(tol) = arc_tol.filter(|_| machine.axes.is_identity()) {
+                    if let (true, Some(arc)) = (
+                        s.x.is_some() && s.y.is_some() && s.z.is_some(),
+                        fit_arc(p0, &tp.moves[mi..], tol),
+                    ) {
+                        let fw = if machine.feed_mode == FeedMode::InverseTime {
+                            format!("{:.3}", arc.feed / arc.length)
+                        } else {
+                            format!("{:.0}", arc.feed)
+                        };
+                        out.push(format!(
+                            "{} {} {} {} I{} J{} F{fw}",
+                            if arc.ccw { "G3" } else { "G2" },
+                            word(0, arc.end[0]),
+                            word(1, arc.end[1]),
+                            word(2, arc.end[2]),
+                            num(arc.center[0] - p0[0]),
+                            num(arc.center[1] - p0[1])
+                        ));
+                        s.x = Some(arc.end[0]);
+                        s.y = Some(arc.end[1]);
+                        s.z = Some(arc.end[2]);
+                        skip = arc.moves - 1;
+                        continue;
+                    }
                 }
                 let fw = if machine.feed_mode == FeedMode::InverseTime {
                     format!("{:.3}", feed / len)

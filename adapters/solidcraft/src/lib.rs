@@ -190,7 +190,9 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
     );
     props.insert("name".into(), json!({"type": "string"}));
     for p in &t.params {
-        if p.name != "tool" && !p.name.is_empty() {
+        // the ramp angle stays at marcam's default here (SolidCraft caps manifests at 16 KiB;
+        // a marcam project sets it per operation)
+        if p.name != "tool" && !p.name.is_empty() && p.name != "ramp_angle" {
             props.insert(p.name.into(), param_schema(p));
         }
     }

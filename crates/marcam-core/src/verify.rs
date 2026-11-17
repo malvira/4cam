@@ -106,6 +106,7 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
         let mut ny = None;
         let mut nz = None;
         let mut na = None;
+        let (mut ni, mut nj) = (0.0f64, 0.0f64);
         let mut g92 = false;
         for &(c, v) in &w {
             match c {
@@ -121,6 +122,8 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                 'Y' => ny = Some(v),
                 'Z' => nz = Some(v),
                 'A' => na = Some(v),
+                'I' => ni = v,
+                'J' => nj = v,
                 'F' => feed = Some(v),
                 _ => {}
             }
@@ -158,12 +161,28 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                     }
                 }
             }
-            Some(1) => {
+            Some(m @ 1..=3) => {
                 if let (Some(z0), Some(z1), Some(f)) = (z, tz, feed) {
                     let dz = z1 - z0;
                     if dz < 0.0 && f > 0.0 {
-                        let dx = tx.zip(x).map_or(0.0, |(p, q)| p - q);
-                        let (y0, y1) = (y.unwrap_or(0.0), ny.or(y).unwrap_or(0.0));
+                        let mut dx = tx.zip(x).map_or(0.0, |(p, q)| p - q);
+                        let (y0, mut y1) = (y.unwrap_or(0.0), ny.or(y).unwrap_or(0.0));
+                        if m != 1 {
+                            // an arc in XY (G17): its length, from the centre at I, J
+                            let (x0, x1) = (x.unwrap_or(0.0), tx.unwrap_or(0.0));
+                            let (cx, cy) = (x0 + ni, y0 + nj);
+                            let r = ni.hypot(nj);
+                            let a0 = (y0 - cy).atan2(x0 - cx);
+                            let a1 = (y1 - cy).atan2(x1 - cx);
+                            let mut sweep = a1 - a0;
+                            if m == 2 && sweep >= 0.0 {
+                                sweep -= std::f64::consts::TAU;
+                            } else if m == 3 && sweep <= 0.0 {
+                                sweep += std::f64::consts::TAU;
+                            }
+                            dx = r * sweep.abs();
+                            y1 = y0;
+                        }
                         let radius = (y0.hypot(z0) + y1.hypot(z1)) / 2.0;
                         let len = crate::machine::feed_length(
                             limits.feed_mode,

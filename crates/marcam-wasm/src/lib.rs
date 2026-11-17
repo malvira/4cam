@@ -489,7 +489,7 @@ pub mod api {
         let mut ops = Vec::new();
         for (p, tp) in tps.iter().enumerate() {
             for m in &tp.moves {
-                if let marcam::Move::Operation { id, kind } = m {
+                if let marcam::Move::Operation { id, kind, .. } = m {
                     ops.push(json!({"id": id, "tag": id + 1, "kind": kind, "program": tp.name, "program_index": p}));
                 }
             }
@@ -898,7 +898,7 @@ pub mod api {
         let mut ops = Vec::new();
         for (p, tp) in tps.iter().enumerate() {
             for m in &tp.moves {
-                if let marcam::Move::Operation { id, kind } = m {
+                if let marcam::Move::Operation { id, kind, .. } = m {
                     ops.push(json!({"id": id, "tag": id + 1, "kind": kind, "program": tp.name, "program_index": p}));
                 }
             }

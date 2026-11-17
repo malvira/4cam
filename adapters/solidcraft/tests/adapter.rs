@@ -75,9 +75,10 @@ fn manifest_fits_solidcraft_rules() {
         assert_eq!(s["type"], "object");
         assert_eq!(s["properties"]["bodies"]["type"], "array");
         assert_eq!(s["required"], json!(["bodies"]));
-        // every operation field (but the tool, which the adapter makes) is an input
+        // every operation field (but the tool, which the adapter makes, and the ramp angle,
+        // left at marcam's default to keep the manifest under 16 KiB) is an input
         for p in marcam::ops::find(kind).unwrap().params {
-            if p.name != "tool" {
+            if p.name != "tool" && p.name != "ramp_angle" {
                 assert!(s["properties"].get(p.name).is_some(), "{kind}.{}", p.name);
             }
         }

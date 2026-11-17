@@ -38,7 +38,13 @@ pub enum Move {
     },
     /// Start of an operation: the moves until the next marker belong to it. `id` numbers the
     /// job's operations in order (0, 1, ...); `kind` is the operation type. Posts ignore it.
-    Operation { id: u32, kind: String },
+    Operation {
+        id: u32,
+        kind: String,
+        /// Its circles may be written as G2/G3 arcs, within this many mm (boring).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arcs: Option<f64>,
+    },
     /// Load a tool and start the spindle.
     ToolChange { tool: u32, rpm: u32 },
     /// Rapid; only the given axes move (machine posts r first, then x, then a).
@@ -147,6 +153,7 @@ impl Builder {
         self.moves.push(Move::Operation {
             id,
             kind: kind.to_string(),
+            arcs: None,
         });
     }
 
