@@ -4,11 +4,11 @@
 # is installed (skipped, saying so, otherwise).
 set -e
 cd "$(dirname "$0")/.."
-cargo build -q -p fourcam-capi --release
-EXE=$(cargo run -q -p fourcam-capi --release --example cc_run -- examples/embed/c/plan.c target/release target/capi | tail -1)
+cargo build -q -p marcam-capi --release
+EXE=$(cargo run -q -p marcam-capi --release --example cc_run -- examples/embed/c/plan.c target/release target/capi | tail -1)
 OUT=$("$EXE" examples/knob/knob.project.json)
 echo "$OUT"
-echo "$OUT" | grep -q '"name":"4cam"'
+echo "$OUT" | grep -q '"name":"marcam"'
 echo "$OUT" | grep -q '"gcode":"(Knob radial profile'
 if command -v dotnet >/dev/null 2>&1; then
   LIB=$(pwd)/target/release

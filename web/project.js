@@ -1,5 +1,5 @@
 // Project workflow for the web app: New (a setup dialog: name, machine, setup type, part,
-// stock), Open (also drag-and-drop), Save / Save as (one .4cam.json file with the part mesh
+// stock), Open (also drag-and-drop), Save / Save as (one .marcam.json file with the part mesh
 // embedded), Import STL (binary or ASCII, mm or inch, through the same dialog), editing a
 // setup (its type, machine, stock, origin, holding: converting it when the type changes),
 // adding a setup, unsaved-changes tracking and warnings, and an undo for setup changes.
@@ -7,7 +7,9 @@
 import { setupDialog } from "./setupdialog.js";
 
 /** The file format Save writes: the project, and the mesh bytes it names, in one file. */
-export const FILE_FORMAT = "4cam-project";
+export const FILE_FORMAT = "marcam-project";
+/** Project files saved before the rename (4cam -> marcam, `.4cam.json`) open too. */
+export const LEGACY_FILE_FORMATS = ["4cam-project"];
 
 /** The setup types, as the dialog and the tree name them. */
 export const KINDS = {
@@ -46,7 +48,7 @@ export function parseStl(bytes) {
 }
 
 /** Binary STL bytes of triangles (9 floats each), with normals. */
-export function encodeStl(tris, header = "4cam") {
+export function encodeStl(tris, header = "marcam") {
   const n = tris.length / 9;
   const out = new Uint8Array(84 + 50 * n);
   out.set(enc.encode(header).subarray(0, 80));
@@ -179,14 +181,14 @@ export function readProjectFile(text) {
   try {
     obj = JSON.parse(text);
   } catch (e) {
-    throw new Error(`not a 4cam project: the file is not JSON (${e.message})`);
+    throw new Error(`not a marcam project: the file is not JSON (${e.message})`);
   }
-  if (obj && obj.format === FILE_FORMAT) {
+  if (obj && (obj.format === FILE_FORMAT || LEGACY_FILE_FORMATS.includes(obj.format))) {
     const [name, data] = Object.entries(obj.meshes || {})[0] || [];
     return { project: obj.project, mesh: data ? unb64(data) : null, meshName: name || "" };
   }
   if (obj && (obj.schema_version || obj.setups || obj.programs)) return { project: obj, mesh: null, meshName: "" };
-  throw new Error("not a 4cam project: no project, setups or programs in the file");
+  throw new Error("not a marcam project: no project, setups or programs in the file");
 }
 
 /** The mesh file a project names (its part's mesh model, or a 0.1 job's part.mesh). */
@@ -209,7 +211,7 @@ export function setupProject(ctx) {
     $("projectName").textContent = p.name;
     $("projectDirty").classList.toggle("hidden", !p.dirty);
     $("projectDirty").title = p.dirty ? "unsaved changes" : "";
-    document.title = `${p.dirty ? "* " : ""}${p.name} - 4cam`;
+    document.title = `${p.dirty ? "* " : ""}${p.name} - marcam`;
   }
   /** Something in the project changed: unsaved, and (unless `stale: false`, a colour or a
    *  name) any results are out of date. Nothing is planned here (see auto-regenerate). */
@@ -316,10 +318,10 @@ export function setupProject(ctx) {
     }
     let name = p.name;
     if (asNew || !p.fileName) {
-      const asked = window.prompt("Save the project as:", p.fileName || `${slug(p.name)}.4cam.json`);
+      const asked = window.prompt("Save the project as:", p.fileName || `${slug(p.name)}.marcam.json`);
       if (!asked) return;
-      p.fileName = /\.json$/i.test(asked) ? asked : `${asked}.4cam.json`;
-      name = p.fileName.replace(/(\.4cam)?\.json$/i, "").replace(/\.project$/i, "");
+      p.fileName = /\.json$/i.test(asked) ? asked : `${asked}.marcam.json`;
+      name = p.fileName.replace(/(\.marcam)?\.json$/i, "").replace(/\.project$/i, "");
       if (project.schema_version === "0.2") project.name = name;
       writeJob(project, { load: true });
     }
@@ -342,7 +344,7 @@ export function setupProject(ctx) {
     const reach = stock.shape === "box" ? stock.max[2] - stock.min[2] : stock.radius;
     const flute = Math.max(12, Math.ceil(reach + 1));
     doc.tools = doc.tools || [];
-    // the starter tools (4cam's own, by their description) follow the stock's depth, so the
+    // the starter tools (marcam's own, by their description) follow the stock's depth, so the
     // holder clears it; tools the user defined are left alone (the holder check reports them)
     for (const t of doc.tools) {
       const m = /^3\.175 mm (flat|ball) end mill, \d+ mm flute$/.exec(t.description ?? "");
@@ -485,7 +487,7 @@ export function setupProject(ctx) {
       tris = both;
     }
     const meshFile = `${slug(cfg.file.name)}.stl`;
-    const bytes = encodeStl(tris, `4cam: ${cfg.file.name}`);
+    const bytes = encodeStl(tris, `marcam: ${cfg.file.name}`);
     setMesh(bytes, `${cfg.file.name} (${cfg.ascii ? "ASCII" : "binary"} STL${cfg.units === "inch" ? ", inch" : ""}, ${tris.length / 9} triangles)`);
     let report;
     if (fresh) {
@@ -688,7 +690,7 @@ export function setupProject(ctx) {
     ev.preventDefault();
     if (/\.(stl)$/i.test(f.name)) await importMesh(f);
     else if (/\.json$/i.test(f.name)) await openFile(f);
-    else showError(`${f.name}: drop an .stl to import it, or a .4cam.json / .project.json to open it`);
+    else showError(`${f.name}: drop an .stl to import it, or a .marcam.json / .project.json to open it`);
   });
   window.addEventListener("beforeunload", (ev) => {
     if (p.dirty) {

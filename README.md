@@ -1,9 +1,14 @@
-# 4cam
+# marcam
 
 An open-source CAM engine for 4th-axis (rotary) machining, written in Rust.
 
+> **Renamed:** this project was called 4cam until 2026-11-17. The crates are now `marcam-*`
+> (library `marcam`), the command is `marcam` (`4cam` still works), and projects save as
+> `.marcam.json`. Files from before (`.4cam.json`, `4cam-machine` / `4cam-tools` profiles)
+> still open. See [CHANGELOG.md](CHANGELOG.md).
+
 You describe the stock, the part (a revolved profile and/or a triangle mesh), the tools and
-the operations in a JSON job file. 4cam plans machine-neutral toolpaths, posts them to G-code
+the operations in a JSON job file. marcam plans machine-neutral toolpaths, posts them to G-code
 for a machine profile, checks the result for unsafe moves, and renders a PNG preview of each
 program.
 
@@ -66,29 +71,29 @@ Plan a job. This writes one `.nc` and one `.png` preview per program and verifie
 program:
 
 ```bash
-target/release/4cam run examples/knob/knob.job.json --out out
+target/release/marcam run examples/knob/knob.job.json --out out
 ```
 
 ```bash
-target/release/4cam run examples/knob/knob_finish.job.json --machine linuxcnc --out out
+target/release/marcam run examples/knob/knob_finish.job.json --machine linuxcnc --out out
 ```
 
 The other commands:
 
-- `4cam verify file.nc [--plunge 60] [--safe 15.5] [--ramp 30]` flags feed moves where Z
+- `marcam verify file.nc [--plunge 60] [--safe 15.5] [--ramp 30]` flags feed moves where Z
   falls faster than the plunge feed, and X/A rapids below the safe radius. It reads `G93`
   (inverse-time) files too. Like the planner, it lets descents gentler than the ramp angle
   (default 30 degrees, each operation's `ramp_angle`) run at any feed; steeper descents and
   plunges keep to the plunge feed. `--ramp 0` holds every descent to it.
-- `4cam simulate job.json [--out dir] [--dx 0.05] [--na 720]` runs every program in order
+- `marcam simulate job.json [--out dir] [--dx 0.05] [--na 720]` runs every program in order
   on one simulated bar (a radial heightmap) and compares the result with the part.
   - It reports rapids through stock, the material left and any gouges.
   - It writes `<program>_stock.png` for each program: a side view, and an unrolled map of
     the material left.
   - It skips tools without a full shape (a V-bit with no `diameter`).
-- `4cam run` also gouge-checks each turning, roughing and finishing program against the part.
-- `4cam toolpath job.json` prints the machine-neutral toolpath as JSON.
-- `4cam mesh-info part.3mf` prints the triangle count, the bounding box and the largest
+- `marcam run` also gouge-checks each turning, roughing and finishing program against the part.
+- `marcam toolpath job.json` prints the machine-neutral toolpath as JSON.
+- `marcam mesh-info part.3mf` prints the triangle count, the bounding box and the largest
   radius about X.
 
 Built-in machines are `makera-z1-4axis` (the default), `makera-carvera-4axis`,
@@ -100,11 +105,11 @@ also takes a profile file or a URL. `run` checks the job against the machine's l
 
 Profiles and tool libraries:
 
-- `4cam profiles list` shows the built-in and imported profiles and libraries.
-- `4cam profiles show <id>` prints a profile.
-- `4cam profiles import <file-or-url>` reads 4cam JSON, Fusion 360 `.tools`/`.json` tool
+- `marcam profiles list` shows the built-in and imported profiles and libraries.
+- `marcam profiles show <id>` prints a profile.
+- `marcam profiles import <file-or-url>` reads marcam JSON, Fusion 360 `.tools`/`.json` tool
   libraries, or `.mch`/`.f3d` machines. It saves the result to the user profile folder.
-- `4cam profiles export <id> --out file.json` writes a profile out.
+- `marcam profiles export <id> --out file.json` writes a profile out.
 
 Jobs can use library tools:
 
@@ -134,9 +139,9 @@ browser.
     axis (simultaneous), Indexed 3+1 (the bar at fixed angles) or 3-axis vise. It also takes
     the part (an STL, its units, its axis or up direction, with a placement preview) and the
     stock (from the part with a margin, or given). The STL can also come later.
-  - **Open**: a `.4cam.json` project file, or a `.project.json` / `.job.json`; or drop the
+  - **Open**: a `.marcam.json` project file, or a `.project.json` / `.job.json`; or drop the
     file on the page.
-  - **Save** / **Save as**: one `.4cam.json` file with the part mesh embedded, so it opens
+  - **Save** / **Save as**: one `.marcam.json` file with the part mesh embedded, so it opens
     whole anywhere.
   - **Import STL** (or drop one), binary or ASCII, mm or inch, through the same dialog, with
     the current setup's type pre-selected:
@@ -156,7 +161,7 @@ browser.
   - The example picker.
 - **Left panel:**
   - the machine (built-in Makera Z1, Carvera, Carvera Air, LinuxCNC, imported profiles, or custom JSON), with a summary of its limits;
-  - a tool library panel: view, add, edit and remove tools, import a file or URL (Fusion 360 `.tools`/`.json`/`.mch`/`.f3d` or 4cam JSON), export JSON, and "use as T#" to put a tool in the job (kept in browser storage);
+  - a tool library panel: view, add, edit and remove tools, import a file or URL (Fusion 360 `.tools`/`.json`/`.mch`/`.f3d` or marcam JSON), export JSON, and "use as T#" to put a tool in the job (kept in browser storage);
   - "Attach mesh file": the mesh an opened project names (STL or 3MF), as it is;
   - quick settings that write into the job JSON (stock, tool sizes, feeds, steps);
   - the job JSON editor.
@@ -199,24 +204,24 @@ python scripts/build_wheel.py
 ```
 
 ```bash
-pip install target/wheels/fourcam-0.1.0-cp39-abi3-win_amd64.whl
+pip install target/wheels/marcam-0.1.0-cp39-abi3-win_amd64.whl
 ```
 
 The wheel name depends on your platform. To use it:
 
 ```python
-import fourcam
-res = fourcam.plan_and_post(fourcam.example_job(), machine="linuxcnc")
+import marcam
+res = marcam.plan_and_post(marcam.example_job(), machine="linuxcnc")
 print(res["programs"][0]["gcode"][:200])
 ```
 
-WebAssembly: `scripts/build-wasm.sh` (or `.ps1`) writes `web/pkg/fourcam.wasm` and
-`fourcam.js`. The module has plain exports, so wasm-bindgen is not needed. `fourcam.js`
+WebAssembly: `scripts/build-wasm.sh` (or `.ps1`) writes `web/pkg/marcam.wasm` and
+`marcam.js`. The module has plain exports, so wasm-bindgen is not needed. `marcam.js`
 wraps them for browsers and Node:
 
 ```js
-import { load } from "./pkg/fourcam.js";
-const cam = await load(new URL("./pkg/fourcam.wasm", import.meta.url));
+import { load } from "./pkg/marcam.js";
+const cam = await load(new URL("./pkg/marcam.wasm", import.meta.url));
 const res = cam.planAndPost(cam.exampleJob(), "makera-z1");
 ```
 
@@ -265,24 +270,24 @@ The tests cover:
 
 ## Layout
 
-- `crates/fourcam-core`: the library (`fourcam`). It holds the job schema, geometry, mesh
+- `crates/marcam-core`: the library (`marcam`). It holds the job schema, geometry, mesh
   I/O, the drop-cutter, the strategies, the toolpath IR, the post-processor, the verifier
   and the PNG previews.
-- `crates/fourcam-cli`: the `4cam` binary.
-- `crates/fourcam-wasm`: the WebAssembly build and its JSON API (`js/fourcam.js` wraps it).
-- `crates/fourcam-py`: the Python bindings (pyo3, abi3, Python 3.9 or later).
+- `crates/marcam-cli`: the `marcam` binary.
+- `crates/marcam-wasm`: the WebAssembly build and its JSON API (`js/marcam.js` wraps it).
+- `crates/marcam-py`: the Python bindings (pyo3, abi3, Python 3.9 or later).
 - `web/`: the browser app (`index.html`, `app.js`, `worker.js`) and its end-to-end test.
 - `scripts/`: the build and check scripts.
-- `crates/fourcam-core/profiles/`: built-in machine profiles and tool libraries
+- `crates/marcam-core/profiles/`: built-in machine profiles and tool libraries
   (`profiles/_downloads/` at the root is a git-ignored cache of vendor files).
 - `docs/`: the profile formats, Makera sources and the roadmap;
-  [docs/embedding.md](docs/embedding.md) for embedding 4cam (Rust, C/C++, C#/.NET, Python,
+  [docs/embedding.md](docs/embedding.md) for embedding marcam (Rust, C/C++, C#/.NET, Python,
   JavaScript; runnable examples in `examples/embed/`) and
   [docs/packaging.md](docs/packaging.md) for the crates, wheel and npm package (prepared,
   not published).
 - `examples/`: example jobs and their outputs.
 - `tests/fixtures/`: test fixtures. These are the knob's original Python part and G-code
-  generators, and a synthetic Fusion-format tool library. `crates/fourcam-fixtures`
+  generators, and a synthetic Fusion-format tool library. `crates/marcam-fixtures`
   regenerates `examples/knob/knob.stl`. Part generation is a fixture concern, not an engine
   feature.
 

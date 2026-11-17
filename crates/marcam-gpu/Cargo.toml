@@ -1,0 +1,20 @@
+[package]
+name = "marcam-gpu"
+description = "Prototype: marcam's rotary stock simulation on the GPU (wgpu), with a CPU fallback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+# tests and benchmarks read the repository's examples and fixtures: not shipped
+exclude = ["tests/", "examples/"]
+
+[dependencies]
+marcam-core = { version = "0.1.0", path = "../marcam-core" }
+wgpu = "25"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }

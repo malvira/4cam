@@ -1,6 +1,6 @@
-# Embedding 4cam
+# Embedding marcam
 
-4cam is meant to be easy for other software to embed, the way FDM slicers embed a slicing
+marcam is meant to be easy for other software to embed, the way FDM slicers embed a slicing
 engine. Every host gets the same engine, defaults and checks. The surfaces below are the
 supported API. Everything else is internal and may change.
 
@@ -26,7 +26,7 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
 0.1 jobs upgrade automatically. Machine profiles and tool libraries are separate JSON files
 (`docs/profiles.md`).
 
-## Rust (`fourcam` crate)
+## Rust (`marcam` crate)
 
 | Call | What it does |
 | --- | --- |
@@ -49,7 +49,7 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
 | `sim3::Heightmap3` | Material removal for 3-axis programs (a Z heightmap of the block). |
 | `project::simulate_project` | Simulate all setups in order. |
 
-## WebAssembly (`web/pkg/fourcam.js`)
+## WebAssembly (`web/pkg/marcam.js`)
 
 All calls take and return JSON. No wasm-bindgen is needed.
 
@@ -83,14 +83,14 @@ All calls take and return JSON. No wasm-bindgen is needed.
   - `svgPaths(svgText, {at, height, tolerance})` turns an SVG into polylines (mm, Y up) for
     `engrave`/`vcarve` paths;
   - `profileList()` lists the built-in machines and tool libraries;
-  - `importProfile(bytes, name)` reads a 4cam or Fusion 360 profile file.
+  - `importProfile(bytes, name)` reads a marcam or Fusion 360 profile file.
 
-## Python (`import fourcam`)
+## Python (`import marcam`)
 
 The same JSON API is available from Python as `plan_and_post`, `simulate`, `example_job`,
 `machine` and `version`.
 
-## CLI (`4cam`)
+## CLI (`marcam`)
 
 The CLI covers the same features:
 
@@ -104,6 +104,6 @@ The CLI covers the same features:
 
 ## Adapters
 
-- SolidCraft: `adapters/solidcraft` is a SolidCraft command plugin, with one entry per 4cam
+- SolidCraft: `adapters/solidcraft` is a SolidCraft command plugin, with one entry per marcam
   operation. It runs on a body and writes G-code to a granted folder. See
   `docs/adapters/solidcraft.md`.

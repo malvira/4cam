@@ -8,7 +8,7 @@ PY=${PYTHON:-python}
 KNOB=examples/knob/knob.project.json
 want() { echo "$1" | grep -q "$2" || { echo "missing \"$2\" in:"; echo "$1"; exit 1; }; }
 
-OUT=$(cargo run -q -p fourcam-embed-example -- $KNOB)
+OUT=$(cargo run -q -p marcam-embed-example -- $KNOB)
 echo "$OUT"
 want "$OUT" "setup1/knob_1_profile: 21787 lines"
 

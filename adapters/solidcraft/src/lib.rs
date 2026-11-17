@@ -1,32 +1,32 @@
-//! 4cam as a SolidCraft plugin.
+//! marcam as a SolidCraft plugin.
 //!
-//! The plugin has one entry per 4cam operation type (`ops::registry()`, `_` spelled `-`).
+//! The plugin has one entry per marcam operation type (`ops::registry()`, `_` spelled `-`).
 //! An entry takes a SolidCraft body, meshes it with SolidCraft's read-only `model.mesh`
-//! command, builds a one-setup 4cam project round it (the body on the rotary axis, its front
-//! at X0, stock, tool and operation filled by 4cam's defaults), plans and posts it, and
+//! command, builds a one-setup marcam project round it (the body on the rotary axis, its front
+//! at X0, stock, tool and operation filled by marcam's defaults), plans and posts it, and
 //! writes the G-code, the project and the body's STL to the folder the user granted.
 //!
 //! This file is the host-independent part (it builds and tests natively); `guest.rs` is the
 //! WebAssembly component glue and `bin/pack.rs` makes the installable zip.
 //! See `docs/adapters/solidcraft.md`.
 
-use fourcam::job::MeshSource;
-use fourcam::{gouge_check, limits_for, ops, plan_with_mesh, post, profiles, verify_gcode};
+use marcam::job::MeshSource;
+use marcam::{gouge_check, limits_for, ops, plan_with_mesh, post, profiles, verify_gcode};
 use serde_json::{json, Map, Value};
 
 #[cfg(target_arch = "wasm32")]
 mod guest;
 
 /// Plugin id: the package folder name in SolidCraft.
-pub const PLUGIN_ID: &str = "fourcam";
+pub const PLUGIN_ID: &str = "marcam";
 /// The named folder the plugin asks to write into.
 pub const GRANT: &str = "output";
 /// The one SolidCraft command the plugin calls.
 pub const MESH_COMMAND: &str = "model.mesh";
-pub use fourcam::body::{DEFAULT_MACHINE, DEFAULT_RPM, DEFAULT_TOOL_DIAMETER, DEFAULT_VBIT_ANGLE};
+pub use marcam::body::{DEFAULT_MACHINE, DEFAULT_RPM, DEFAULT_TOOL_DIAMETER, DEFAULT_VBIT_ANGLE};
 /// SolidCraft's `model.mesh` default chordal tolerance (mm).
 pub const DEFAULT_TOLERANCE: f64 = 0.05;
-pub use fourcam::body::{STOCK_GRIP, STOCK_RADIAL_MARGIN};
+pub use marcam::body::{STOCK_GRIP, STOCK_RADIAL_MARGIN};
 /// Guest budget asked for in the manifest (fuel units, MiB, ms).
 pub const LIMITS: (u64, u32, u32) = (100_000_000_000, 128, 30_000);
 /// SolidCraft refuses a plugin file write over this many bytes; a program longer than this
@@ -103,7 +103,7 @@ fn array(items: Value, len: Option<usize>) -> Value {
     v
 }
 
-/// JSON schema of one operation field, from its registry kind. No defaults: 4cam fills
+/// JSON schema of one operation field, from its registry kind. No defaults: marcam fills
 /// every field from the tool, the machine and the part when it is left out.
 fn param_schema(p: &ops::ParamSpec) -> Value {
     let num = json!({"type": "number"});
@@ -130,7 +130,7 @@ fn param_schema(p: &ops::ParamSpec) -> Value {
 }
 
 /// Tool kinds an entry offers: the operation's, but the tapered ball (the plugin's inputs
-/// have no tip or taper; use the 4cam project or a tool library for one).
+/// have no tip or taper; use the marcam project or a tool library for one).
 fn tool_kinds(t: &ops::OperationType) -> Vec<&'static str> {
     t.tool_shapes
         .iter()
@@ -211,9 +211,9 @@ pub fn manifest() -> Value {
         .collect();
     json!({
         "id": PLUGIN_ID,
-        "name": "4cam",
+        "name": "marcam",
         "version": env!("CARGO_PKG_VERSION"),
-        "description": "4th-axis rotary CAM: plan one 4cam operation on a body and write its G-code to a granted folder.",
+        "description": "4th-axis rotary CAM: plan one marcam operation on a body and write its G-code to a granted folder.",
         "capabilities": ["commands@0.1"],
         "runtime": {
             "module": "plugin.wasm",
@@ -270,7 +270,7 @@ pub fn stl_from_mesh_result(r: &Value) -> Result<Vec<u8>, Error> {
     }
     let mut out = Vec::with_capacity(84 + 50 * tris.len());
     let mut header = [0u8; 80];
-    let tag = b"4cam: SolidCraft body (model.mesh, component-local mm)";
+    let tag = b"marcam: SolidCraft body (model.mesh, component-local mm)";
     header[..tag.len()].copy_from_slice(tag);
     out.extend_from_slice(&header);
     out.extend_from_slice(&(tris.len() as u32).to_le_bytes());
@@ -324,12 +324,12 @@ pub struct Outcome {
 }
 
 /// Build the project for one entry: the body (an STL in component-local mm) placed on the
-/// rotary axis, default stock and tool, and the operation filled by 4cam's defaults with
-/// the given fields on top ([`fourcam::body::body_project`], which every CAD adapter shares).
+/// rotary axis, default stock and tool, and the operation filled by marcam's defaults with
+/// the given fields on top ([`marcam::body::body_project`], which every CAD adapter shares).
 /// Returns the project JSON and the program name.
 pub fn build_project(entry: &str, params: &Value, stl: &[u8]) -> Result<(Value, String), Error> {
-    let kind =
-        entry_kind(entry).ok_or_else(|| input("entry", format!("no 4cam operation {entry:?}")))?;
+    let kind = entry_kind(entry)
+        .ok_or_else(|| input("entry", format!("no marcam operation {entry:?}")))?;
     let t = ops::find(kind).ok_or_else(|| input("entry", "unknown operation"))?;
     if params.is_object() {
         // the entry's inputs: no tapered ball here (no tip or taper inputs)
@@ -352,26 +352,26 @@ pub fn build_project(entry: &str, params: &Value, stl: &[u8]) -> Result<(Value, 
             }
         }
     }
-    fourcam::body::body_project(kind, params, stl, &["bodies", "tolerance"]).map_err(|e| match e {
-        fourcam::body::BodyError::Input { field, reason } => Error::Input {
+    marcam::body::body_project(kind, params, stl, &["bodies", "tolerance"]).map_err(|e| match e {
+        marcam::body::BodyError::Input { field, reason } => Error::Input {
             field,
             reason: reason.replace(
                 &format!("not an input of {kind}"),
                 &format!("not an input of {entry}"),
             ),
         },
-        fourcam::body::BodyError::Engine(s) => Error::Engine(s),
+        marcam::body::BodyError::Engine(s) => Error::Engine(s),
     })
 }
 
-/// Plan and post a project built by [`build_project`] the way the `4cam run` command does,
+/// Plan and post a project built by [`build_project`] the way the `marcam run` command does,
 /// with the body STL standing in for the project's mesh file.
 pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String)>, Value), Error> {
     let text = project.to_string();
     let meshes = |src: &MeshSource| src.mesh(stl).ok();
     let libraries = profiles::builtin_libraries();
     let jobs =
-        fourcam::project::jobs_from_any_with(&text, &libraries, &meshes).map_err(Error::Engine)?;
+        marcam::project::jobs_from_any_with(&text, &libraries, &meshes).map_err(Error::Engine)?;
     let mut programs = Vec::new();
     let mut report = Vec::new();
     for (_, job) in &jobs {
@@ -395,7 +395,7 @@ pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String
             .collect();
         let gouges =
             gouge_check(job, &tps, mesh.as_ref()).map_err(|e| Error::Engine(e.to_string()))?;
-        let collisions = fourcam::collision_check(job, &tps, &profile.post)
+        let collisions = marcam::collision_check(job, &tps, &profile.post)
             .map_err(|e| Error::Engine(e.to_string()))?;
         for tp in &tps {
             let gcode = post(tp, &profile.post);
@@ -403,7 +403,7 @@ pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String
                 .iter()
                 .map(|i| i.to_string())
                 .collect();
-            let time = fourcam::estimate::estimate_toolpath(tp, &profile);
+            let time = marcam::estimate::estimate_toolpath(tp, &profile);
             let gouge = gouges.iter().find(|g| g.program == tp.name);
             let coll = collisions.iter().find(|c| c.program == tp.name);
             report.push(json!({

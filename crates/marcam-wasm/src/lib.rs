@@ -1,0 +1,1387 @@
+//! WebAssembly build of marcam. No wasm-bindgen: the module exports `fc_alloc`, `fc_free` and
+//! `fc_call`, and `js/marcam.js` wraps them. Every call takes up to three byte strings (UTF-8
+//! JSON or raw mesh bytes) and returns a JSON document.
+//!
+//! The [`api`] functions are plain Rust so they are tested natively.
+
+pub mod api {
+    use marcam::job::{Job, StockBox};
+    use marcam::profiles::{self, MachineProfile, ToolLibrary};
+    use marcam::{
+        gouge_check, limits_for, plan_with_mesh, post, render, sim, sim3, simulate_job,
+        verify_gcode, Machine, Mesh, Toolpath,
+    };
+    use serde_json::{json, Value};
+
+    pub const EXAMPLE_JOB: &str = include_str!("../data/knob.job.json");
+
+    fn err(msg: impl std::fmt::Display) -> Value {
+        json!({ "error": msg.to_string() })
+    }
+
+    pub fn version() -> Value {
+        json!({ "name": "marcam", "version": env!("CARGO_PKG_VERSION"), "schema_version": marcam::job::SCHEMA_VERSION })
+    }
+
+    /// Built-in machine by name, or the default (Makera Z1) for an empty name.
+    pub fn machine(name: &str) -> Value {
+        let name = if name.is_empty() { "makera-z1" } else { name };
+        match Machine::builtin(name) {
+            Some(m) => serde_json::to_value(m).unwrap_or(Value::Null),
+            None => err(format!(
+                "unknown machine {name:?} (built in: makera-z1, linuxcnc)"
+            )),
+        }
+    }
+
+    /// Machine from a built-in id/alias, a marcam machine profile, an older marcam machine file,
+    /// or a Fusion 360 machine definition (JSON). Empty: the job's `machine`, else the Z1.
+    fn parse_machine(text: &str, job: Option<&Job>) -> Result<MachineProfile, String> {
+        let t = text.trim();
+        let t = if t.is_empty() {
+            job.and_then(|j| j.machine.as_deref())
+                .unwrap_or("makera-z1-4axis")
+        } else {
+            t
+        };
+        if let Some(m) = profiles::builtin_machine(t) {
+            return Ok(m);
+        }
+        if !t.starts_with('{') {
+            return Err(format!("unknown machine {t:?}"));
+        }
+        match profiles::import(t.as_bytes(), "machine.json")?.item {
+            profiles::Imported::Machine(m) => Ok(m),
+            profiles::Imported::Tools(_) => Err("that is a tool library, not a machine".into()),
+        }
+    }
+
+    /// The job to plan from a 0.1 job or a 0.2 project (its first setup).
+    /// (Also given the mesh bytes, so face selections on mesh models resolve.)
+    fn job_any_mesh(text: &str, libs: &[ToolLibrary], mesh: &[u8]) -> Result<Job, String> {
+        let meshes = |src: &marcam::job::MeshSource| {
+            (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
+        };
+        let mut jobs = marcam::project::jobs_from_any_with(text, libs, &meshes)?;
+        if jobs.is_empty() {
+            return Err("the project has no setups".into());
+        }
+        let k = match SETUP.with(|s| s.borrow().clone()) {
+            Some(id) => jobs
+                .iter()
+                .position(|(sid, _)| *sid == id)
+                .ok_or(format!("no setup {id:?}"))?,
+            None => 0,
+        };
+        Ok(jobs.swap_remove(k).1)
+    }
+
+    thread_local! {
+        /// Setup chosen by the current call's `opts.setup` (None = the first).
+        static SETUP: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn with_setup<T>(opts: &Value, f: impl FnOnce() -> T) -> T {
+        let id = opts["setup"].as_str().map(str::to_string);
+        SETUP.with(|s| *s.borrow_mut() = id);
+        let out = f();
+        SETUP.with(|s| *s.borrow_mut() = None);
+        out
+    }
+
+    /// For a 0.2 project: (project operation ids in planning order, their colours).
+    fn op_ids_and_colors(doc: &str) -> Option<(Vec<String>, Vec<Option<String>>)> {
+        let v: Value = serde_json::from_str(doc).ok()?;
+        if v["schema_version"] != "0.2" {
+            return None;
+        }
+        let (p, _) = marcam::project::Project::from_json_any(doc).ok()?;
+        let want = SETUP.with(|s| s.borrow().clone());
+        let setup = match want {
+            Some(id) => p.setup(&id)?,
+            None => p.setups.first()?,
+        };
+        let ids = p.planned_op_ids(setup);
+        let colors = ids
+            .iter()
+            .map(|id| {
+                setup
+                    .operations
+                    .iter()
+                    .find(|o| &o.id == id)
+                    .and_then(|o| o.color.clone())
+            })
+            .collect();
+        Some((ids, colors))
+    }
+
+    /// Built-in libraries plus `opts.libraries` (marcam tool library objects).
+    fn libraries(opts: &Value) -> Result<Vec<ToolLibrary>, String> {
+        let mut libs = profiles::builtin_libraries();
+        for l in opts["libraries"].as_array().into_iter().flatten() {
+            let lib = ToolLibrary::from_json(&l.to_string())?;
+            libs.retain(|x| x.id != lib.id);
+            libs.push(lib);
+        }
+        Ok(libs)
+    }
+
+    /// Built-in machine profiles and tool libraries.
+    pub fn profile_list() -> Value {
+        json!({
+            "machines": profiles::builtin_machines(),
+            "libraries": profiles::builtin_libraries(),
+        })
+    }
+
+    /// Convert a profile file (marcam JSON, Fusion .tools/.json/.mch/.f3d, older machine file)
+    /// into marcam JSON: `{kind: "machine"|"tools", profile, notes}`.
+    pub fn import_profile(bytes: &[u8], name: &str) -> Value {
+        match profiles::import(bytes, name) {
+            Ok(imp) => match imp.item {
+                profiles::Imported::Machine(m) => {
+                    json!({"kind": "machine", "profile": m, "notes": imp.notes})
+                }
+                profiles::Imported::Tools(l) => {
+                    json!({"kind": "tools", "profile": l, "notes": imp.notes})
+                }
+            },
+            Err(e) => err(e),
+        }
+    }
+
+    /// Mesh bytes (STL or 3MF), placed on the axis as the job's `part.mesh` says.
+    fn parse_mesh(job: &Job, bytes: &[u8]) -> Result<Option<Mesh>, String> {
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            match &job.part.mesh {
+                Some(src) => src.mesh(bytes),
+                None => Mesh::from_bytes(bytes),
+            }
+            .map_err(|e| e.to_string())?,
+        ))
+    }
+
+    /// Tool-tip polyline, flattened `[x, r, a, kind, ...]` (kind 0 rapid, 1 feed), thinned
+    /// to about `max_points` points (rapids and direction changes between rapid and feed are
+    /// always kept). 3-axis programs give `[x, y, z, kind, ...]` with kind 2 rapid, 3 feed.
+    fn polyline(tp: &Toolpath, max_points: usize, xyz: bool) -> (Vec<f32>, usize, bool) {
+        let pts = if xyz {
+            render::polyline3(tp)
+        } else {
+            render::polyline(tp)
+        };
+        let kind0 = if xyz { 2u8 } else { 0 };
+        let total = pts.len();
+        let stride = if max_points > 0 && total > max_points {
+            total.div_ceil(max_points)
+        } else {
+            1
+        };
+        let mut out = Vec::with_capacity(4 * (total / stride + 16));
+        for (i, p) in pts.iter().enumerate() {
+            let keep = stride == 1
+                || i % stride == 0
+                || i + 1 == total
+                || !p.3
+                || pts.get(i + 1).is_some_and(|q| !q.3);
+            if keep {
+                out.extend_from_slice(&[
+                    p.0 as f32,
+                    p.1 as f32,
+                    p.2 as f32,
+                    f32::from(kind0 + u8::from(p.3)),
+                ]);
+            }
+        }
+        (out, total, stride > 1)
+    }
+
+    /// Plan, post, verify and gouge-check a job. `opts`: `{"max_points": n}` (default 200000).
+    pub fn plan_and_post(job_json: &str, machine_text: &str, mesh: &[u8], opts: &str) -> Value {
+        let opts_v: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts_v) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts_v, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let profile = match parse_machine(machine_text, Some(&job)) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let machine = profile.post.clone();
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        if job.part.mesh.is_some() && mesh.is_none() {
+            return err(format!(
+                "this job uses the mesh file {:?}: load it too",
+                job.part
+                    .mesh
+                    .as_ref()
+                    .map(|m| m.file.as_str())
+                    .unwrap_or("")
+            ));
+        }
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let max_points = opts["max_points"].as_u64().unwrap_or(200_000) as usize;
+        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+            Ok(t) => t,
+            Err(e) => return err(e),
+        };
+        let gouges = gouge_check(&job, &tps, mesh.as_ref()).unwrap_or_default();
+        let collisions = marcam::collision_check(&job, &tps, &machine).unwrap_or_default();
+        let limits = profiles::check_limits(&job, &tps, &profile);
+        // project operation ids by planning order (0.2 documents), for per-operation times
+        let op_ids = with_setup(&opts_v, || op_ids_and_colors(job_json)).map(|(ids, _)| ids);
+        let mut total_s = 0.0;
+        let programs: Vec<Value> = tps
+            .iter()
+            .map(|tp| {
+                let gcode = post(tp, &machine);
+                let time = marcam::estimate::estimate_toolpath(tp, &profile);
+                total_s += time.estimate.total_s;
+                let ops: Vec<Value> = time
+                    .ops
+                    .iter()
+                    .map(|(id, kind, s)| {
+                        let pid = op_ids.as_ref().and_then(|v| v.get(*id as usize)).cloned();
+                        json!({"index": id, "id": pid, "kind": kind, "seconds": s})
+                    })
+                    .collect();
+                let issues: Vec<String> = verify_gcode(&gcode, &limits_for(tp, &machine))
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect();
+                let g = gouges.iter().find(|g| g.program == tp.name);
+                let c = collisions.iter().find(|c| c.program == tp.name);
+                let (points, total, thinned) = polyline(tp, max_points, job.stock_box.is_some());
+                json!({
+                    "name": tp.name,
+                    "title": tp.title,
+                    "tool": tp.tool,
+                    "lines": gcode.lines().count(),
+                    "gcode": gcode,
+                    "issues": issues,
+                    "gouge": g.map(|g| json!({"moves_checked": g.moves_checked, "max_depth": g.max_depth, "at": g.at})),
+                    "collisions": c,
+                    "safe_r": tp.safe_r,
+                    "time": {
+                        "total_s": time.estimate.total_s,
+                        "feed_s": time.estimate.feed_s,
+                        "rapid_s": time.estimate.rapid_s,
+                        "other_s": time.estimate.other_s,
+                        "feed_mm": time.estimate.feed_mm,
+                        "rapid_mm": time.estimate.rapid_mm,
+                        "ops": ops,
+                    },
+                    "toolpath": { "points": points, "total": total, "thinned": thinned },
+                })
+            })
+            .collect();
+        json!({
+            "machine": machine.name,
+            "machine_id": profile.id,
+            "limits": limits,
+            "tools": job.tools,
+            "stock": job.stock,
+            "stock_box": job.stock_box,
+            "profile": job.part.profile,
+            "mesh_bounds": mesh.as_ref().and_then(|m| m.bounds()),
+            "programs": programs,
+            "time_total_s": total_s,
+        })
+    }
+
+    /// Machining time of any G-code text for `machine` (id/alias or a profile object; default
+    /// Makera Z1): {total_s, feed_s, rapid_s, other_s, feed_mm, rapid_mm, notes}.
+    pub fn estimate_gcode(text: &str, machine_text: &str) -> Value {
+        let profile = match parse_machine(machine_text, None) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let e = marcam::estimate::estimate_gcode(
+            text,
+            &marcam::estimate::Dynamics::from_profile(&profile),
+        );
+        json!({
+            "machine": profile.id,
+            "total_s": e.total_s,
+            "feed_s": e.feed_s,
+            "rapid_s": e.rapid_s,
+            "other_s": e.other_s,
+            "feed_mm": e.feed_mm,
+            "rapid_mm": e.rapid_mm,
+            "notes": e.notes,
+        })
+    }
+
+    /// Simulate all programs in order. `opts`: `{"dx": mm, "na": cells}` (default 0.1, 360).
+    /// Returns the grid, the part map and the stock map after each program (radii, f32).
+    pub fn simulate(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let job = match job_any_mesh(job_json, &profiles::builtin_libraries(), mesh) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let (dx, na) = rotary_res(&opts);
+        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+            Ok(t) => t,
+            Err(e) => return err(e),
+        };
+        if let Some(sb) = job.stock_box {
+            return simulate_xyz(&job, &tps, mesh.as_ref(), &sb, &opts);
+        }
+        let res = match simulate_job(&job, &tps, mesh.as_ref(), dx, na, 0.02) {
+            Ok(r) => r,
+            Err(e) => return err(e),
+        };
+        // replay to capture the stock after each program
+        let mut stock = sim::RadialMap::filled(res.stock.grid, job.stock.radius);
+        let cutters = |t: u32| {
+            job.tool(t)
+                .and_then(|d| marcam::cutter_for(t, d.shape).ok())
+        };
+        let mut stocks = Vec::new();
+        for ((tp, (name, st, dev)), coll) in tps.iter().zip(&res.programs).zip(&res.collisions) {
+            sim::simulate(&mut stock, tp, &cutters, (dx * 2.0).min(0.1));
+            stocks.push(json!({
+                "name": name,
+                "collisions": coll,
+                "samples": st.samples,
+                "cells_cut": st.cells_cut,
+                "rapid_hits": st.rapid_hits.len(),
+                "max_left": dev.max_left,
+                "mean_left": dev.mean_left,
+                "max_gouge": dev.max_gouge,
+                "gouge_cells": dev.gouge_cells,
+                "feature_cells": dev.feature_cells,
+                "r": stock.r,
+            }));
+        }
+        let g = res.stock.grid;
+        json!({
+            "grid": { "x0": g.x0, "dx": g.dx, "nx": g.nx, "na": g.na },
+            "stock_radius": job.stock.radius,
+            "part": res.part.center.r,
+            "stocks": stocks,
+        })
+    }
+
+    /// Oriented mesh triangles (flattened xyz, f32) for display, thinned to about
+    /// `max_triangles` (`opts`, default 200000).
+    pub fn mesh_triangles(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let job = match job_any_mesh(job_json, &profiles::builtin_libraries(), mesh) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let m = match parse_mesh(&job, mesh) {
+            Ok(Some(m)) => m,
+            Ok(None) => return err("no mesh given"),
+            Err(e) => return err(e),
+        };
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let max = opts["max_triangles"].as_u64().unwrap_or(200_000).max(1) as usize;
+        let stride = m.triangles.len().div_ceil(max).max(1);
+        let tri: Vec<f32> = m
+            .triangles
+            .iter()
+            .step_by(stride)
+            .flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32)))
+            .collect();
+        json!({ "triangles": tri, "total": m.triangles.len(), "thinned": stride > 1, "bounds": m.bounds() })
+    }
+
+    // ------------------------------------------------------------ playback sessions
+
+    enum Session {
+        Rotary(sim::Playback),
+        Xyz(sim3::Playback3),
+    }
+
+    /// Cell size for a block: `opts.cell`, else about 240 cells along its longer side.
+    /// The resolution asked for: a preset (`res`: coarse, normal, fine, ultra; default normal)
+    /// with `dx` / `na` / `cell` overriding it.
+    fn preset_of(opts: &Value) -> sim::Resolution {
+        opts["res"]
+            .as_str()
+            .and_then(sim::Resolution::preset)
+            .unwrap_or_else(|| sim::Resolution::preset("normal").expect("built in"))
+    }
+
+    /// Rotary grid: (dx mm, cells around).
+    fn rotary_res(opts: &Value) -> (f64, usize) {
+        let r = preset_of(opts);
+        (
+            opts["dx"].as_f64().unwrap_or(r.dx).max(0.005),
+            (opts["na"].as_u64().map_or(r.na, |v| v as usize)).clamp(8, 8192),
+        )
+    }
+
+    /// 3-axis cell size (mm) for a block.
+    fn cell_for(sb: &StockBox, opts: &Value) -> f64 {
+        opts["cell"]
+            .as_f64()
+            .unwrap_or_else(|| preset_of(opts).cell_for(sb))
+            .max(0.005)
+    }
+
+    /// The simulation grid a document gets at a resolution, without running it: cells and
+    /// rough memory (engine and 3D display), so hosts can warn before very fine grids.
+    pub fn sim_grid(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let mb = |b: f64| (b / 1048576.0 * 10.0).round() / 10.0;
+        if let Some(sb) = job.stock_box {
+            let cell = cell_for(&sb, &opts);
+            let hm = sim3::Heightmap3::new(&sb, cell);
+            let cells = hm.nx * hm.ny;
+            return json!({
+                "kind": "xyz", "cell": cell, "nx": hm.nx, "ny": hm.ny, "cells": cells,
+                "engine_mb": mb(cells as f64 * 18.0), "display_mb": mb(cells as f64 * 48.0),
+                "too_large": cells > sim::MAX_CELLS, "max_cells": sim::MAX_CELLS,
+            });
+        }
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let (dx, na) = rotary_res(&opts);
+        match marcam::sim_grid(&job, mesh.as_ref(), dx, na) {
+            Ok(g) => json!({
+                "kind": "rotary", "dx": g.dx, "na": g.na, "nx": g.nx, "cells": g.len(),
+                "engine_mb": mb(g.len() as f64 * 18.0), "display_mb": mb(g.len() as f64 * 48.0),
+                "too_large": g.len() > sim::MAX_CELLS, "max_cells": sim::MAX_CELLS,
+            }),
+            Err(e) => err(e),
+        }
+    }
+
+    fn grid_xyz(hm: &sim3::Heightmap3) -> Value {
+        json!({"x0": hm.x0, "y0": hm.y0, "cell": hm.cell, "nx": hm.nx, "ny": hm.ny})
+    }
+
+    /// The operation markers of planned programs, as the playback legend lists them.
+    fn ops_of(tps: &[Toolpath]) -> Vec<Value> {
+        let mut ops = Vec::new();
+        for (p, tp) in tps.iter().enumerate() {
+            for m in &tp.moves {
+                if let marcam::Move::Operation { id, kind } = m {
+                    ops.push(json!({"id": id, "tag": id + 1, "kind": kind, "program": tp.name, "program_index": p}));
+                }
+            }
+        }
+        ops
+    }
+
+    fn cutters_of(job: &Job) -> impl Fn(u32) -> Option<marcam::dropcutter::Cutter> + '_ {
+        move |t| {
+            job.tool(t)
+                .and_then(|d| marcam::cutter_for(t, d.shape).ok())
+        }
+    }
+
+    /// Batch simulation of a 3-axis (box stock) job: the block after each program.
+    fn simulate_xyz(
+        job: &Job,
+        tps: &[Toolpath],
+        mesh: Option<&Mesh>,
+        sb: &StockBox,
+        opts: &Value,
+    ) -> Value {
+        let mut hm = sim3::Heightmap3::new(sb, cell_for(sb, opts));
+        if hm.z.len() > sim::MAX_CELLS {
+            return err(format!(
+                "simulation grid too fine: {} cells (limit {})",
+                hm.z.len(),
+                sim::MAX_CELLS
+            ));
+        }
+        let part = mesh
+            .map(|m| sim3::part_top(&hm, m))
+            .unwrap_or_else(|| vec![None; hm.z.len()]);
+        let cutters = cutters_of(job);
+        let step = (hm.cell * 0.5).min(0.1);
+        let intended = marcam::intended_tags(job, tps);
+        let bodies = |t: u32| job.tool(t).map(marcam::collision::ToolBody::of);
+        let mut stocks = Vec::new();
+        for tp in tps {
+            let (st, coll) =
+                marcam::collision::simulate_block(&mut hm, tp, &cutters, &bodies, step, sb.max[2]);
+            let dev = sim3::deviation3_with(&hm, &part, 0.02, &|t| intended.contains(&t));
+            stocks.push(json!({
+                "name": tp.name,
+                "collisions": coll,
+                "samples": st.samples,
+                "cells_cut": st.cells_cut,
+                "rapid_hits": st.rapid_hits.len(),
+                "max_left": dev.max_left,
+                "mean_left": dev.mean_left,
+                "max_gouge": dev.max_gouge,
+                "gouge_cells": dev.gouge_cells,
+                "feature_cells": dev.feature_cells,
+                "z": hm.z.iter().map(|&v| v as f32).collect::<Vec<f32>>(),
+            }));
+        }
+        json!({
+            "kind": "xyz",
+            "grid": grid_xyz(&hm),
+            "stock_box": sb,
+            "part": part.iter().map(|p| p.map(|v| v as f32)).collect::<Vec<_>>(),
+            "stocks": stocks,
+        })
+    }
+
+    /// A playback path point: machine tip [x, y, z], A, rapid, tool, operation tag. Rotary
+    /// moves have the tool on the centreline (y 0, z = radius).
+    fn path_point(sg: &sim::Segment) -> [f32; 7] {
+        let (y, z, a) = match sg.index_a {
+            Some(a) => (sg.to[1], sg.to[2], a),
+            None => (0.0, sg.to[1], sg.to[2]),
+        };
+        [
+            sg.to[0] as f32,
+            y as f32,
+            z as f32,
+            a as f32,
+            f32::from(u8::from(sg.rapid)),
+            sg.tool.unwrap_or(0) as f32,
+            sg.op as f32,
+        ]
+    }
+
+    /// Open a 3-axis playback: like [`sim_open`], on the block.
+    fn sim_open_xyz(
+        job: &Job,
+        tps: &[Toolpath],
+        sb: &StockBox,
+        opts: &Value,
+        job_json: &str,
+    ) -> Value {
+        let hm = sim3::Heightmap3::new(sb, cell_for(sb, opts));
+        if hm.z.len() > sim::MAX_CELLS {
+            return err(format!(
+                "simulation grid too fine: {} cells (limit {})",
+                hm.z.len(),
+                sim::MAX_CELLS
+            ));
+        }
+        let grid = grid_xyz(&hm);
+        let step = (hm.cell * 0.5).min(0.1);
+        let pb = sim3::Playback3::new(hm, tps, &cutters_of(job), step);
+        let mut path = Vec::with_capacity(pb.len() * 7);
+        for sg in &pb.segments {
+            path.extend_from_slice(&path_point(sg));
+        }
+        let first_seg_of_program: Vec<usize> = (0..tps.len())
+            .map(|p| {
+                pb.segments
+                    .iter()
+                    .position(|s| s.program as usize == p)
+                    .unwrap_or(pb.len())
+            })
+            .collect();
+        let out = json!({
+            "kind": "xyz",
+            "grid": grid,
+            "stock_box": sb,
+            "segments": pb.len(),
+            "program_starts": first_seg_of_program,
+            "path": f32s(&path),
+            "ops": ops_of(tps),
+            "project_ops": with_setup(opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| json!({"ids": ids, "colors": colors})),
+            "tools": job.tools,
+        });
+        SESSION.with(|s| *s.borrow_mut() = Some(Session::Xyz(pb)));
+        out
+    }
+
+    thread_local! {
+        static SESSION: std::cell::RefCell<Option<Session>> = const { std::cell::RefCell::new(None) };
+        static GPU_SESSION: std::cell::RefCell<Option<GpuSession>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// What `gpu_stats` needs to turn the browser's GPU keys into a report.
+    #[allow(clippy::large_enum_variant)]
+    enum GpuSession {
+        Rotary {
+            start: sim::RadialMap,
+            part: sim::Part,
+            x_range: (f64, f64),
+            intended: std::collections::HashSet<u16>,
+        },
+        Block {
+            start: sim3::Heightmap3,
+            zbase: f64,
+            part: Vec<Option<f64>>,
+            intended: std::collections::HashSet<u16>,
+        },
+    }
+
+    fn u32s(v: &[u32]) -> String {
+        b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+    }
+
+    /// Inputs for the browser's WebGPU stock simulation (web/gpu/stamp.wgsl) at the asked-for
+    /// resolution: the tool positions (`words`, 16 u32 each), where each segment's and each
+    /// program's positions start, which segments are rapids, the starting keys, the grid and
+    /// the part map. An error means "use the CPU" (indexed 3+1 moves, more than 255
+    /// operations, too large a grid).
+    pub fn gpu_open(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+            Ok(t) => t,
+            Err(e) => return err(e),
+        };
+        let cutters = cutters_of(&job);
+        let intended = marcam::intended_tags(&job, &tps);
+        let names: Vec<&str> = tps.iter().map(|t| t.name.as_str()).collect();
+        let pack = |input: &marcam::gpu_input::GpuInput| {
+            json!({
+                "words": u32s(&input.words),
+                "positions": input.len(),
+                "seg_start": u32s(&input.seg_start),
+                "seg_rapid": b64(&input.seg_rapid.iter().map(|&r| u8::from(r)).collect::<Vec<u8>>()),
+                "prog_seg": input.prog_seg,
+            })
+        };
+        if let Some(sb) = job.stock_box {
+            let hm = sim3::Heightmap3::new(&sb, cell_for(&sb, &opts));
+            if hm.z.len() > sim::MAX_CELLS {
+                return err("simulation grid too fine");
+            }
+            let step = (hm.cell * 0.5).min(0.1);
+            let input = match marcam::gpu_input::block(&hm, &tps, &cutters, step) {
+                Ok(i) => i,
+                Err(e) => return err(e),
+            };
+            let part = mesh
+                .as_ref()
+                .map(|m| sim3::part_top(&hm, m))
+                .unwrap_or_else(|| vec![None; hm.z.len()]);
+            let keys = marcam::gpu_input::block_keys(&hm, input.zbase);
+            let out = json!({
+                "kind": "xyz",
+                "grid": grid_xyz(&hm),
+                "zbase": input.zbase,
+                "stock_box": sb,
+                "keys": u32s(&keys),
+                "input": pack(&input),
+                "programs": names,
+                "part": part.iter().map(|p| p.map(|v| v as f32)).collect::<Vec<_>>(),
+            });
+            GPU_SESSION.with(|g| {
+                *g.borrow_mut() = Some(GpuSession::Block {
+                    start: hm,
+                    zbase: input.zbase,
+                    part,
+                    intended,
+                })
+            });
+            return out;
+        }
+        let (dx, na) = rotary_res(&opts);
+        let res = match simulate_job(&job, &[], mesh.as_ref(), dx, na, 0.02) {
+            Ok(r) => r,
+            Err(e) => return err(e),
+        };
+        let grid = res.stock.grid;
+        let input = match marcam::gpu_input::rotary(grid, &tps, &cutters, (dx * 2.0).min(0.1)) {
+            Ok(i) => i,
+            Err(e) => return err(e),
+        };
+        let start = sim::RadialMap::filled(grid, job.stock.radius);
+        let keys = marcam::gpu_input::rotary_keys(&start);
+        let x_range = match (mesh.as_ref().and_then(|m| m.bounds()), &job.part.profile) {
+            (Some((lo, hi)), _) => (lo[0], hi[0]),
+            (None, Some(p)) => {
+                let g = marcam::geom::RevolvedProfile::new(p, job.stock.radius);
+                (g.x_min(), g.x_max())
+            }
+            _ => (grid.x0, grid.x0 + grid.dx * grid.nx as f64),
+        };
+        let out = json!({
+            "kind": "rotary",
+            "grid": {"x0": grid.x0, "dx": grid.dx, "nx": grid.nx, "na": grid.na},
+            "stock_radius": job.stock.radius,
+            "keys": u32s(&keys),
+            "input": pack(&input),
+            "programs": names,
+            "part": res.part.center.r,
+        });
+        GPU_SESSION.with(|g| {
+            *g.borrow_mut() = Some(GpuSession::Rotary {
+                start,
+                part: res.part,
+                x_range,
+                intended,
+            })
+        });
+        out
+    }
+
+    /// The report for one program's stock as the GPU left it: `keys` (u32 little-endian, as
+    /// read back) after the program; `opts` {rapid_hits}.
+    pub fn gpu_stats(opts: &str, keys: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let keys: Vec<u32> = keys
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
+            .collect();
+        GPU_SESSION.with(|g| {
+            let g = g.borrow();
+            let Some(sess) = g.as_ref() else {
+                return err("no GPU session (call gpu_open)");
+            };
+            let dev = match sess {
+                GpuSession::Rotary {
+                    start,
+                    part,
+                    x_range,
+                    intended,
+                } => {
+                    if keys.len() != start.r.len() {
+                        return err("keys do not match the grid");
+                    }
+                    let mut st = start.clone();
+                    marcam::gpu_input::rotary_from_keys(
+                        &mut st,
+                        &marcam::gpu_input::rotary_keys(start),
+                        &keys,
+                    );
+                    sim::deviation_with(&st, part, x_range.0, x_range.1, 0.02, &|t| {
+                        intended.contains(&t)
+                    })
+                }
+                GpuSession::Block {
+                    start,
+                    zbase,
+                    part,
+                    intended,
+                } => {
+                    if keys.len() != start.z.len() {
+                        return err("keys do not match the grid");
+                    }
+                    let mut hm = start.clone();
+                    marcam::gpu_input::block_from_keys(
+                        &mut hm,
+                        *zbase,
+                        &marcam::gpu_input::block_keys(start, *zbase),
+                        &keys,
+                    );
+                    sim3::deviation3_with(&hm, part, 0.02, &|t| intended.contains(&t))
+                }
+            };
+            json!({
+                "max_left": dev.max_left,
+                "mean_left": dev.mean_left,
+                "max_gouge": dev.max_gouge,
+                "gouge_cells": dev.gouge_cells,
+                "feature_cells": dev.feature_cells,
+                "rapid_hits": opts["rapid_hits"].as_u64().unwrap_or(0),
+            })
+        })
+    }
+
+    /// Standard base64 of raw bytes (typed arrays travel this way: 4/3 the size of the data).
+    pub fn b64(bytes: &[u8]) -> String {
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for c in bytes.chunks(3) {
+            let n = (c[0] as u32) << 16
+                | (*c.get(1).unwrap_or(&0) as u32) << 8
+                | *c.get(2).unwrap_or(&0) as u32;
+            for k in 0..4 {
+                if k <= c.len() {
+                    out.push(T[(n >> (18 - 6 * k) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    fn f32s(v: &[f32]) -> String {
+        b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+    }
+
+    fn u16s(v: &[u16]) -> String {
+        b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+    }
+
+    /// Open a material-removal playback of the whole job. `opts`: `{"dx", "na", "libraries"}`.
+    /// Returns the grid, the part map, the operations, the tools and every segment's end point
+    /// (`path`: f32 [x, y, z, a, rapid, tool, op] per segment, base64: machine tool tip and A).
+    pub fn sim_open(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let (dx, na) = rotary_res(&opts);
+        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+            Ok(t) => t,
+            Err(e) => return err(e),
+        };
+        if let Some(sb) = job.stock_box {
+            return sim_open_xyz(&job, &tps, &sb, &opts, job_json);
+        }
+        // grid and part map exactly as the batch simulation builds them
+        let res = match simulate_job(&job, &[], mesh.as_ref(), dx, na, 0.02) {
+            Ok(r) => r,
+            Err(e) => return err(e),
+        };
+        let grid = res.stock.grid;
+        let cutters = |t: u32| {
+            job.tool(t)
+                .and_then(|d| marcam::cutter_for(t, d.shape).ok())
+        };
+        let pb = sim::Playback::new(
+            sim::RadialMap::filled(grid, job.stock.radius),
+            &tps,
+            &cutters,
+            (dx * 2.0).min(0.1),
+        );
+        let mut path = Vec::with_capacity(pb.len() * 7);
+        for sg in &pb.segments {
+            path.extend_from_slice(&path_point(sg));
+        }
+        let mut ops = Vec::new();
+        for (p, tp) in tps.iter().enumerate() {
+            for m in &tp.moves {
+                if let marcam::Move::Operation { id, kind } = m {
+                    ops.push(json!({"id": id, "tag": id + 1, "kind": kind, "program": tp.name, "program_index": p}));
+                }
+            }
+        }
+        let first_seg_of_program: Vec<usize> = (0..tps.len())
+            .map(|p| {
+                pb.segments
+                    .iter()
+                    .position(|s| s.program as usize == p)
+                    .unwrap_or(pb.len())
+            })
+            .collect();
+        let out = json!({
+            "grid": {"x0": grid.x0, "dx": grid.dx, "nx": grid.nx, "na": grid.na},
+            "stock_radius": job.stock.radius,
+            "part": f32s(&res.part.center.r),
+            "segments": pb.len(),
+            "program_starts": first_seg_of_program,
+            "path": f32s(&path),
+            "ops": ops,
+            "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| json!({"ids": ids, "colors": colors})),
+            "tools": job.tools,
+        });
+        SESSION.with(|s| *s.borrow_mut() = Some(Session::Rotary(pb)));
+        out
+    }
+
+    /// Drop the open playback and GPU sessions (their stock grids): a new project starts clean.
+    pub fn sim_close() -> Value {
+        let had = SESSION.with(|s| s.borrow_mut().take().is_some());
+        let had_gpu = GPU_SESSION.with(|s| s.borrow_mut().take().is_some());
+        json!({"closed": had, "gpu_closed": had_gpu})
+    }
+
+    /// Move the open playback to segment `n`; returns the rows that changed (radii and
+    /// cut-by tags, base64) so the display can update in place.
+    pub fn sim_seek(n: usize) -> Value {
+        SESSION.with(|s| {
+            let mut s = s.borrow_mut();
+            let Some(sess) = s.as_mut() else {
+                return err("no playback open (call sim_open)");
+            };
+            match sess {
+                Session::Rotary(pb) => {
+                    let rows = pb.seek(n);
+                    let pos = pb.position();
+                    match rows {
+                        None => json!({"pos": pos, "rows": null}),
+                        Some((i0, i1)) => {
+                            let na = pb.stock.grid.na;
+                            let (a, b) = (i0 * na, (i1 + 1) * na);
+                            json!({"pos": pos, "rows": [i0, i1],
+                                   "r": f32s(&pb.stock.r[a..b]), "op": u16s(&pb.stock.op[a..b])})
+                        }
+                    }
+                }
+                // 3-axis: rows are Y indices of nx cells; "z" holds the tops
+                Session::Xyz(pb) => {
+                    let rows = pb.seek(n);
+                    let pos = pb.position();
+                    match rows {
+                        None => json!({"pos": pos, "rows": null}),
+                        Some((j0, j1)) => {
+                            let nx = pb.stock.nx;
+                            let (a, b) = (j0 * nx, (j1 + 1) * nx);
+                            let z: Vec<f32> = pb.stock.z[a..b].iter().map(|&v| v as f32).collect();
+                            json!({"pos": pos, "rows": [j0, j1],
+                                   "z": f32s(&z), "op": u16s(&pb.stock.op[a..b])})
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Polylines from an SVG document: `opts` {at: [x, y], height (mm, 0 keeps the size),
+    /// tolerance}; returns {paths, count}.
+    pub fn svg_paths(svg: &str, opts: &str) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let tol = o["tolerance"].as_f64().unwrap_or(0.02).max(0.001);
+        let paths = match marcam::engrave::svg_paths(svg, tol) {
+            Ok(p) => p,
+            Err(e) => return err(e),
+        };
+        let at = [
+            o["at"][0].as_f64().unwrap_or(0.0),
+            o["at"][1].as_f64().unwrap_or(0.0),
+        ];
+        let placed = marcam::engrave::place(&paths, at, o["height"].as_f64().unwrap_or(0.0));
+        // 3 decimals keep documents readable
+        let round: Vec<Vec<[f64; 2]>> = placed
+            .iter()
+            .map(|p| {
+                p.iter()
+                    .map(|q| {
+                        [
+                            (q[0] * 1000.0).round() / 1000.0,
+                            (q[1] * 1000.0).round() / 1000.0,
+                        ]
+                    })
+                    .collect()
+            })
+            .collect();
+        json!({"count": round.len(), "paths": round})
+    }
+
+    /// Face regions of a model (`model` id; the mesh bytes for mesh models), plus each
+    /// triangle's region index and the triangles themselves (f32 base64) for picking.
+    pub fn face_regions(doc: &str, model: &str, mesh: &[u8]) -> Value {
+        let (p, _) = match marcam::project::Project::from_json_any(doc) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let Some(m) = p.models.iter().find(|m| m.id == model.trim()) else {
+            return err(format!("no model {model:?}"));
+        };
+        let mesh = match &m.kind {
+            marcam::project::ModelKind::Profile(prof) => Mesh::revolve(prof, 360),
+            marcam::project::ModelKind::Mesh(src) => match src.mesh(mesh) {
+                Ok(x) => x,
+                Err(e) => return err(e),
+            },
+        };
+        let (regions, of) = marcam::geometry::face_regions(&mesh, 30.0);
+        let tri: Vec<f32> = mesh
+            .triangles
+            .iter()
+            .flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32)))
+            .collect();
+        let idx: Vec<u16> = of.iter().map(|&k| k as u16).collect();
+        json!({"regions": regions, "triangles": f32s(&tri), "region_of": u16s(&idx)})
+    }
+
+    /// Defaults for a new operation: `opts` = {type, setup?, tool?, geometry?, machine?,
+    /// libraries?}. Every parameter comes back filled.
+    pub fn op_defaults(doc: &str, opts: &str, mesh: &[u8]) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let (p, _) = match marcam::project::Project::from_json_any(doc) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let libs = match libraries(&o) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let Some(kind) = o["type"].as_str() else {
+            return err("op_defaults needs a type");
+        };
+        let setup = o["setup"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| p.setups.first().map(|s| s.id.clone()));
+        let Some(setup) = setup else {
+            return err("the project has no setups");
+        };
+        let geometry: Vec<marcam::geometry::Selection> =
+            serde_json::from_value(o["geometry"].clone()).unwrap_or_default();
+        let machine = match &o["machine"] {
+            Value::String(id) => profiles::builtin_machine(id),
+            Value::Object(_) => serde_json::from_value(o["machine"].clone()).ok(),
+            _ => None,
+        };
+        let models = p.models.clone();
+        let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
+            marcam::project::ModelKind::Mesh(src) => {
+                (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
+            }
+            _ => None,
+        };
+        let tool = o["tool"].as_u64().map(|t| t as u32);
+        match p.op_defaults(
+            kind,
+            &setup,
+            tool,
+            &geometry,
+            &libs,
+            machine.as_ref(),
+            &meshes,
+        ) {
+            Ok(v) => v,
+            Err(e) => err(e),
+        }
+    }
+
+    /// Run the knurl wizard on a document (params JSON, mesh bytes for mesh models); returns
+    /// the updated 0.2 project and what was added.
+    pub fn wizard_knurl(doc: &str, params: &str, mesh: &[u8]) -> Value {
+        let (mut p, _) = match marcam::project::Project::from_json_any(doc) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let w: marcam::wizards::KnurlWizard =
+            match serde_json::from_str(if params.trim().is_empty() {
+                "{}"
+            } else {
+                params
+            }) {
+                Ok(w) => w,
+                Err(e) => return err(format!("wizard params: {e}")),
+            };
+        let models = p.models.clone();
+        let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
+            marcam::project::ModelKind::Mesh(src) => {
+                (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
+            }
+            _ => None,
+        };
+        match w.run(&mut p, &meshes) {
+            Ok(res) => json!({"project": p, "added": res}),
+            Err(e) => err(e),
+        }
+    }
+
+    /// Dispatch by name (what `fc_call` uses).
+    /// A one-setup project around a part mesh, for CAD adapters (`marcam::body`):
+    /// `request` is `{"operation": "rotary_finish", ...inputs and the operation's fields}`,
+    /// `mesh` the body's STL/3MF bytes. Returns `{"project", "name"}`; the project's mesh
+    /// model names `<name>.stl` (save the same bytes under that name to plan it again).
+    pub fn body_project(request: &str, mesh: &[u8]) -> Value {
+        let mut req: Value = match serde_json::from_str(if request.trim().is_empty() {
+            "{}"
+        } else {
+            request
+        }) {
+            Ok(v) => v,
+            Err(e) => return err(format!("request: {e}")),
+        };
+        let Some(kind) = req
+            .as_object_mut()
+            .and_then(|o| o.remove("operation"))
+            .and_then(|v| v.as_str().map(str::to_string))
+        else {
+            return err("request needs \"operation\": an operation type");
+        };
+        match marcam::body::body_project(&kind, &req, mesh, &[]) {
+            Ok((project, name)) => json!({"project": project, "name": name}),
+            Err(marcam::body::BodyError::Input { field, reason }) => {
+                json!({"error": format!("{field}: {reason}"), "field": field})
+            }
+            Err(e) => err(e),
+        }
+    }
+
+    pub fn call(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Value {
+        let s = |v: &[u8]| String::from_utf8_lossy(v).into_owned();
+        match name {
+            "version" => version(),
+            "example_job" => serde_json::from_str(EXAMPLE_JOB).unwrap_or(Value::Null),
+            "machine" => machine(&s(a)),
+            "plan_and_post" => plan_and_post(&s(a), &s(b), c, ""),
+            "plan_and_post_opts" => {
+                // a = job, b = {"machine": ..., "max_points": ...}, c = mesh
+                let o: Value = serde_json::from_slice(b).unwrap_or(Value::Null);
+                let m = match &o["machine"] {
+                    Value::String(s) => s.clone(),
+                    Value::Null => String::new(),
+                    v => v.to_string(),
+                };
+                plan_and_post(&s(a), &m, c, &s(b))
+            }
+            "simulate" => simulate(&s(a), &s(b), c),
+            "profile_list" => profile_list(),
+            "face_regions" => face_regions(&s(a), &s(b), c),
+            "wizard_knurl" => wizard_knurl(&s(a), &s(b), c),
+            "body_project" => body_project(&s(a), b),
+            "op_defaults" => op_defaults(&s(a), &s(b), c),
+            "op_types" => serde_json::to_value(marcam::ops::registry()).unwrap_or(Value::Null),
+            "check_project" => match marcam::project::Project::from_json_any(&s(a)) {
+                Ok((p, upgraded)) => {
+                    json!({"project": p, "upgraded": upgraded, "problems": p.check_operations()})
+                }
+                Err(e) => err(e),
+            },
+            "sim_open" => sim_open(&s(a), &s(b), c),
+            "sim_seek" => sim_seek(s(a).trim().parse().unwrap_or(0)),
+            "sim_close" => sim_close(),
+            "import_profile" => import_profile(a, &s(b)),
+            "mesh_triangles" => mesh_triangles(&s(a), &s(b), c),
+            "svg_paths" => svg_paths(&s(a), &s(b)),
+            "estimate_gcode" => estimate_gcode(&s(a), &s(b)),
+            "sim_grid" => sim_grid(&s(a), &s(b), c),
+            "gpu_open" => gpu_open(&s(a), &s(b), c),
+            "gpu_stats" => gpu_stats(&s(a), c),
+            other => err(format!("unknown function {other:?}")),
+        }
+    }
+}
+
+/// Allocate `len` bytes for the host to write into.
+#[no_mangle]
+pub extern "C" fn fc_alloc(len: usize) -> *mut u8 {
+    let mut v = Vec::<u8>::with_capacity(len.max(1));
+    let p = v.as_mut_ptr();
+    std::mem::forget(v);
+    p
+}
+
+/// Free memory from [`fc_alloc`] or a result of [`fc_call`] (`len` = its full length).
+///
+/// # Safety
+/// `ptr` and `len` must come from `fc_alloc(len)` or be a result pointer with its length.
+#[no_mangle]
+pub unsafe extern "C" fn fc_free(ptr: *mut u8, len: usize) {
+    if !ptr.is_null() {
+        drop(Vec::from_raw_parts(ptr, 0, len.max(1)));
+    }
+}
+
+unsafe fn slice<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
+    if ptr.is_null() || len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr, len)
+    }
+}
+
+/// Call `name` with three byte-string arguments. Returns a pointer to a 4-byte little-endian
+/// length followed by that many bytes of JSON; free it with `fc_free(ptr, 4 + length)`.
+///
+/// # Safety
+/// Each pointer/length pair must describe readable memory (or be null/0).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn fc_call(
+    name_ptr: *const u8,
+    name_len: usize,
+    a_ptr: *const u8,
+    a_len: usize,
+    b_ptr: *const u8,
+    b_len: usize,
+    c_ptr: *const u8,
+    c_len: usize,
+) -> *mut u8 {
+    let name = String::from_utf8_lossy(slice(name_ptr, name_len)).into_owned();
+    let out = api::call(
+        &name,
+        slice(a_ptr, a_len),
+        slice(b_ptr, b_len),
+        slice(c_ptr, c_len),
+    )
+    .to_string()
+    .into_bytes();
+    let mut buf = Vec::with_capacity(4 + out.len());
+    buf.extend_from_slice(&(out.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&out);
+    let mut buf = buf.into_boxed_slice();
+    let p = buf.as_mut_ptr();
+    std::mem::forget(buf);
+    p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::api;
+
+    #[test]
+    fn example_runs_through_the_json_api() {
+        let v = api::plan_and_post(api::EXAMPLE_JOB, "", &[], r#"{"max_points": 5000}"#);
+        assert!(v.get("error").is_none(), "{v}");
+        let progs = v["programs"].as_array().unwrap();
+        assert_eq!(progs.len(), 2);
+        assert_eq!(progs[0]["lines"], 21787);
+        assert_eq!(progs[1]["lines"], 15146);
+        for p in progs {
+            assert_eq!(p["issues"].as_array().unwrap().len(), 0);
+            let pts = p["toolpath"]["points"].as_array().unwrap();
+            assert!(pts.len() % 4 == 0 && pts.len() / 4 < 9000, "{}", pts.len());
+            assert_eq!(p["toolpath"]["thinned"], true);
+        }
+        assert!(progs[0]["gouge"]["max_depth"].as_f64().unwrap() < 0.01);
+        assert!(progs[0]["gcode"]
+            .as_str()
+            .unwrap()
+            .starts_with("(Knob radial profile"));
+    }
+
+    #[test]
+    fn machines_errors_and_dispatch() {
+        assert_eq!(api::machine("linuxcnc")["feed_mode"], "inverse_time");
+        assert!(api::machine("nope").get("error").is_some());
+        let v = api::plan_and_post(api::EXAMPLE_JOB, "linuxcnc", &[], "");
+        assert!(v["programs"][0]["gcode"].as_str().unwrap().contains("G93"));
+        assert!(api::plan_and_post("{", "", &[], "").get("error").is_some());
+        let bad = api::EXAMPLE_JOB.replace("\"tool\": 1", "\"tool\": 7");
+        let v = api::plan_and_post(&bad, "", &[], "");
+        assert!(v["error"].as_str().unwrap().contains("T7"));
+        assert!(api::call("nope", &[], &[], &[]).get("error").is_some());
+        assert_eq!(api::call("version", &[], &[], &[])["name"], "marcam");
+    }
+
+    #[test]
+    fn profiles_import_limits_and_library_tools() {
+        let l = api::profile_list();
+        assert_eq!(l["machines"].as_array().unwrap().len(), 4);
+        assert_eq!(l["libraries"][0]["id"], "makera-starter");
+        let fixture = include_bytes!("../../../tests/fixtures/fusion-tool-library.json");
+        let imp = api::import_profile(fixture, "My Tools.json");
+        assert_eq!(imp["kind"], "tools", "{imp}");
+        assert_eq!(imp["profile"]["tools"].as_array().unwrap().len(), 3);
+        assert!(api::import_profile(b"nope", "x.json")
+            .get("error")
+            .is_some());
+        // the knob on the Z1: limit warning for the 4000 mm/min cap
+        let v = api::plan_and_post(api::EXAMPLE_JOB, "makera-z1-4axis", &[], "");
+        assert_eq!(v["machine_id"], "makera-z1-4axis");
+        let lim = v["limits"].as_array().unwrap();
+        assert!(
+            lim.iter()
+                .any(|i| i["message"].as_str().unwrap().contains("F5209")),
+            "{lim:?}"
+        );
+        // a job using an imported library tool, on the Carvera (alias)
+        let mut job: serde_json::Value = serde_json::from_str(api::EXAMPLE_JOB).unwrap();
+        job["tools"][0] = serde_json::json!({"number": 1, "library": "my-tools", "tool": "fixture-flat-3.175-12mm"});
+        let opts = serde_json::json!({"libraries": [imp["profile"]]}).to_string();
+        let v = api::plan_and_post(&job.to_string(), "carvera", &[], &opts);
+        assert!(v.get("error").is_none(), "{v}");
+        assert_eq!(v["machine_id"], "makera-carvera-4axis");
+        assert!(v["programs"][0]["gcode"]
+            .as_str()
+            .unwrap()
+            .contains("(T1 Fixture Flat 3.175*12mm)"));
+        // machine given as a profile object
+        let z1 = serde_json::to_string(&api::profile_list()["machines"][0]).unwrap();
+        assert_eq!(
+            api::plan_and_post(api::EXAMPLE_JOB, &z1, &[], "")["machine_id"],
+            "makera-z1-4axis"
+        );
+    }
+
+    #[test]
+    fn playback_session_seeks_and_reports_rows() {
+        assert_eq!(api::b64(b"Man"), "TWFu");
+        assert_eq!(api::b64(b"Ma"), "TWE=");
+        assert_eq!(api::b64(b"M"), "TQ==");
+        assert!(api::sim_seek(5).get("error").is_some() || api::sim_seek(5)["pos"].is_number());
+        let o = api::sim_open(api::EXAMPLE_JOB, r#"{"dx": 0.2, "na": 90}"#, &[]);
+        assert!(o.get("error").is_none(), "{o}");
+        let n = o["segments"].as_u64().unwrap() as usize;
+        assert!(n > 30_000);
+        assert_eq!(o["ops"].as_array().unwrap().len(), 3);
+        assert_eq!(o["ops"][1]["kind"], "helical_knurl");
+        assert_eq!(o["program_starts"][0], 0);
+        let s = api::sim_seek(2000);
+        assert_eq!(s["pos"], 2000);
+        assert!(s["rows"].is_array(), "{s}");
+        let s = api::sim_seek(10);
+        assert_eq!(s["rows"][0], 0, "jumping back redraws all rows");
+        let s = api::sim_seek(n + 100);
+        assert_eq!(api::sim_close()["closed"], true);
+        assert!(
+            api::sim_seek(5).get("error").is_some(),
+            "the playback is gone after sim_close"
+        );
+        assert_eq!(api::sim_close()["closed"], false);
+        assert_eq!(s["pos"].as_u64().unwrap() as usize, n);
+    }
+
+    #[test]
+    fn mesh_job_needs_mesh_and_simulates() {
+        let job = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/knob/knob_finish.job.json"
+        ))
+        .unwrap();
+        let stl = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/knob/knob.stl"
+        ))
+        .unwrap();
+        assert!(api::plan_and_post(&job, "", &[], "").get("error").is_some());
+        let tri = api::mesh_triangles(&job, r#"{"max_triangles": 1000}"#, &stl);
+        assert_eq!(tri["total"], 10080);
+        assert!(tri["triangles"].as_array().unwrap().len() <= 1000 * 9);
+        // profile-only job simulates fine at a coarse grid
+        let s = api::simulate(api::EXAMPLE_JOB, r#"{"dx": 0.2, "na": 90}"#, &[]);
+        assert!(s.get("error").is_none(), "{}", s["error"]);
+        let st = s["stocks"].as_array().unwrap();
+        assert_eq!(st.len(), 2);
+        assert_eq!(st[0]["rapid_hits"], 0);
+        assert_eq!(st[0]["gouge_cells"], 0);
+        let n = s["grid"]["nx"].as_u64().unwrap() * s["grid"]["na"].as_u64().unwrap();
+        assert_eq!(st[0]["r"].as_array().unwrap().len() as u64, n);
+    }
+}

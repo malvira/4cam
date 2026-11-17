@@ -1,6 +1,6 @@
-# Embedding 4cam
+# Embedding marcam
 
-4cam is meant to be embedded the way slicers embed a slicing engine: one engine, the same
+marcam is meant to be embedded the way slicers embed a slicing engine: one engine, the same
 defaults and checks everywhere, called with JSON. Each language below gets the same
 documents, the project in and the results out (`docs/api.md` lists the fields). Every
 quickstart has a runnable copy in `examples/embed/`, and `sh scripts/test-embed.sh` runs
@@ -8,17 +8,17 @@ them all on the knob example.
 
 | Host | Use | Example |
 | --- | --- | --- |
-| Rust | the `fourcam-core` crate (library `fourcam`) | `examples/embed/rust` |
-| C, C++, anything with a C FFI | the C library `fourcam_c` and `fourcam.h` | `examples/embed/c` |
+| Rust | the `marcam-core` crate (library `marcam`) | `examples/embed/rust` |
+| C, C++, anything with a C FFI | the C library `marcam_c` and `marcam.h` | `examples/embed/c` |
 | .NET (SolidWorks add-ins, ...) | the C library through P/Invoke | `examples/embed/csharp` |
-| Python (FreeCAD, scripts) | the `fourcam` wheel | `examples/embed/python` |
-| JavaScript (Node, browsers, Electron) | the `fourcam` npm package (WebAssembly) | `examples/embed/node` |
-| any language, as a process | the `4cam` command | below |
-| FreeCAD | the `fourcam_freecad` adapter on the wheel | `adapters/freecad`, `docs/adapters/freecad.md` |
+| Python (FreeCAD, scripts) | the `marcam` wheel | `examples/embed/python` |
+| JavaScript (Node, browsers, Electron) | the `marcam` npm package (WebAssembly) | `examples/embed/node` |
+| any language, as a process | the `marcam` command | below |
+| FreeCAD | the `marcam_freecad` adapter on the wheel | `adapters/freecad`, `docs/adapters/freecad.md` |
 | SolidCraft | the WebAssembly plugin | `adapters/solidcraft`, `docs/adapters/solidcraft.md` |
 
-CAD adapters share one engine function, `body_project` (Rust `fourcam::body`, Python
-`fourcam.body_project`, or `call("body_project", ...)`). It builds a one-setup project round a
+CAD adapters share one engine function, `body_project` (Rust `marcam::body`, Python
+`marcam.body_project`, or `call("body_project", ...)`). It builds a one-setup project round a
 part mesh, with every field defaulted, so every CAD host places the body and picks the stock
 and tool the same way.
 
@@ -37,7 +37,7 @@ In every case:
 ## Rust
 
 ```rust
-use fourcam::{load_mesh, plan_with_mesh, post, profiles, project};
+use marcam::{load_mesh, plan_with_mesh, post, profiles, project};
 let libs = profiles::builtin_libraries();
 for (setup, job) in project::jobs_from_any_with(&text, &libs, &|src| src.load(dir).ok())? {
     let mesh = load_mesh(&job, dir)?;
@@ -55,60 +55,60 @@ operations (`ops`).
 ## C and C++
 
 ```c
-#include "fourcam.h"            /* crates/fourcam-capi/include */
-char *v = fourcam_version();
+#include "marcam.h"            /* crates/marcam-capi/include */
+char *v = marcam_version();
 puts(v);
-fourcam_free(v);
-char *r = fourcam_plan_and_post(project_json, NULL, mesh, mesh_len, NULL);
+marcam_free(v);
+char *r = marcam_plan_and_post(project_json, NULL, mesh, mesh_len, NULL);
 if (strncmp(r, "{\"error\"", 8) == 0) { /* report it */ }
 /* ... parse r (JSON) with your JSON library ... */
-fourcam_free(r);
+marcam_free(r);
 ```
 
-- Link `fourcam_c`, built by `cargo build -p fourcam-capi --release` as
-  `target/release/fourcam_c.dll` (+ `.dll.lib`), `libfourcam_c.so` or `.dylib`, with a
+- Link `marcam_c`, built by `cargo build -p marcam-capi --release` as
+  `target/release/marcam_c.dll` (+ `.dll.lib`), `libmarcam_c.so` or `.dylib`, with a
   static library beside it.
-- Functions: `fourcam_plan_and_post`, `fourcam_simulate`, `fourcam_estimate_gcode`,
-  `fourcam_op_types`, `fourcam_op_defaults`, `fourcam_check_project`, `fourcam_call` (any
-  engine function by name), `fourcam_version` and `fourcam_abi_version`.
-- Free every returned string with `fourcam_free`. NULL inputs count as empty. The functions
+- Functions: `marcam_plan_and_post`, `marcam_simulate`, `marcam_estimate_gcode`,
+  `marcam_op_types`, `marcam_op_defaults`, `marcam_check_project`, `marcam_call` (any
+  engine function by name), `marcam_version` and `marcam_abi_version`.
+- Free every returned string with `marcam_free`. NULL inputs count as empty. The functions
   can be called from any thread.
 
 ## C# / .NET
 
 ```csharp
-[DllImport("fourcam_c")] static extern IntPtr fourcam_plan_and_post(
+[DllImport("marcam_c")] static extern IntPtr marcam_plan_and_post(
     [MarshalAs(UnmanagedType.LPUTF8Str)] string project, [MarshalAs(UnmanagedType.LPUTF8Str)] string? machine,
     byte[]? mesh, nuint meshLen, [MarshalAs(UnmanagedType.LPUTF8Str)] string? opts);
-[DllImport("fourcam_c")] static extern void fourcam_free(IntPtr s);
+[DllImport("marcam_c")] static extern void marcam_free(IntPtr s);
 
-IntPtr p = fourcam_plan_and_post(File.ReadAllText("knob.project.json"), null, null, 0, null);
+IntPtr p = marcam_plan_and_post(File.ReadAllText("knob.project.json"), null, null, 0, null);
 try { using var doc = JsonDocument.Parse(Marshal.PtrToStringUTF8(p)!); /* doc.RootElement */ }
-finally { fourcam_free(p); }
+finally { marcam_free(p); }
 ```
 
-Put `fourcam_c.dll` next to the add-in, or on the DLL search path.
+Put `marcam_c.dll` next to the add-in, or on the DLL search path.
 
 ## Python
 
 ```python
-import json, fourcam
+import json, marcam
 project = json.load(open("knob.project.json"))
-result = fourcam.plan_and_post(project, mesh=None)   # mesh: a path or bytes
+result = marcam.plan_and_post(project, mesh=None)   # mesh: a path or bytes
 for p in result["programs"]:
     print(p["name"], p["lines"], "lines,", len(p["issues"]), "issues")
 open("out.nc", "w").write(result["programs"][0]["gcode"])
-sim = fourcam.simulate(project, dx=0.1, na=360)
+sim = marcam.simulate(project, dx=0.1, na=360)
 ```
 
 - Build the wheel with `python scripts/build_wheel.py`, or `maturin build` in
-  `crates/fourcam-py`; see `docs/packaging.md`.
+  `crates/marcam-py`; see `docs/packaging.md`.
 - One abi3 wheel serves Python 3.9 and later.
 
 ## JavaScript (Node, browsers)
 
 ```js
-import { init } from "fourcam";            // the npm package: fourcam.wasm + a small wrapper
+import { init } from "marcam";            // the npm package: marcam.wasm + a small wrapper
 const cam = await init();
 const result = cam.planAndPost(project, "", meshBytes);   // "": the project's machine
 if (result.error) throw new Error(result.error);
@@ -117,15 +117,15 @@ const sim = cam.simulate(project, { res: "normal" }, meshBytes);
 ```
 
 - `scripts/build-npm.sh` builds the package into `target/pkg/npm`.
-- In a page, `load(url)` takes your own URL for `fourcam.wasm`.
+- In a page, `load(url)` takes your own URL for `marcam.wasm`.
 - Heavy calls block: run them in a Web Worker, as `web/app.js` does.
 
 ## The command line
 
 ```sh
-4cam run knob.project.json --out out/          # G-code, previews, checks; exit code 1 on problems
-4cam simulate knob.project.json --sim-res normal
-4cam ops defaults rotary_finish knob.project.json
+marcam run knob.project.json --out out/          # G-code, previews, checks; exit code 1 on problems
+marcam simulate knob.project.json --sim-res normal
+marcam ops defaults rotary_finish knob.project.json
 ```
 
 ## Threads and memory

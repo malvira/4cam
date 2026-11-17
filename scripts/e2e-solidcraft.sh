@@ -5,7 +5,7 @@
 #
 # Builds the plugin, then in one solidcraft-cli session: revolves a knob, installs the plugin
 # with a write grant on a scratch folder, and runs each entry (default: all of them) on the
-# knob. Then runs `4cam run` on the project each entry
+# knob. Then runs `marcam run` on the project each entry
 # wrote and requires the G-code to be byte-identical. SolidCraft's plugin folder is pointed
 # at a scratch directory (LOCALAPPDATA / XDG_DATA_HOME / HOME), so nothing of the user's
 # SolidCraft set-up is touched. Skips (exit 0) when SOLIDCRAFT_CLI is not set.
@@ -18,22 +18,22 @@ fi
 ENTRIES=${*:-"rotary-rough rotary-finish helical-knurl flank-chamfer face pocket drill contour raster3d rough3d engrave vcarve"}
 
 sh scripts/build-solidcraft-plugin.sh >/dev/null
-cargo build -q --release -p fourcam-cli
-FOURCAM=target/release/4cam
-[ -x "$FOURCAM" ] || FOURCAM=target/release/4cam.exe
+cargo build -q --release -p marcam-cli
+MARCAM=target/release/marcam
+[ -x "$MARCAM" ] || MARCAM=target/release/marcam.exe
 
 WORK=$(pwd)/target/solidcraft-e2e
 rm -rf "$WORK"
 mkdir -p "$WORK/data" "$WORK/out"
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi; }
 OUT=$(native "$WORK/out")
-ZIP=$(native "$(pwd)/target/solidcraft-plugin/fourcam.zip")
-PKG=$(native "$(pwd)/target/solidcraft-plugin/fourcam")
+ZIP=$(native "$(pwd)/target/solidcraft-plugin/marcam.zip")
+PKG=$(native "$(pwd)/target/solidcraft-plugin/marcam")
 export LOCALAPPDATA=$(native "$WORK/data") XDG_DATA_HOME="$WORK/data" HOME="$WORK/data"
 case "$(uname -s)" in
-  Darwin) INSTALLED="$WORK/data/Library/Application Support/SolidCraft/plugins/fourcam" ;;
-  Linux) INSTALLED="$WORK/data/solidcraft/plugins/fourcam" ;;
-  *) INSTALLED="$WORK/data/SolidCraft/plugins/fourcam" ;;
+  Darwin) INSTALLED="$WORK/data/Library/Application Support/SolidCraft/plugins/marcam" ;;
+  Linux) INSTALLED="$WORK/data/solidcraft/plugins/marcam" ;;
+  *) INSTALLED="$WORK/data/SolidCraft/plugins/marcam" ;;
 esac
 INSTALLED=$(native "$INSTALLED")
 
@@ -71,11 +71,11 @@ for e in $ENTRIES; do
   if [ ! -f "$WORK/out/$base.nc" ]; then
     echo "FAIL $e: the plugin wrote no $base.nc"; fail=1; continue
   fi
-  "$FOURCAM" run "$WORK/out/$base.project.json" --out "$WORK/cli-$kind" > "$WORK/cli-$kind.log"
+  "$MARCAM" run "$WORK/out/$base.project.json" --out "$WORK/cli-$kind" > "$WORK/cli-$kind.log"
   if cmp -s "$WORK/out/$base.nc" "$WORK/cli-$kind/$base.nc"; then
-    echo "ok   $e: $(wc -l < "$WORK/out/$base.nc") lines$note, identical to 4cam run"
+    echo "ok   $e: $(wc -l < "$WORK/out/$base.nc") lines$note, identical to marcam run"
   else
-    echo "FAIL $e: plugin G-code differs from 4cam run"; fail=1
+    echo "FAIL $e: plugin G-code differs from marcam run"; fail=1
   fi
 done
 [ $fail -eq 0 ] && echo "SOLIDCRAFT E2E PASSED"

@@ -50,7 +50,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   const opKey = (o) => `${o.program}#${o.id}#${o.kind}`;
   const savedColors = () => {
     try {
-      return JSON.parse(localStorage.getItem("4cam.opColors") || "{}");
+      return JSON.parse(localStorage.getItem("marcam.opColors") || "{}");
     } catch {
       return {};
     }
@@ -474,7 +474,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const saved = savedColors();
     saved[opKey(o)] = inp.value;
     try {
-      localStorage.setItem("4cam.opColors", JSON.stringify(saved));
+      localStorage.setItem("marcam.opColors", JSON.stringify(saved));
     } catch {}
     // recolour every vertex from the tag mirror
     if (m.stockMesh && m.xyz) {

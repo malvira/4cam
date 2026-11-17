@@ -1,7 +1,7 @@
-// Plan a 4cam project from Node and print its programs.
+// Plan a marcam project from Node and print its programs.
 //   node plan.mjs project.json [mesh.stl]
 import { readFileSync } from "node:fs";
-import { init } from "fourcam";
+import { init } from "marcam";
 
 const cam = await init();
 const project = JSON.parse(readFileSync(process.argv[2], "utf8"));

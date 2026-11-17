@@ -1,5 +1,5 @@
-"""Build the `fourcam` Python wheel without extra tools: cargo builds the pyo3 extension,
-this script packs it (stdlib only). Output: target/wheels/fourcam-<ver>-cp39-abi3-<plat>.whl
+"""Build the `marcam` Python wheel without extra tools: cargo builds the pyo3 extension,
+this script packs it (stdlib only). Output: target/wheels/marcam-<ver>-cp39-abi3-<plat>.whl
 
     python scripts/build_wheel.py
 """
@@ -18,33 +18,33 @@ VERSION = "0.1.0"
 
 def main() -> Path:
     subprocess.run(
-        ["cargo", "build", "--release", "-p", "fourcam-py"],
+        ["cargo", "build", "--release", "-p", "marcam-py"],
         cwd=ROOT,
         check=True,
         env={**__import__("os").environ, "PYO3_PYTHON": sys.executable},
     )
     rel = ROOT / "target" / "release"
     if sys.platform == "win32":
-        built, module = rel / "fourcam.dll", "fourcam.pyd"
+        built, module = rel / "marcam.dll", "marcam.pyd"
     elif sys.platform == "darwin":
-        built, module = rel / "libfourcam.dylib", "fourcam.abi3.so"
+        built, module = rel / "libmarcam.dylib", "marcam.abi3.so"
     else:
-        built, module = rel / "libfourcam.so", "fourcam.abi3.so"
+        built, module = rel / "libmarcam.so", "marcam.abi3.so"
     plat = sysconfig.get_platform().replace("-", "_").replace(".", "_")
     tag = f"cp39-abi3-{plat}"
-    dist = f"fourcam-{VERSION}.dist-info"
+    dist = f"marcam-{VERSION}.dist-info"
     files = {
         module: built.read_bytes(),
         f"{dist}/METADATA": (
             "Metadata-Version: 2.1\n"
-            f"Name: fourcam\nVersion: {VERSION}\n"
+            f"Name: marcam\nVersion: {VERSION}\n"
             "Summary: 4th-axis rotary CAM engine (Python bindings)\n"
             "License: Apache-2.0\n"
-            "Home-page: https://github.com/malvira/4cam\n"
+            "Home-page: https://github.com/malvira/marcam\n"
             "Requires-Python: >=3.9\n"
         ).encode(),
         f"{dist}/WHEEL": (
-            "Wheel-Version: 1.0\nGenerator: 4cam build_wheel.py\n"
+            "Wheel-Version: 1.0\nGenerator: marcam build_wheel.py\n"
             f"Root-Is-Purelib: false\nTag: {tag}\n"
         ).encode(),
     }
@@ -56,7 +56,7 @@ def main() -> Path:
     files[f"{dist}/RECORD"] = ("\n".join(record) + "\n").encode()
     out_dir = ROOT / "target" / "wheels"
     out_dir.mkdir(parents=True, exist_ok=True)
-    whl = out_dir / f"fourcam-{VERSION}-{tag}.whl"
+    whl = out_dir / f"marcam-{VERSION}-{tag}.whl"
     with zipfile.ZipFile(whl, "w", zipfile.ZIP_DEFLATED) as z:
         for name, data in files.items():
             z.writestr(name, data)

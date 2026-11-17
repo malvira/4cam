@@ -1,14 +1,14 @@
 # Machine profiles and tool libraries
 
-4cam keeps what it knows about machines and cutters in two versioned JSON formats. Built-in
-ones live in `profiles/`. Your own go in the user profile folder (`4cam profiles dir`) or, in
+marcam keeps what it knows about machines and cutters in two versioned JSON formats. Built-in
+ones live in `profiles/`. Your own go in the user profile folder (`marcam profiles dir`) or, in
 the web app, in browser storage.
 
-## Machine profile (`"format": "4cam-machine"`, `"version": 1`)
+## Machine profile (`"format": "marcam-machine"`, `"version": 1`)
 
 ```json
 {
-  "format": "4cam-machine", "version": 1,
+  "format": "marcam-machine", "version": 1,
   "id": "makera-z1-4axis", "name": "Makera Z1 with 4th axis",
   "vendor": "Makera", "model": "Z1",
   "sources": [{ "url": "...", "note": "what came from where" }],
@@ -50,7 +50,7 @@ if a machine has none.
   moves positive. Fusion 360 machine files give the carriage's own direction instead, so the
   importer reverses axes that move the table rather than the head. A Makera table's Y
   `[0, -1, 0]` becomes `[0, 1, 0]`.
-- **The axis map.** 4cam's toolpaths use one convention: X, Y, Z are the tool's motion
+- **The axis map.** marcam's toolpaths use one convention: X, Y, Z are the tool's motion
   relative to the work, and A turns the work right-handed about +X. When a profile loads,
   `axis_map` works out each word for this machine:
   - each linear word comes from the axis that moves the tool along that direction, with its
@@ -67,7 +67,7 @@ if a machine has none.
 **Optional fields.** Anything a source doesn't give is left out, and the reason goes in
 `notes`.
 
-**Post templates (`post`).** These fields control the G-code 4cam writes:
+**Post templates (`post`).** These fields control the G-code marcam writes:
 
 | Field | Meaning |
 | --- | --- |
@@ -92,13 +92,13 @@ toolpaths:
 - *Warnings*, which run but not as planned: feeds or A rates above the controller's caps. The
   controller clamps them, so the job runs slower.
 
-`4cam run` prints both kinds and fails on errors. The web app shows them per program.
+`marcam run` prints both kinds and fails on errors. The web app shows them per program.
 
-## Tool library (`"format": "4cam-tools"`, `"version": 1`)
+## Tool library (`"format": "marcam-tools"`, `"version": 1`)
 
 ```json
 {
-  "format": "4cam-tools", "version": 1, "id": "makera-starter", "name": "Makera starter tools",
+  "format": "marcam-tools", "version": 1, "id": "makera-starter", "name": "Makera starter tools",
   "tools": [
     {
       "id": "spiral-o-metal-3.175x12", "number": 1,
@@ -125,7 +125,7 @@ These are the shapes a tool can have, and how the strategies use each:
 
 ### What is above the flutes: shank, stickout, holder
 
-A tool's body above the cutting edge is checked against the stock (see `4cam run`'s
+A tool's body above the cutting edge is checked against the stock (see `marcam run`'s
 "holder/shank check"). Library and inline tools take these fields. Every one has a default:
 
 | Field | Meaning | Default |
@@ -171,10 +171,10 @@ header.
 
 ## Importing
 
-`4cam profiles import <file-or-url>`, or **Import** in the web app's tool library panel,
+`marcam profiles import <file-or-url>`, or **Import** in the web app's tool library panel,
 reads any of these formats:
 
-- **4cam JSON:** either of the formats above.
+- **marcam JSON:** either of the formats above.
 - **Fusion 360 tool library:** `.tools` (a zip containing `tools.json`) or the JSON itself.
   The tool types map as follows:
   - flat, slot and face mills → `flat`;
@@ -197,7 +197,7 @@ reads any of these formats:
     time becomes `inverse_time`.
 
   Makera machines get Makera post templates. Missing data is reported in `notes`.
-- **Older 4cam machine file:** post templates only.
+- **Older marcam machine file:** post templates only.
 
 ## Makera sources (checked 2026-11-15)
 
@@ -215,11 +215,11 @@ It contains:
 "Copyright (C) 2012-2022 by Autodesk, Inc.". So none of these files are copied into this
 repository:
 
-- 4cam's built-in profiles are written from the facts in them, with sources cited in each
+- marcam's built-in profiles are written from the facts in them, with sources cited in each
   profile.
 - The importers accept the original files at runtime.
 - The tests use synthetic files in the same format (`tests/fixtures/`).
-- `crates/fourcam-core/tests/makera_downloads.rs` runs against the real files when they are
+- `crates/marcam-core/tests/makera_downloads.rs` runs against the real files when they are
   cached in `profiles/_downloads/` (ignored by git).
 
 **What the Makera files say:**
@@ -234,7 +234,7 @@ repository:
   `manual`.
 - **Carvera and Carvera Air 4-axis:** A about +X, 4000 mm/min, 6-tool changer, no travel or
   spindle limits. Ours come from published specs and are marked as such in `notes`.
-- **Feed mode:** the post uses `FEED_DPM` with `DPM_COMBINATION`, which is what 4cam calls
+- **Feed mode:** the post uses `FEED_DPM` with `DPM_COMBINATION`, which is what marcam calls
   `degrees_as_length`. It matches the Z1 profile that produced the cut knob G-code (cut on
   Mar's Z1, 2026-11-03: the Z1 counts degrees as distance).
 - **Carvera and Carvera Air feeds:** the Carvera firmware documents its own rule, which these
@@ -246,7 +246,7 @@ repository:
   (pad 0, 2376 deg/min). Sources:
   [rotary feed rate](https://carvera-community.gitbook.io/docs/firmware/features/rotary-a-feed-rate),
   [firmware 2.1.0c](https://carvera-community.gitbook.io/docs/updates/firmware-controller-2.1.0c).
-- **Where `Carvera.cps` differs from the 4cam Z1 templates** (none of these change feeds or
+- **Where `Carvera.cps` differs from the marcam Z1 templates** (none of these change feeds or
   motion):
   - the tool change is `T1M6`, where ours is `M6 T1`;
   - the program starts `G90 G94 G17` + `G21`, where ours is `G21 G90 G94` + `G17`;

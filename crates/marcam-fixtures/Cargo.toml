@@ -1,0 +1,20 @@
+[package]
+name = "marcam-fixtures"
+description = "Test-fixture generators for marcam (parts used by examples and tests; not part of the engine)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "marcam-fixtures"
+path = "src/main.rs"
+
+[dependencies]
+marcam-core = { version = "0.1.0", path = "../marcam-core" }

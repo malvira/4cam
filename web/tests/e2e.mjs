@@ -97,7 +97,7 @@ if (!url) {
   await waitFor(() => fetch(url).then((r) => r.ok), "the web server", 15000);
 }
 
-const profile = mkdtempSync(join(tmpdir(), "fourcam-e2e-"));
+const profile = mkdtempSync(join(tmpdir(), "marcam-e2e-"));
 const downloads = join(profile, "downloads");
 mkdirSync(downloads);
 const dport = await freePort();
@@ -107,7 +107,7 @@ const browser = spawn(findBrowser(), [
   // WebGPU in headless mode, where the machine has a GPU (the GPU checks fall back otherwise)
   "--enable-unsafe-webgpu", "--enable-gpu",
   // no GPU at all (CI runners): WebGL on the CPU (SwiftShader), so the 3D view still runs
-  ...(process.env.FOURCAM_E2E_SOFTWARE_GL ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : []),
+  ...(process.env.MARCAM_E2E_SOFTWARE_GL ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : []),
   "about:blank",
 ], { stdio: "ignore" });
 children.push(browser);
@@ -136,32 +136,32 @@ async function waitDone(what, timeoutMs) {
 }
 // Solids must render closed: looking down the rotary axis at either end, the middle of the
 // view must show the end face, not the background through an open shell.
-const VIEW_PREFIX = process.env.FOURCAM_SHOT_PREFIX || "";
+const VIEW_PREFIX = process.env.MARCAM_SHOT_PREFIX || "";
 async function closedViews(tag) {
   const bg = [0, 0, 0];
   const out = [];
   for (const layer of ["part", "stock", "sim"]) {
-    const has = await js(`window.__4cam.state.three.groups.${layer}.children.length > 0`);
+    const has = await js(`window.__marcam.state.three.groups.${layer}.children.length > 0`);
     if (!has) continue;
     for (const end of ["front", "back"]) {
       const show = { path: false, axes: false, part: layer === "part", stock: layer === "stock", sim: layer === "sim" };
-      await js(`window.__4cam.setView(${JSON.stringify(end)}, ${JSON.stringify(show)})`);
+      await js(`window.__marcam.setView(${JSON.stringify(end)}, ${JSON.stringify(show)})`);
       await sleep(200);
       // the axis line of sight and a small ring around it must all hit the end face
       let px = [], filled = true;
       for (const [fx, fy] of [[0.5, 0.5], [0.49, 0.5], [0.51, 0.5], [0.5, 0.49], [0.5, 0.51]]) {
-        const p = String(await js(`window.__4cam.pixelAt(${fx}, ${fy})`)).split(",").map(Number);
+        const p = String(await js(`window.__marcam.pixelAt(${fx}, ${fy})`)).split(",").map(Number);
         if (!p.some((c, k) => Math.abs(c - bg[k]) > 4)) filled = false; // background is exactly black
         px = p;
       }
       await shot(`${VIEW_PREFIX}view_${tag}_${layer}_${end}`);
       out.push({ layer, end, filled, px });
     }
-    await js(`window.__4cam.setView("iso", { path: false, axes: false, part: ${layer === "part"}, stock: ${layer === "stock"}, sim: ${layer === "sim"} })`);
+    await js(`window.__marcam.setView("iso", { path: false, axes: false, part: ${layer === "part"}, stock: ${layer === "stock"}, sim: ${layer === "sim"} })`);
     await sleep(200);
     await shot(`${VIEW_PREFIX}view_${tag}_${layer}_iso`);
   }
-  await js(`window.__4cam.setView("iso", { path: true, axes: true, part: true, stock: true, sim: true })`);
+  await js(`window.__marcam.setView("iso", { path: true, axes: true, part: true, stock: true, sim: true })`);
   return out;
 }
 
@@ -196,14 +196,14 @@ try {
 
   // 2. 3D view (three.js from the CDN) and the scrubber
   await js("document.querySelectorAll('#tabs button')[0].click()");
-  await waitFor(() => js("!!(window.__4cam.state.three && (window.__4cam.state.three.failed || window.__4cam.state.three.cutLines))"), "the 3D view", 30000);
-  const three = await js("window.__4cam.state.three.failed ? 'failed: ' + document.getElementById('viewNote').textContent : 'ok'");
+  await waitFor(() => js("!!(window.__marcam.state.three && (window.__marcam.state.three.failed || window.__marcam.state.three.cutLines))"), "the 3D view", 30000);
+  const three = await js("window.__marcam.state.three.failed ? 'failed: ' + document.getElementById('viewNote').textContent : 'ok'");
   check("3D preview renders (three.js)", three === "ok", three);
   if (three === "ok") {
-    const full = await js("window.__4cam.state.three.cutLines.geometry.drawRange.count");
+    const full = await js("window.__marcam.state.three.cutLines.geometry.drawRange.count");
     await js("const s = document.getElementById('scrub'); s.value = 3000; s.dispatchEvent(new Event('input')); true");
     await sleep(300);
-    const part = await js("window.__4cam.state.three.cutLines.geometry.drawRange.count");
+    const part = await js("window.__marcam.state.three.cutLines.geometry.drawRange.count");
     const label = await js("document.getElementById('scrubLabel').textContent");
     check("scrubber limits the drawn toolpath", part > 0 && part < full, `${part} of ${full} vertices; ${label}`);
     await shot("01_knob_scrubbed");
@@ -230,11 +230,11 @@ try {
   // 4b. solid machining simulation: playback, scrubbing, per-operation colours
   await js("document.getElementById('simOpen').click(); true");
   await waitFor(() => js("document.body.dataset.machining === 'open'"), "the machining simulation", 60000);
-  const M = "window.__4cam.machining.state";
+  const M = "window.__marcam.machining.state";
   const nseg = await js(`${M}.session.segments`);
   const ops = await js(`${M}.session.ops.map(o => o.kind).join(',')`);
   check("machining simulation opens with the job's operations", nseg > 30000 && ops === "rotary_turning,helical_knurl,flank_chamfer", `${nseg} moves; ${ops}`);
-  await js("window.__4cam.setView('iso', {})");
+  await js("window.__marcam.setView('iso', {})");
   await sleep(300);
   await shot("08_machining_start");
   const seekTo = async (n) => {
@@ -247,7 +247,7 @@ try {
   const rough1 = await cutCells(1);
   const minR = await js(`Math.min(...${M}.r)`);
   check("seeking cuts the stock (mid-roughing)", rough1 > 1000 && minR < 12.5, `${rough1} cells cut by roughing, min radius ${minR.toFixed(2)}`);
-  await js("window.__4cam.setView('iso', {})");
+  await js("window.__marcam.setView('iso', {})");
   await sleep(300);
   await shot("09_machining_mid_roughing");
   // play advances
@@ -267,7 +267,7 @@ try {
   check("after the knurl, knurl and chamfer cells carry their operations", k2 > 10000 && k3 > 100, `knurl ${k2} cells, chamfer ${k3}`);
   const closed = String(await js(`const { checkClosed } = await import('./meshes.js'); const g0 = ${M}.stockMesh.geometry; const c0 = checkClosed({ positions: g0.attributes.position.array, indices: g0.index.array }); c0.closed + ' ' + c0.badEdges + ' ' + c0.volume.toFixed(0)`));
   check("the simulated solid stays watertight", closed.startsWith("true"), closed);
-  await js("window.__4cam.setView('iso', {})");
+  await js("window.__marcam.setView('iso', {})");
   await sleep(300);
   await shot("10_machining_after_knurl");
   // operation colour
@@ -275,9 +275,9 @@ try {
   const before = await js(colorAt);
   await js("const c = document.querySelector('#opLegend input[data-tag=\"2\"]'); c.value = '#ff0000'; c.dispatchEvent(new Event('input', { bubbles: true })); true");
   const after = await js(colorAt);
-  const saved = await js("localStorage.getItem('4cam.opColors')");
+  const saved = await js("localStorage.getItem('marcam.opColors')");
   check("changing an operation's colour recolours its cuts (and is saved)", before !== after && after === "1.00,0.00,0.00" && /#ff0000/.test(saved), `${before} -> ${after}`);
-  await js("window.__4cam.setView('iso', {})");
+  await js("window.__marcam.setView('iso', {})");
   await sleep(300);
   await shot("11_machining_recoloured");
   await js("document.getElementById('simClose').click(); true");
@@ -321,7 +321,7 @@ try {
   await shot("07_tool_library");
   await S("Page.reload");
   await waitFor(async () => (await state()) === "ready", "reload", 30000);
-  const kept = await js("[...document.getElementById('library').options].map(o => o.value).join(',') + ' / ' + JSON.stringify(JSON.parse(localStorage.getItem('4cam.libraries')).find(l => l.id === 'fusion-tool-library').tools[0].name)");
+  const kept = await js("[...document.getElementById('library').options].map(o => o.value).join(',') + ' / ' + JSON.stringify(JSON.parse(localStorage.getItem('marcam.libraries')).find(l => l.id === 'fusion-tool-library').tools[0].name)");
   check("tool libraries persist across reloads", /fusion-tool-library/.test(kept) && /Edited Flat 3\.0/.test(kept), kept);
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await sleep(500);
@@ -334,10 +334,10 @@ try {
   const gen = async () => {
     await js("document.getElementById('generate').click(); true");
     await waitDone("generation", 120000);
-    return js("({ lines: window.__4cam.state.result.programs.map(p => p.lines), knurl: (window.__4cam.state.result.programs.find(p => p.name === 'knob_2_knurl') || {}).gcode || '' })");
+    return js("({ lines: window.__marcam.state.result.programs.map(p => p.lines), knurl: (window.__marcam.state.result.programs.find(p => p.name === 'knob_2_knurl') || {}).gcode || '' })");
   };
   const treeAct = (op, act) => js(`document.querySelector('#tree .tree-op[data-op="${op}"] [data-act="${act}"]').click(); true`);
-  const settle = () => waitFor(() => js("!!window.__4cam.state.tree.doc && document.body.dataset.state !== 'busy'"), "tree", 30000).then(() => sleep(400));
+  const settle = () => waitFor(() => js("!!window.__marcam.state.tree.doc && document.body.dataset.state !== 'busy'"), "tree", 30000).then(() => sleep(400));
   await treeAct("op3", "enable");
   await settle();
   const off = await gen();
@@ -355,14 +355,14 @@ try {
   // every operation type: the create form comes fully filled and applies without problems
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
-  const allKinds = await js("window.__4cam.state.tree.types.map(t => t.kind).join(',')");
+  const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
   check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 13 && String(typesAll).split(",").length === 13, `${typesAll}`);
   const filled = [];
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
-    await waitFor(() => js(`!!document.getElementById('opForm') && !!window.__4cam.state.tree.draft && window.__4cam.state.tree.draft.op.type === '${kind}'`), `the ${kind} form`, 15000);
+    await waitFor(() => js(`!!document.getElementById('opForm') && !!window.__marcam.state.tree.draft && window.__marcam.state.tree.draft.op.type === '${kind}'`), `the ${kind} form`, 15000);
     // blank fields, but text whose registry default is "" (none: e.g. a V-carve's text)
-    const blanks = await js(`(() => { const ty = window.__4cam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '').map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
+    const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '').map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
     const before = await js("document.querySelectorAll('#tree .tree-op').length");
     await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${before + 1}`), `${kind} to be added`, 15000);
@@ -375,10 +375,10 @@ try {
   check("every operation type's new form is fully filled and applies cleanly", filled.length === 13 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
-  await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 15000);
+  await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 15000);
   const pat1 = await js("document.getElementById('opForm').elements.pattern.value");
   await js("const f = document.getElementById('opForm'); f.elements.feed.value = '123'; f.elements.feed.dispatchEvent(new Event('input', { bubbles: true })); f.elements.tool.value = '2'; f.elements.tool.dispatchEvent(new Event('change', { bubbles: true })); true");
-  await waitFor(() => js("window.__4cam.state.tree.draft?.op.tool === 2 && document.getElementById('opForm').elements.pattern.value === 'along'"), "defaults for the V-bit", 15000);
+  await waitFor(() => js("window.__marcam.state.tree.draft?.op.tool === 2 && document.getElementById('opForm').elements.pattern.value === 'along'"), "defaults for the V-bit", 15000);
   const keptFeed = await js("document.getElementById('opForm').elements.feed.value");
   check("changing the tool refreshes untouched defaults and keeps edited ones", pat1 === "around" && keptFeed === "123", `pattern around -> along with the V-bit; edited feed kept at ${keptFeed}`);
   await js("document.getElementById('cancelDraft').click(); true");
@@ -405,7 +405,7 @@ try {
   await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 3"), "the wizard", 15000);
   const wiz = await gen();
   await js("document.querySelectorAll('#tabs button')[0].click(); true");
-  const g1 = await js("window.__4cam.state.result.programs[0].gcode");
+  const g1 = await js("window.__marcam.state.result.programs[0].gcode");
   check("knurl wizard rebuilds the knob in the tree; G-code is the cut G-code", empty === 0 && g1 === golden("knob_1_profile") && wiz.knurl === golden("knob_2_knurl"), `${empty} ops after deleting, ${wiz.lines.join(" / ")} lines`);
   // operation colour from the tree reaches the machining simulation
   await js("const c = document.querySelector('#tree .tree-op[data-op=\"op1\"] [data-act=\"color\"]'); c.value = '#00ff00'; c.dispatchEvent(new Event('change', { bubbles: true })); true");
@@ -421,15 +421,15 @@ try {
   await gen();
   await js("document.querySelector('#tree .tree-op[data-op=\"op2\"] [data-act=\"select\"]').click(); true");
   await js("document.getElementById('pickFaces').click(); true");
-  await waitFor(() => js("!!window.__4cam.state.tree.pickMesh"), "pick mode", 15000);
-  await js("window.__4cam.setView('iso', {})");
-  const picked = await js(`(() => { const v = window.__4cam.state.three; const p = new v.THREE.Vector3(-7.5, 0, -9.0).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
-  const region = String(await js(`const pr = await window.__4cam.tree.pickAt(${picked[0]}, ${picked[1]}); pr ? pr.shape + ' ' + pr.x.map(x => x.toFixed(1)).join('..') : 'none'`));
+  await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "pick mode", 15000);
+  await js("window.__marcam.setView('iso', {})");
+  const picked = await js(`(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(-7.5, 0, -9.0).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
+  const region = String(await js(`const pr = await window.__marcam.tree.pickAt(${picked[0]}, ${picked[1]}); pr ? pr.shape + ' ' + pr.x.map(x => x.toFixed(1)).join('..') : 'none'`));
   await shot("13_pick_faces");
   await js("document.getElementById('pickFaces').click(); true");
   await settle();
   const fin = await gen();
-  const along = await js("window.__4cam.state.result.programs.find(p => p.name === 'knob_4_finish_along').gcode");
+  const along = await js("window.__marcam.state.result.programs.find(p => p.name === 'knob_4_finish_along').gcode");
   const xs = along.split("\n").filter((l) => l.startsWith("G1 X")).map((l) => parseFloat(l.split(" ")[1].slice(1)));
   const minX = Math.min(...xs);
   check("picking the taper face limits the finish to it", /^cone -15\.0\.\.-0\.8/.test(region) && minX >= -16.588, `picked ${region}; finish min X ${minX}`);
@@ -483,7 +483,7 @@ try {
   const plateTypes = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
   check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,contour,raster3d,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
   await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
-  await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 15000);
+  await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 15000);
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
   const plateOps = await js("document.querySelectorAll('#tree .tree-op').length");
   await js("const f = document.getElementById('opForm'); f.elements.points.value = '30 20; 33 20'; f.elements.points.dispatchEvent(new Event('input', { bubbles: true })); f.requestSubmit(); true");
@@ -492,7 +492,7 @@ try {
   check("3-axis form: fully filled, and points are typed as 'x y; x y'", drillBlank === "" && drillPts === "[[30,20],[33,20]]", `blank: ${drillBlank || "none"}; points ${drillPts}`);
   // a V-carve whose outline comes from an SVG file, through the form's file input
   await js("document.getElementById('treeAddType').value = 'vcarve'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
-  await waitFor(() => js("window.__4cam.state.tree.draft?.op.type === 'vcarve' && !!document.getElementById('opForm')"), "the V-carve form", 15000);
+  await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'vcarve' && !!document.getElementById('opForm')"), "the V-carve form", 15000);
   await js("const inp = document.querySelector('#opForm input[data-svg]'); const dt = new DataTransfer(); dt.items.add(new File(['<svg xmlns=\"http://www.w3.org/2000/svg\"><polygon points=\"0,0 20,0 10,8\"/></svg>'], 'tri.svg', { type: 'image/svg+xml' })); inp.files = dt.files; document.getElementById('opForm').elements.__svg_height.value = '8'; inp.dispatchEvent(new Event('change', { bubbles: true })); true");
   await waitFor(() => js("document.getElementById('opForm').elements.paths.value.includes('30 16')"), "the SVG outline in the form", 15000);
   const svgField = await js("document.getElementById('opForm').elements.paths.value");
@@ -504,7 +504,7 @@ try {
   await waitDone("plate generation", 240000);
   const ptabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
   const plimits = await js("document.getElementById('summary').innerText");
-  const pkinds = await js("[...new Set(window.__4cam.state.result.programs.flatMap(p => { const a = p.toolpath.points; const k = []; for (let i = 3; i < a.length; i += 4) k.push(a[i]); return k; }))].sort().join(',')");
+  const pkinds = await js("[...new Set(window.__marcam.state.result.programs.flatMap(p => { const a = p.toolpath.points; const k = []; for (let i = 3; i < a.length; i += 4) k.push(a[i]); return k; }))].sort().join(',')");
   check("plate: two programs verified OK, machine limits OK, XYZ toolpaths", ptabs.length === 2 && ptabs.every((t) => t.endsWith("OK")) && /Machine limits: OK/.test(plimits) && pkinds === "2,3", `${ptabs.join(", ")}; kinds ${pkinds}`);
   await sleep(1500);
   await shot("07_plate");
@@ -519,13 +519,13 @@ try {
   await shot("08_plate_simulated");
   // machining playback: to the end, every operation's colour on the block
   await js("document.getElementById('simOpen').click()");
-  await waitFor(() => js("window.__4cam.state.machining.open && !!window.__4cam.state.machining.stockMesh"), "the plate machining view", 60000);
-  const psegs = await js("window.__4cam.state.machining.session.segments");
+  await waitFor(() => js("window.__marcam.state.machining.open && !!window.__marcam.state.machining.stockMesh"), "the plate machining view", 60000);
+  const psegs = await js("window.__marcam.state.machining.session.segments");
   await js(`document.getElementById('simScrub').value = '${psegs}'; document.getElementById('simScrub').dispatchEvent(new Event('input')); true`);
-  await waitFor(() => js(`window.__4cam.state.machining.pos === ${psegs} && !window.__4cam.state.machining.busy`), "the plate playback to finish", 120000);
-  const ptags = await js("[...new Set(window.__4cam.state.machining.op)].sort((a, b) => a - b).join(',')");
-  const pz = await js("(() => { const m = window.__4cam.state.machining; const nx = m.session.grid.nx; const at = (x, y) => m.r[Math.floor(y / 0.25) * nx + Math.floor(x / 0.25)]; return [at(15, 20), at(40, 6), at(46, 20)].map(v => v.toFixed(2)).join(','); })()");
-  const vtx = await js("(() => { const m = window.__4cam.state.machining; const nx = m.session.grid.nx; const k = Math.floor(20 / 0.25) * nx + Math.floor(15 / 0.25); return m.stockMesh.geometry.attributes.position.array[3 * k + 2].toFixed(2); })()");
+  await waitFor(() => js(`window.__marcam.state.machining.pos === ${psegs} && !window.__marcam.state.machining.busy`), "the plate playback to finish", 120000);
+  const ptags = await js("[...new Set(window.__marcam.state.machining.op)].sort((a, b) => a - b).join(',')");
+  const pz = await js("(() => { const m = window.__marcam.state.machining; const nx = m.session.grid.nx; const at = (x, y) => m.r[Math.floor(y / 0.25) * nx + Math.floor(x / 0.25)]; return [at(15, 20), at(40, 6), at(46, 20)].map(v => v.toFixed(2)).join(','); })()");
+  const vtx = await js("(() => { const m = window.__marcam.state.machining; const nx = m.session.grid.nx; const k = Math.floor(20 / 0.25) * nx + Math.floor(15 / 0.25); return m.stockMesh.geometry.attributes.position.array[3 * k + 2].toFixed(2); })()");
   check("plate playback: block cut by all seven operations (five + the added drill and V-carve), mesh follows the engine", ptags === "1,2,3,4,5,6,7" && pz.startsWith("-3.50,-4.50,") && Math.abs(parseFloat(pz.split(",")[2]) + 0.5) < 0.03 && vtx === "-3.50", `tags ${ptags}; pocket, hole, dome top ${pz}; vertex ${vtx}`);
   await sleep(800);
   await shot("09_plate_machining");
@@ -546,31 +546,31 @@ try {
   // 8g. simulation resolution: the setting changes the grid (shown before running), the
   // machining view at that grid stays watertight, and Ultra shows a decimated display
   // top-level await: the evaluation does not wait for a promise an async IIFE returns
-  const closedNow = async () => (await js("const { checkClosed: cc } = await import('./meshes.js'); const gg = window.__4cam.state.machining.stockMesh.geometry; String(cc({ positions: gg.attributes.position.array, indices: gg.index.array }).closed)")) === "true";
+  const closedNow = async () => (await js("const { checkClosed: cc } = await import('./meshes.js'); const gg = window.__marcam.state.machining.stockMesh.geometry; String(cc({ positions: gg.attributes.position.array, indices: gg.index.array }).closed)")) === "true";
   await js("document.getElementById('simRes').value = 'fine'; document.getElementById('simRes').dispatchEvent(new Event('change')); true");
-  await waitFor(() => js("(window.__4cam.state.simGrid?.na === 720) && document.getElementById('simResInfo').textContent.includes('cells')"), "the Fine grid info", 15000);
+  await waitFor(() => js("(window.__marcam.state.simGrid?.na === 720) && document.getElementById('simResInfo').textContent.includes('cells')"), "the Fine grid info", 15000);
   const fineInfo = await js("document.getElementById('simResInfo').textContent");
-  const fineCells = await js("window.__4cam.state.simGrid.cells");
+  const fineCells = await js("window.__marcam.state.simGrid.cells");
   await js("document.getElementById('simOpen').click(); true");
-  await waitFor(() => js("window.__4cam.state.machining.open && window.__4cam.state.machining.session?.grid.na === 720 && !!window.__4cam.state.machining.stockMesh"), "the Fine machining view", 60000);
+  await waitFor(() => js("window.__marcam.state.machining.open && window.__marcam.state.machining.session?.grid.na === 720 && !!window.__marcam.state.machining.stockMesh"), "the Fine machining view", 60000);
   await js("document.getElementById('simScrub').value = '3000'; document.getElementById('simScrub').dispatchEvent(new Event('input')); true");
-  await waitFor(() => js("window.__4cam.state.machining.pos === 3000 && !window.__4cam.state.machining.busy"), "the Fine playback", 120000);
+  await waitFor(() => js("window.__marcam.state.machining.pos === 3000 && !window.__marcam.state.machining.busy"), "the Fine playback", 120000);
   const fineClosed = await closedNow();
-  const fineStride = await js("window.__4cam.state.machining.stride");
+  const fineStride = await js("window.__marcam.state.machining.stride");
   await js("document.getElementById('simClose').click(); true");
   check("Fine grid: cell count shown, machining view at 720 cells round, watertight", fineInfo.includes(Number(fineCells).toLocaleString("en")) && fineClosed === true && fineStride === 1, `${fineInfo}; closed ${fineClosed}`);
   await js("document.getElementById('simRes').value = 'ultra'; document.getElementById('simRes').dispatchEvent(new Event('change')); true");
-  await waitFor(() => js("window.__4cam.state.simGrid?.na === 1440"), "the Ultra grid info", 15000);
+  await waitFor(() => js("window.__marcam.state.simGrid?.na === 1440"), "the Ultra grid info", 15000);
   await js("document.getElementById('simOpen').click(); true");
-  await waitFor(() => js("window.__4cam.state.machining.open && window.__4cam.state.machining.session?.grid.na === 1440 && !!window.__4cam.state.machining.stockMesh"), "the Ultra machining view", 60000);
+  await waitFor(() => js("window.__marcam.state.machining.open && window.__marcam.state.machining.session?.grid.na === 1440 && !!window.__marcam.state.machining.stockMesh"), "the Ultra machining view", 60000);
   await js("document.getElementById('simScrub').value = '2000'; document.getElementById('simScrub').dispatchEvent(new Event('input')); true");
-  await waitFor(() => js("window.__4cam.state.machining.pos === 2000 && !window.__4cam.state.machining.busy"), "the Ultra playback", 120000);
-  const ultra = await js("JSON.stringify({ s: window.__4cam.state.machining.stride, cells: window.__4cam.state.simGrid.cells, disp: window.__4cam.state.machining.dr.length })");
+  await waitFor(() => js("window.__marcam.state.machining.pos === 2000 && !window.__marcam.state.machining.busy"), "the Ultra playback", 120000);
+  const ultra = await js("JSON.stringify({ s: window.__marcam.state.machining.stride, cells: window.__marcam.state.simGrid.cells, disp: window.__marcam.state.machining.dr.length })");
   const ultraClosed = await closedNow();
   await js("document.getElementById('simClose').click(); document.getElementById('simRes').value = 'normal'; document.getElementById('simRes').dispatchEvent(new Event('change')); true");
   const u = JSON.parse(ultra);
   check("Ultra grid: display decimated to at most 1M cells, still watertight", u.cells > 1e6 && u.s >= 2 && u.disp <= 1e6 && ultraClosed === true, `${ultra}; closed ${ultraClosed}`);
-  const remembered = await js("JSON.parse(localStorage.getItem('4cam.simRes')).v");
+  const remembered = await js("JSON.parse(localStorage.getItem('marcam.simRes')).v");
   check("the resolution setting is remembered", remembered === "normal", remembered);
 
   // 8g2. face-bounded raster: pick the dome's cap for its raster; the finish stays on it
@@ -580,16 +580,16 @@ try {
     await js("document.querySelector('#tree .tree-op[data-op=\"op5\"] [data-act=\"select\"]').click(); true");
     await waitFor(() => js("!!document.getElementById('pickFaces')"), "the raster's face picker", 15000);
     await js("document.getElementById('pickFaces').click(); true");
-    await waitFor(() => js("!!window.__4cam.state.tree.pickMesh"), "pick mode on the plate", 15000);
-    await js("window.__4cam.setView('iso', {})");
-    const at = await js(`(() => { const v = window.__4cam.state.three; const p = new v.THREE.Vector3(46, 20, -0.6).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
-    const capPick = String(await js(`const pr = await window.__4cam.tree.pickAt(${at[0]}, ${at[1]}); pr ? pr.id + ' ' + pr.shape : 'none'`));
+    await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "pick mode on the plate", 15000);
+    await js("window.__marcam.setView('iso', {})");
+    const at = await js(`(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(46, 20, -0.6).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
+    const capPick = String(await js(`const pr = await window.__marcam.tree.pickAt(${at[0]}, ${at[1]}); pr ? pr.id + ' ' + pr.shape : 'none'`));
     await js("document.getElementById('pickFaces').click(); true");
     await sleep(400);
     const faces = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.id === 'op5').geometry || [])");
     await js("document.getElementById('generate').click(); true");
     await waitDone("generation with the picked cap", 240000);
-    const far = await js("(() => { const p = window.__4cam.state.result.programs.find(q => q.name === 'plate_2_dome').toolpath.points; let m = 0; for (let i = 0; i < p.length; i += 4) if (p[i + 3] === 3) m = Math.max(m, Math.hypot(p[i] - 46, p[i + 1] - 20)); return m; })()");
+    const far = await js("(() => { const p = window.__marcam.state.result.programs.find(q => q.name === 'plate_2_dome').toolpath.points; let m = 0; for (let i = 0; i < p.length; i += 4) if (p[i + 3] === 3) m = Math.max(m, Math.hypot(p[i] - 46, p[i + 1] - 20)); return m; })()");
     const okTabs = await js("[...document.querySelectorAll('#tabs button')].every(b => b.textContent.endsWith('OK'))");
     check("picking the dome's cap keeps its raster on the cap (cuts within the cap + the tool radius)", capPick.startsWith("f049d19c2") && /f049d19c2/.test(faces) && far <= 6 + 1.5875 + 0.05 && okTabs, `picked ${capPick}; geometry ${faces}; farthest cut ${far.toFixed(3)} mm from the dome's axis`);
     await shot("13b_pick_dome_cap");
@@ -605,12 +605,12 @@ try {
   // 3-axis; indexed jobs and "GPU off" fall back and say so
   const webgpu = String(await js("const adp = navigator.gpu ? await navigator.gpu.requestAdapter() : null; String(!!adp)")) === "true";
   const simulateWith = async (gpuOn) => {
-    await js(`document.getElementById('simGpu').checked = ${gpuOn}; window.__4cam.state.sim = null; document.getElementById('simulate').click(); true`);
-    await waitFor(() => js("!!window.__4cam.state.sim && document.body.dataset.state !== 'busy'"), "the simulation", 240000);
+    await js(`document.getElementById('simGpu').checked = ${gpuOn}; window.__marcam.state.sim = null; document.getElementById('simulate').click(); true`);
+    await waitFor(() => js("!!window.__marcam.state.sim && document.body.dataset.state !== 'busy'"), "the simulation", 240000);
     await settle();
-    return js("window.__4cam.state.simBackend");
+    return js("window.__marcam.state.simBackend");
   };
-  const keepStocks = (name) => js(`window.__${name} = window.__4cam.state.sim.stocks.map(s => ({ h: Array.from(s.r || s.z), g: s.max_gouge, l: s.max_left, f: s.feature_cells, rh: s.rapid_hits })); true`);
+  const keepStocks = (name) => js(`window.__${name} = window.__marcam.state.sim.stocks.map(s => ({ h: Array.from(s.r || s.z), g: s.max_gouge, l: s.max_left, f: s.feature_cells, rh: s.rapid_hits })); true`);
   const compareStocks = () => js("let md = 0; window.__gpuS.forEach((s, p) => s.h.forEach((v, k) => { md = Math.max(md, Math.abs(v - window.__cpuS[p].h[k])); })); JSON.stringify({ md, gpu: window.__gpuS.map(s => [s.l.toFixed(3), s.rh, s.f]), cpu: window.__cpuS.map(s => [s.l.toFixed(3), s.rh, s.f]) })");
   for (const [ex, label] of [["knob", "rotary knob"], ["plate", "3-axis plate"]]) {
     await js(`document.getElementById('example').value = '${ex}'; document.getElementById('loadExample').click(); true`);
@@ -631,11 +631,11 @@ try {
   }
   // playback on the GPU ends where the batch simulation does (the plate, Normal grid)
   await js("document.getElementById('simGpu').checked = true; document.getElementById('simOpen').click(); true");
-  await waitFor(() => js("window.__4cam.state.machining.open && !!window.__4cam.state.machining.stockMesh"), "the plate machining view", 60000);
-  const pn = await js("window.__4cam.state.machining.session.segments");
+  await waitFor(() => js("window.__marcam.state.machining.open && !!window.__marcam.state.machining.stockMesh"), "the plate machining view", 60000);
+  const pn = await js("window.__marcam.state.machining.session.segments");
   await js(`document.getElementById('simScrub').value = '${pn}'; document.getElementById('simScrub').dispatchEvent(new Event('input')); true`);
-  await waitFor(() => js(`window.__4cam.state.machining.pos === ${pn} && !window.__4cam.state.machining.busy`), "the playback to the end", 120000);
-  const pb = JSON.parse(await js("const mm = window.__4cam.state.machining; let md2 = 0; const last = window.__cpuS[window.__cpuS.length - 1].h; mm.r.forEach((v, k) => { md2 = Math.max(md2, Math.abs(v - last[k])); }); JSON.stringify({ md: md2, backend: mm.backend, label: document.getElementById('simLabel').textContent })"));
+  await waitFor(() => js(`window.__marcam.state.machining.pos === ${pn} && !window.__marcam.state.machining.busy`), "the playback to the end", 120000);
+  const pb = JSON.parse(await js("const mm = window.__marcam.state.machining; let md2 = 0; const last = window.__cpuS[window.__cpuS.length - 1].h; mm.r.forEach((v, k) => { md2 = Math.max(md2, Math.abs(v - last[k])); }); JSON.stringify({ md: md2, backend: mm.backend, label: document.getElementById('simLabel').textContent })"));
   await js("document.getElementById('simClose').click(); true");
   check(webgpu ? "WebGPU playback ends at the CPU's stock within 2 um (label says GPU)" : "no WebGPU: playback runs on the CPU and says so", webgpu ? pb.backend.startsWith("GPU") && pb.label.endsWith("GPU") && pb.md <= 0.002 : pb.backend.startsWith("CPU") && pb.md <= 1e-6, `${pb.backend}; max difference ${pb.md.toFixed(4)} mm; ${pb.label}`);
   // an indexed job: the engine keeps it on the CPU, with the reason shown
@@ -672,7 +672,7 @@ try {
   const rtabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
   await js("document.getElementById('simulate').click()");
   await waitDone("ring simulation", 240000);
-  const rcut = await js("(() => { const s = window.__4cam.state.sim; const g = s.grid; const r = s.stocks[0].r; const at = (x, deg) => r[Math.floor((x - g.x0) / g.dx) * g.na + Math.floor(deg / 360 * g.na) % g.na]; return [at(-31, 90), at(-40, 200), at(-25, 90)].map(v => v.toFixed(2)).join(','); })()");
+  const rcut = await js("(() => { const s = window.__marcam.state.sim; const g = s.grid; const r = s.stocks[0].r; const at = (x, deg) => r[Math.floor((x - g.x0) / g.dx) * g.na + Math.floor(deg / 360 * g.na) % g.na]; return [at(-31, 90), at(-40, 200), at(-25, 90)].map(v => v.toFixed(2)).join(','); })()");
   check("ring: wrapped engraving verified and simulated (diamond floor, groove all round, bar elsewhere)", rtabs.length === 1 && rtabs[0].endsWith("OK") && /^10\.6\d,11\.7\d,12\.00$/.test(rcut), `${rtabs.join(", ")}; ${rcut}`);
   const rsum = await js("document.getElementById('summary').innerText.split('\\n').pop()");
   check("ring: intended engraving is not reported as a gouge", /deepest gouge 0\.0\d\d mm/.test(rsum) && /cut below the part on purpose/.test(rsum), rsum);
@@ -685,11 +685,11 @@ try {
   await js("document.getElementById('generate').click()");
   await waitDone("indexed knob generation", 240000);
   const itabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
-  const igold = await js("window.__4cam.state.result.programs.slice(0, 2).map(p => p.gcode)");
+  const igold = await js("window.__marcam.state.result.programs.slice(0, 2).map(p => p.gcode)");
   check("indexed knob: three programs OK, turning and knurl still the goldens", itabs.length === 3 && itabs.every((t) => t.endsWith("OK")) && igold[0] === golden("knob_1_profile") && igold[1] === golden("knob_2_knurl"), itabs.join(", "));
   await js("document.getElementById('simulate').click()");
   await waitDone("indexed knob simulation", 240000);
-  const iflat = await js("(() => { const s = window.__4cam.state.sim; const g = s.grid; const r = s.stocks[2].r; const at = (x, deg) => r[Math.floor((x - g.x0) / g.dx) * g.na + Math.floor(deg / 360 * g.na) % g.na]; return [at(-20.05, 90), at(-20.05, 270), at(-8.05, 0.5)].map(v => v.toFixed(2)).join(','); })()");
+  const iflat = await js("(() => { const s = window.__marcam.state.sim; const g = s.grid; const r = s.stocks[2].r; const at = (x, deg) => r[Math.floor((x - g.x0) / g.dx) * g.na + Math.floor(deg / 360 * g.na) % g.na]; return [at(-20.05, 90), at(-20.05, 270), at(-8.05, 0.5)].map(v => v.toFixed(2)).join(','); })()");
   check("indexed knob simulated: flat at R2.5 on top, round below, hole to R6", iflat === "2.50,3.00,6.00", iflat);
   await js("document.querySelectorAll('#tabs button')[2].click()");
   await sleep(1500);
@@ -709,11 +709,11 @@ try {
   await drag("splitLeft", 120, 0);
   const L1 = (await rect("left"))[2], R1 = (await rect("right"))[2];
   check("dragging the left bar resizes both panes", Math.abs(L1 - L0 - 120) <= 3 && Math.abs(R0 - R1 - 120) <= 3, `left ${L0}->${L1}, right ${R0}->${R1}`);
-  const c0 = await js("window.__4cam.state.three.renderer.domElement.clientWidth");
+  const c0 = await js("window.__marcam.state.three.renderer.domElement.clientWidth");
   const code0 = (await rect("codeWrap"))[2];
   await drag("splitCode", 100, 0);
   const code1 = (await rect("codeWrap"))[2];
-  const c1 = await js("window.__4cam.state.three.renderer.domElement.clientWidth");
+  const c1 = await js("window.__marcam.state.three.renderer.domElement.clientWidth");
   const v3 = (await rect("view3d"))[2];
   check("dragging the G-code bar resizes the 3D canvas with it", Math.abs(code0 - code1 - 100) <= 3 && Math.abs(c1 - c0 - 100) <= 3 && Math.abs(c1 - v3) <= 2, `G-code ${code0}->${code1}, canvas ${c0}->${c1} (view ${v3})`);
   const s0 = (await rect("side"))[3];
@@ -780,8 +780,8 @@ try {
     const setFile = (input, name, buf) => js(`(() => { const dt = new DataTransfer(); dt.items.add(${fileJs(name, buf)}); const i = document.getElementById('${input}'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     const drop = (name, buf) => js(`(() => { const dt = new DataTransfer(); dt.items.add(${fileJs(name, buf)}); document.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })); document.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); return true; })()`);
     const dialogs = () => cdp.dialogs.map((d) => `${d.type}: ${d.message}`);
-    const allGcode = () => js("window.__4cam.state.result.programs.map((p) => p.name + '\\n' + p.gcode).join('\\n')");
-    const viewsOk = () => js(`(() => { const v = window.__4cam.state.three; const s = document.getElementById('side'); const px = s.getContext('2d').getImageData(0, 0, s.width, s.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++;
+    const allGcode = () => js("window.__marcam.state.result.programs.map((p) => p.name + '\\n' + p.gcode).join('\\n')");
+    const viewsOk = () => js(`(() => { const v = window.__marcam.state.three; const s = document.getElementById('side'); const px = s.getContext('2d').getImageData(0, 0, s.width, s.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++;
       return { part: v.groups.part.children.length, stock: v.groups.stock.children.length, path: v.groups.path.children.length, side: ink, tabs: [...document.querySelectorAll('#tabs button')].map((b) => b.textContent), ops: document.querySelectorAll('#tree .tree-op').length, stale: document.body.classList.contains('stale') }; })()`);
     const dialogOpen = () => waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 15000);
     // fill the setup dialog: { kind, units, axis, name, file: [name, bytes] }, then OK
@@ -874,7 +874,7 @@ try {
     check("Import STL: starter roughing and finishing filled by the engine's defaults, generated, every view refreshed",
       v1.ops === 2 && v1.tabs.length === 2 && v1.tabs.every((t) => t.endsWith("OK")) && v1.part > 0 && v1.stock > 0 && v1.path > 0 && v1.side > 1000 && !v1.stale && doc1.setups[0].operations.every((o) => o.type && o.feed > 0),
       JSON.stringify(v1));
-    const pickRegions = await js("(await window.__4cam.engine('faceRegions', JSON.parse(document.getElementById('job').value), 'part', window.__4cam.state.mesh)).result.regions.length");
+    const pickRegions = await js("(await window.__marcam.engine('faceRegions', JSON.parse(document.getElementById('job').value), 'part', window.__marcam.state.mesh)).result.regions.length");
     check("Import STL: the new part's faces are there to pick", pickRegions === 8, `${pickRegions} face regions`);
     await shot("14b_imported_stl");
     const gcode1 = await allGcode();
@@ -894,22 +894,22 @@ try {
     // Save (asks for a name, downloads one file with the mesh in it), then New, then Open it
     const before = new Set(readdirSync(downloads));
     await js("document.getElementById('projectSave').click(); true");
-    const saved = await waitFor(() => readdirSync(downloads).find((f) => !before.has(f) && f.endsWith(".4cam.json")), "the saved project", 15000);
+    const saved = await waitFor(() => readdirSync(downloads).find((f) => !before.has(f) && f.endsWith(".marcam.json")), "the saved project", 15000);
     const savedText = readFileSync(join(downloads, saved), "utf8");
     const savedObj = JSON.parse(savedText);
     const clean1 = await js("document.getElementById('projectDirty').classList.contains('hidden')");
-    check("Save: one .4cam.json with the project and its STL embedded; the unsaved mark goes",
-      saved === `${name1}.4cam.json` && savedObj.format === "4cam-project" && Object.keys(savedObj.meshes)[0] === "knob.stl" && Buffer.from(savedObj.meshes["knob.stl"], "base64").length === 84 + 50 * 10080 && clean1 && savedObj.project.setups[0].kind === "rotary",
+    check("Save: one .marcam.json with the project and its STL embedded; the unsaved mark goes",
+      saved === `${name1}.marcam.json` && savedObj.format === "marcam-project" && Object.keys(savedObj.meshes)[0] === "knob.stl" && Buffer.from(savedObj.meshes["knob.stl"], "base64").length === 84 + 50 * 10080 && clean1 && savedObj.project.setups[0].kind === "rotary",
       `${saved}; ${Object.keys(savedObj.meshes || {})}`);
     await js("document.getElementById('projectNew').click(); true");
     await inDialog({ cancel: true });
     const dialogsBefore = cdp.dialogs.length;
     await setFile("projectOpenFile", saved, Buffer.from(savedText));
     await waitFor(() => js("document.body.dataset.state === 'ready' && !!document.getElementById('emptyGenerate')"), "the opened project", 30000);
-    const openedPlans = await js("window.__4cam.calls.planAndPost || 0");
+    const openedPlans = await js("window.__marcam.calls.planAndPost || 0");
     await js("document.getElementById('emptyGenerate').click(); true");
     await waitDone("generation after opening the project", 240000);
-    check("Open plans nothing until asked: an empty state with Generate, then one plan", (await js("window.__4cam.calls.planAndPost")) === openedPlans + 1);
+    check("Open plans nothing until asked: an empty state with Generate, then one plan", (await js("window.__marcam.calls.planAndPost")) === openedPlans + 1);
     const reopened = await allGcode();
     const v2 = await viewsOk();
     check("Open: the saved project comes back whole (no question asked, it was saved) and its G-code is byte-identical",
@@ -993,11 +993,11 @@ try {
     await setFile("importStlFile", "notes.stl", Buffer.from("these are not triangles"));
     await sleep(500);
     const badStl = await js("document.getElementById('error').textContent");
-    await setFile("projectOpenFile", "broken.4cam.json", Buffer.from("{ not json"));
+    await setFile("projectOpenFile", "broken.marcam.json", Buffer.from("{ not json"));
     await sleep(500);
     const badJson = await js("document.getElementById('error').textContent");
     check("bad files: a clear error and the project left as it was",
-      /notes\.stl: not an STL file/.test(badStl) && /broken\.4cam\.json: not a 4cam project/.test(badJson) && (await js("document.querySelectorAll('#tree .tree-op').length")) === opsBefore && !(await js("document.getElementById('setupDialog').open")),
+      /notes\.stl: not an STL file/.test(badStl) && /broken\.marcam\.json: not a marcam project/.test(badJson) && (await js("document.querySelectorAll('#tree .tree-op').length")) === opsBefore && !(await js("document.getElementById('setupDialog').open")),
       `${badStl} | ${badJson}`);
     await shot("14g_bad_file");
 
@@ -1007,16 +1007,16 @@ try {
     {
       const domeStl = readFileSync(join(root, "examples", "plate", "dome.stl"));
       const domeTris = domeStl.readUInt32LE(80);
-      const scene = () => js(`(() => { const v = window.__4cam.state.three; let objs = 0, tris = 0; v.scene.traverse((o) => { if (o.geometry) { objs++; if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; } });
+      const scene = () => js(`(() => { const v = window.__marcam.state.three; let objs = 0, tris = 0; v.scene.traverse((o) => { if (o.geometry) { objs++; if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; } });
         const g = v.groups; const kids = (k) => g[k] ? g[k].children.length : 0;
-        return { objs, tris, part: kids('part'), stock: kids('stock'), path: kids('path'), sim: kids('sim'), tool: kids('tool'), machining: !!g.machining, pickMesh: !!window.__4cam.state.tree.pickMesh,
+        return { objs, tris, part: kids('part'), stock: kids('stock'), path: kids('path'), sim: kids('sim'), tool: kids('tool'), machining: !!g.machining, pickMesh: !!window.__marcam.state.tree.pickMesh,
           geometries: v.renderer.info.memory.geometries, textures: v.renderer.info.memory.textures,
           partTris: g.part.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3, 0),
           gcode: document.getElementById('gcode').value.length, tabs: document.querySelectorAll('#tabs button').length, ops: document.querySelectorAll('#tree .tree-op').length,
-          mesh: !!window.__4cam.state.mesh, meshInfo: document.getElementById('meshInfo').textContent, result: !!window.__4cam.state.result, sim: !!window.__4cam.state.sim,
-          playback: !!window.__4cam.state.machining.open, session: !!window.__4cam.state.machining.session, undo: !document.getElementById('undoBar').classList.contains('hidden'),
+          mesh: !!window.__marcam.state.mesh, meshInfo: document.getElementById('meshInfo').textContent, result: !!window.__marcam.state.result, sim: !!window.__marcam.state.sim,
+          playback: !!window.__marcam.state.machining.open, session: !!window.__marcam.state.machining.session, undo: !document.getElementById('undoBar').classList.contains('hidden'),
           error: document.getElementById('error').textContent, side: (() => { const c = document.getElementById('side'); const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++; return ink; })() }; })()`);
-      const workerSession = () => js("await window.__4cam.engine('simSeek', 1).then((r) => !(r.result && r.result.error), () => false)");
+      const workerSession = () => js("await window.__marcam.engine('simSeek', 1).then((r) => !(r.result && r.result.error), () => false)");
       const newEmpty = async () => {
         await js("document.getElementById('projectNew').click(); true");
         await inDialog({ name: "untitled", kind: "rotary" });
@@ -1030,13 +1030,13 @@ try {
       await inDialog({});
       await waitDone("generation of part A", 240000);
       await js("document.getElementById('simOpen').click(); true");
-      await waitFor(() => js("!!window.__4cam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the playback of A", 120000);
+      await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the playback of A", 120000);
       await js("document.getElementById('simClose').click(); true");
       await js("document.querySelectorAll('#tree .tree-op [data-act=\"select\"]')[1].click(); true");
       const canPick = await js("!!document.getElementById('pickFaces')");
       if (canPick) {
         await js("document.getElementById('pickFaces').click(); true");
-        await waitFor(() => js("!!window.__4cam.state.tree.pickMesh"), "picking on A", 15000);
+        await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "picking on A", 15000);
       }
       const withA = await scene();
       const sessionA = await workerSession();
@@ -1089,7 +1089,7 @@ try {
   // marks the results out of date and waits for Generate; auto-regenerate (off by default)
   // plans once after a drag is released
   {
-    const plans = () => js("window.__4cam.calls.planAndPost || 0");
+    const plans = () => js("window.__marcam.calls.planAndPost || 0");
     const isStale = () => js("document.body.classList.contains('stale')");
     await js("document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
     await settle();
@@ -1107,7 +1107,7 @@ try {
     await drag("left", 1);
     await drag("right", 2);
     for (let k = 0; k < 5; k++) await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: vx + vw / 2, y: vy + vh / 2, deltaX: 0, deltaY: k % 2 ? 120 : -120 });
-    await js("window.__4cam.setView('front', {}); window.__4cam.setView('back', {}); window.__4cam.setView('iso', {}); true");
+    await js("window.__marcam.setView('front', {}); window.__marcam.setView('back', {}); window.__marcam.setView('iso', {}); true");
     // layers, scrubbing the moves, switching program tabs, resizing panes, selecting in the tree
     for (const id of ["showRapids", "showStock", "showPart", "showSim"]) await js(`document.getElementById('${id}').click(); document.getElementById('${id}').click(); true`);
     for (const v of [10, 200, 2000, 0]) await js(`const s = document.getElementById('scrub'); s.value = ${v}; s.dispatchEvent(new Event('input')); true`);
@@ -1121,7 +1121,7 @@ try {
     await js("document.querySelector('#tree .tree-op [data-act=\"select\"]').click(); true");
     // machining playback: open, play a little, scrub, close
     await js("document.getElementById('simOpen').click(); true");
-    await waitFor(() => js("!!window.__4cam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the machining playback", 120000);
+    await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the machining playback", 120000);
     await js("const s = document.getElementById('simScrub'); s.value = Math.floor(s.max / 2); s.dispatchEvent(new Event('input')); true");
     await sleep(300);
     await js("document.getElementById('simClose').click(); true");

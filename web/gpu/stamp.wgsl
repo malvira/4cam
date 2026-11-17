@@ -1,6 +1,6 @@
-// 4cam stock simulation on the GPU, shared by the native crate (fourcam-gpu, wgpu) and the
+// marcam stock simulation on the GPU, shared by the native crate (marcam-gpu, wgpu) and the
 // web app (WebGPU). One invocation per (tool position, cell in its window). The CPU sampled
-// the moves and sized each window in f64 (fourcam::gpu_input); this evaluates the cut in
+// the moves and sized each window in f64 (marcam::gpu_input); this evaluates the cut in
 // f32 and keeps the lowest with atomicMin on a key, height_um << 8 | operation tag.
 //
 // mode 0, rotary: the cell's ray from the axis is cut back to where it enters the tool (the

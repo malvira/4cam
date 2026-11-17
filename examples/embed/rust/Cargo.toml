@@ -1,11 +1,11 @@
 [package]
-name = "fourcam-embed-example"
-description = "Plan a 4cam project from Rust (examples/embed/rust)"
+name = "marcam-embed-example"
+description = "Plan a marcam project from Rust (examples/embed/rust)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
-# published: fourcam-core = "0.1"
-fourcam-core = { version = "0.1.0", path = "../../../crates/fourcam-core" }
+# published: marcam-core = "0.1"
+marcam-core = { version = "0.1.0", path = "../../../crates/marcam-core" }

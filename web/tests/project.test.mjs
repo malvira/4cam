@@ -58,9 +58,14 @@ assert.deepEqual(back.mesh, knob);
 assert.equal(back.meshName, "knob.stl");
 assert.equal(meshFileOf(project), "knob.stl");
 assert.equal(readProjectFile(JSON.stringify(project)).mesh, null);
+// a project saved before the rename (4cam -> marcam: "4cam-project", .4cam.json) opens too
+assert.equal(f.format, "marcam-project");
+const old4cam = readProjectFile(JSON.stringify({ ...f, format: "4cam-project" }));
+assert.deepEqual(old4cam.project, project);
+assert.deepEqual(old4cam.mesh, knob);
 assert.equal(meshFileOf({ schema_version: "0.1", part: { mesh: { file: "a.stl" } } }), "a.stl");
 assert.throws(() => readProjectFile("{ nope"), /not JSON/);
-assert.throws(() => readProjectFile('{"hello": 1}'), /not a 4cam project/);
+assert.throws(() => readProjectFile('{"hello": 1}'), /not a marcam project/);
 console.log("project.js OK");
 
 // setup kinds: margins, explicit stock, the origin, and which operation types fit

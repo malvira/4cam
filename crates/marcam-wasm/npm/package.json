@@ -1,0 +1,20 @@
+{
+  "name": "marcam",
+  "version": "0.1.0",
+  "description": "4th-axis rotary CAM engine in WebAssembly: plan, post, simulate and estimate CNC programs (JSON in, JSON out), in Node and browsers",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/malvira/marcam.git", "directory": "crates/marcam-wasm" },
+  "homepage": "https://github.com/malvira/marcam",
+  "keywords": ["cam", "cnc", "gcode", "4th-axis", "toolpath", "webassembly"],
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": { "types": "./index.d.ts", "default": "./index.js" },
+    "./marcam.js": "./marcam.js",
+    "./marcam.wasm": "./marcam.wasm"
+  },
+  "files": ["index.js", "index.d.ts", "marcam.js", "marcam.wasm", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "sideEffects": false
+}

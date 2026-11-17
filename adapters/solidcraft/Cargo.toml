@@ -1,6 +1,6 @@
 [package]
-name = "fourcam-solidcraft"
-description = "4cam as a SolidCraft plugin: one entry per 4cam operation, G-code written to a granted folder"
+name = "marcam-solidcraft"
+description = "marcam as a SolidCraft plugin: one entry per marcam operation, G-code written to a granted folder"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,11 +13,11 @@ rust-version.workspace = true
 publish = false
 
 [lib]
-name = "fourcam_solidcraft"
+name = "marcam_solidcraft"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-fourcam-core = { version = "0.1.0", path = "../../crates/fourcam-core" }
+marcam-core = { version = "0.1.0", path = "../../crates/marcam-core" }
 serde_json = "1"
 flate2 = "1"
 

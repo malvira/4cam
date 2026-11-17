@@ -1,8 +1,8 @@
 """The FreeCAD adapter against a mocked FreeCAD API (FreeCAD itself is not installed here):
 a fake shape whose tessellate() serves the knob mesh, fake FreeCAD/FreeCADGui modules for
-the macro. Each plan's G-code must be what `4cam run` makes from the project it wrote.
+the macro. Each plan's G-code must be what `marcam run` makes from the project it wrote.
 
-    python adapters/freecad/tests/test_freecad.py <path to the 4cam CLI>
+    python adapters/freecad/tests/test_freecad.py <path to the marcam CLI>
 """
 
 import importlib.machinery
@@ -16,10 +16,10 @@ import types
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
 sys.path.insert(0, os.path.dirname(HERE))
-import fourcam  # noqa: E402
-import fourcam_freecad as fc  # noqa: E402
+import marcam  # noqa: E402
+import marcam_freecad as fc  # noqa: E402
 
-CLI = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, "target", "release", "4cam")
+CLI = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, "target", "release", "marcam")
 
 
 class Vector:
@@ -92,11 +92,11 @@ def test_plans_match_the_cli():
             got = open(os.path.join(out, f"knob_{op}.nc"), encoding="utf-8").read()
             assert got == prog["gcode"]
             want = cli_gcode(os.path.join(out, f"knob_{op}.project.json"), f"knob_{op}", os.path.join(out, "cli"))
-            assert got == want, f"{op}: the plugin's G-code differs from 4cam run"
+            assert got == want, f"{op}: the plugin's G-code differs from marcam run"
             for k, v in inputs.items():
                 if k not in ("tool_kind", "tip_diameter", "taper_angle"):
                     assert res["project"]["setups"][0]["operations"][0][k] == v
-            print(f"ok {op}: {prog['lines']} lines, identical to 4cam run")
+            print(f"ok {op}: {prog['lines']} lines, identical to marcam run")
 
 
 def test_a_body_along_z_is_turned_onto_x():
@@ -139,7 +139,7 @@ def test_the_macro():
     obj = knob()
     gui.Selection = types.SimpleNamespace(getSelection=lambda: [obj])
     sys.modules["FreeCAD"], sys.modules["FreeCADGui"] = app, gui
-    loader = importlib.machinery.SourceFileLoader("macro", os.path.join(HERE, "..", "4cam_plan.FCMacro"))
+    loader = importlib.machinery.SourceFileLoader("macro", os.path.join(HERE, "..", "marcam_plan.FCMacro"))
     macro = types.ModuleType(loader.name)
     macro.__file__ = loader.path
     loader.exec_module(macro)
@@ -147,7 +147,7 @@ def test_the_macro():
     with tempfile.TemporaryDirectory() as tmp:
         res = macro.run("helical_knurl", tmp)
         assert os.path.exists(os.path.join(tmp, "knob_helical_knurl.nc"))
-    assert "4cam helical_knurl on Knob" in messages[0] and "0 issue(s)" in messages[0], messages
+    assert "marcam helical_knurl on Knob" in messages[0] and "0 issue(s)" in messages[0], messages
     gui.Selection = types.SimpleNamespace(getSelection=lambda: [])
     try:
         macro.run("helical_knurl", "x")
@@ -159,7 +159,7 @@ def test_the_macro():
 
 
 if __name__ == "__main__":
-    print(fourcam.version())
+    print(marcam.version())
     test_plans_match_the_cli()
     test_a_body_along_z_is_turned_onto_x()
     test_bad_inputs_name_the_field()

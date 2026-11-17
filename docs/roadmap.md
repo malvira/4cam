@@ -1,6 +1,6 @@
 # Roadmap
 
-4cam is meant to become a general-purpose CAM engine. For now it stays focused on 4th-axis
+marcam is meant to become a general-purpose CAM engine. For now it stays focused on 4th-axis
 (rotary) machining, but the interfaces are being shaped so that focus doesn't box it in.
 
 ## Done
@@ -68,15 +68,15 @@ Operation ids are strings unique within the project. The simulation's per-cell
 goldens are still byte-identical.
 
 1. **Document model 0.2, with upgrade from 0.1. Done:**
-   - `crates/fourcam-core/src/project.rs`;
-   - `4cam upgrade`;
+   - `crates/marcam-core/src/project.rs`;
+   - `marcam upgrade`;
    - `run`, `simulate`, `toolpath` and the WASM API accept either version;
    - `examples/knob/*.project.json`.
 
    A setup is planned by lowering it to a 0.1 job, so the goldens stay identical.
-2. **Operation registry. Done:** `crates/fourcam-core/src/ops.rs` describes each type (parameters with units, defaults and limits; tool shapes; geometry; machine needs; whether it shapes the part on purpose). `4cam ops list|show|check`, WASM `opTypes`/`checkProject`. A test keeps the specs in step with the engine.
-3. **Setups. Done (rotary):** `4cam run` plans every setup (each with its own machine); a setup with `"stock": {"shape": "from_previous"}` starts from the previous setup's simulated stock (`project::simulate_project`); validation rejects a first setup that carries stock and duplicate output names. Example: `examples/knob/knob_two_setups.project.json`. Not yet: work-offset changes between setups (re-chucking at a different X or A), non-rotary holding.
-4. **Geometry selection. Done (prototype):** `crates/fourcam-core/src/geometry.rs` splits a model into face regions at sharp edges (30°), with ids that survive reordering and STL round trips, and a shape guess (plane, cylinder, cone, freeform). An operation's `geometry` (faces, axial range, angular range) becomes a containment boundary in X and A; the drop-cutter still checks the whole model, so selections never gouge neighbouring faces. `4cam faces`, WASM `face_regions` (with per-triangle region ids for picking).
+2. **Operation registry. Done:** `crates/marcam-core/src/ops.rs` describes each type (parameters with units, defaults and limits; tool shapes; geometry; machine needs; whether it shapes the part on purpose). `marcam ops list|show|check`, WASM `opTypes`/`checkProject`. A test keeps the specs in step with the engine.
+3. **Setups. Done (rotary):** `marcam run` plans every setup (each with its own machine); a setup with `"stock": {"shape": "from_previous"}` starts from the previous setup's simulated stock (`project::simulate_project`); validation rejects a first setup that carries stock and duplicate output names. Example: `examples/knob/knob_two_setups.project.json`. Not yet: work-offset changes between setups (re-chucking at a different X or A), non-rotary holding.
+4. **Geometry selection. Done (prototype):** `crates/marcam-core/src/geometry.rs` splits a model into face regions at sharp edges (30°), with ids that survive reordering and STL round trips, and a shape guess (plane, cylinder, cone, freeform). An operation's `geometry` (faces, axial range, angular range) becomes a containment boundary in X and A; the drop-cutter still checks the whole model, so selections never gouge neighbouring faces. `marcam faces`, WASM `face_regions` (with per-triangle region ids for picking).
 
    **Face-bounded rasters. Done:** faces picked on a mesh model limit `raster3d` (vise,
    or indexed on a rotary setup) and `rotary_finish` (both patterns) to where the tool
@@ -95,7 +95,7 @@ goldens are still byte-identical.
      and nothing is gouged.
 
    Not yet: curves and 2D paths as selections.
-5. **Knurl wizard. Done:** `crates/fourcam-core/src/wizards.rs` reads the model's faces (the body cone, extended to the front face, and the front face's edge for the chamfer) and adds turning, a diamond knurl and a V-bit flank chamfer as ordinary operations and outputs. On the knob it rebuilds the program byte-for-byte. `4cam wizard knurl`, WASM `wizardKnurl`.
+5. **Knurl wizard. Done:** `crates/marcam-core/src/wizards.rs` reads the model's faces (the body cone, extended to the front face, and the front face's edge for the chamfer) and adds turning, a diamond knurl and a V-bit flank chamfer as ordinary operations and outputs. On the knob it rebuilds the program byte-for-byte. `marcam wizard knurl`, WASM `wizardKnurl`.
 6. **Frontend setup/operation tree. Done:** the web app's Project panel (`web/tree.js`) shows setups, output files and operations; operations can be added from forms generated from the operation registry (validated by the engine before they join the project), edited, turned on/off, coloured, reordered and deleted; faces are picked by clicking the model; the knurl wizard runs from the tree; Generate and the machining simulation use the chosen setup and the operation colours. Originally planned as: type, tool, geometry chosen by clicking the model,
    reorder, enable, colour.
 7. **First 3-axis operations. Done:**
@@ -175,8 +175,8 @@ goldens are still byte-identical.
 
   - **Outline letters for `vcarve`** (`text`, `text_height`, `text_at`, `text_rotate`,
     `text_weight`):
-    - The font is 4cam's own single-stroke font inked with a round pen: by default 0.12
-      of the cap height wide. No third-party font is bundled. Like the rest of 4cam it is
+    - The font is marcam's own single-stroke font inked with a round pen: by default 0.12
+      of the cap height wide. No third-party font is bundled. Like the rest of marcam it is
       original work under the repository's Apache-2.0 licence.
     - Each glyph's outline, and the outlines of its holes (O, A, B, 0 ...), are the zero
       loops of the distance field "half pen width minus distance to the strokes", traced
@@ -198,7 +198,7 @@ goldens are still byte-identical.
 
   New optional profile fields: `accel` on axes, `max_rapid` on rotary axes, and `timing`
   (junction deviation, tool change and spindle start seconds), with stated defaults. Times
-  are shown per operation, per file and in total: `4cam run`, `4cam estimate <file.nc>`,
+  are shown per operation, per file and in total: `marcam run`, `marcam estimate <file.nc>`,
   WASM `planAndPost`/`estimateGcode`, Python `estimate`, and the web app's summary and
   operation tree. Hand-computed tests cover straight feeds and rapids, acceleration-limited
   moves, corners and reversals, rotary moves in each feed mode, dwells, tool changes, inch

@@ -1,0 +1,33 @@
+[package]
+name = "marcam-cli"
+description = "Command-line interface for marcam, a 4th-axis rotary CAM engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+# the tests read the repository's examples and fixtures: not shipped
+exclude = ["tests/"]
+
+[[bin]]
+name = "marcam"
+path = "src/main.rs"
+
+# the name before the rename: the same program
+[[bin]]
+name = "4cam"
+path = "src/alias.rs"
+
+[dependencies]
+marcam-core = { version = "0.1.0", path = "../marcam-core" }
+serde_json = "1"
+ureq = "3"
+marcam-gpu = { version = "0.1.0", path = "../marcam-gpu", optional = true }
+
+[features]
+# `marcam simulate --gpu`: the stock simulation on the GPU (wgpu), falling back to the CPU
+gpu = ["dep:marcam-gpu"]

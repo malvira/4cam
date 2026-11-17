@@ -89,7 +89,7 @@
           "name": "Text round the bar",
           "type": "engrave",
           "tool": 2,
-          "text": "4CAM ROTARY",
+          "text": "MARCAM ROTARY",
           "text_height": 5.0,
           "text_at": [
             -15.0,

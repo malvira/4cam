@@ -17,11 +17,11 @@ if [ -x target/pkg-venv/Scripts/python.exe ]; then BIN=target/pkg-venv/Scripts; 
 VPY=$(ls $BIN/python* | head -1)
 $VPY -m pip install --quiet "maturin>=1.9,<2"
 rm -rf target/pkg/python
-(cd crates/fourcam-py && ../../$BIN/maturin build --release --out ../../target/pkg/python >/dev/null && ../../$BIN/maturin sdist --out ../../target/pkg/python >/dev/null)
+(cd crates/marcam-py && ../../$BIN/maturin build --release --out ../../target/pkg/python >/dev/null && ../../$BIN/maturin sdist --out ../../target/pkg/python >/dev/null)
 rm -rf target/pkg-test && $PY -m venv target/pkg-test
 if [ -x target/pkg-test/Scripts/python.exe ]; then TPY=target/pkg-test/Scripts/python.exe; else TPY=target/pkg-test/bin/python; fi
 $TPY -m pip install --quiet --no-index target/pkg/python/*.whl
-$TPY -I crates/fourcam-py/tests/test_fourcam.py | tail -1
+$TPY -I crates/marcam-py/tests/test_marcam.py | tail -1
 PATH="$(pwd)/$BIN:$PATH" $VPY -m pip wheel --quiet --no-build-isolation --no-deps target/pkg/python/*.tar.gz -w target/pkg/python/from-sdist
 ls target/pkg/python target/pkg/python/from-sdist
 

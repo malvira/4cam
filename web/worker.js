@@ -1,9 +1,9 @@
-// Runs the 4cam WebAssembly engine off the main thread.
+// Runs the marcam WebAssembly engine off the main thread.
 // Messages in:  { id, cmd, args }   (cmd: version | exampleJob | machine | planAndPost | simulate | meshTriangles)
 // Messages out: { id, ok, result } or { id, ok: false, error }
-import { load } from "./pkg/fourcam.js";
+import { load } from "./pkg/marcam.js";
 
-const ready = load(new URL("./pkg/fourcam.wasm", import.meta.url));
+const ready = load(new URL("./pkg/marcam.wasm", import.meta.url));
 
 self.onmessage = async (ev) => {
   const { id, cmd, args } = ev.data;

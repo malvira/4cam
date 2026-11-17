@@ -1,25 +1,25 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/fourcam-core",
-    "crates/fourcam-cli",
-    "crates/fourcam-wasm",
-    "crates/fourcam-py",
-    "crates/fourcam-fixtures",
-    "crates/fourcam-gpu",
-    "crates/fourcam-capi",
+    "crates/marcam-core",
+    "crates/marcam-cli",
+    "crates/marcam-wasm",
+    "crates/marcam-py",
+    "crates/marcam-fixtures",
+    "crates/marcam-gpu",
+    "crates/marcam-capi",
     "adapters/solidcraft",
     "examples/embed/rust",
 ]
 # the Python extension needs a Python toolchain; build it with scripts/build-python
-default-members = ["crates/fourcam-core", "crates/fourcam-cli", "crates/fourcam-wasm", "crates/fourcam-fixtures", "crates/fourcam-capi"]
+default-members = ["crates/marcam-core", "crates/marcam-cli", "crates/marcam-wasm", "crates/marcam-fixtures", "crates/marcam-capi"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/malvira/4cam"
-homepage = "https://github.com/malvira/4cam"
+repository = "https://github.com/malvira/marcam"
+homepage = "https://github.com/malvira/marcam"
 readme = "README.md"
 keywords = ["cam", "cnc", "gcode", "4th-axis", "toolpath"]
 categories = ["science::robotics", "simulation", "command-line-utilities"]

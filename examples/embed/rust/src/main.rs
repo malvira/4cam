@@ -1,12 +1,12 @@
-//! Plan a 4cam project from Rust and print its programs.
+//! Plan a marcam project from Rust and print its programs.
 //!
-//!     cargo run -p fourcam-embed-example -- project.json
-use fourcam::{load_mesh, plan_with_mesh, post, profiles, project};
+//!     cargo run -p marcam-embed-example -- project.json
+use marcam::{load_mesh, plan_with_mesh, post, profiles, project};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
         .nth(1)
-        .ok_or("usage: fourcam-embed-example project.json")?;
+        .ok_or("usage: marcam-embed-example project.json")?;
     let dir = std::path::Path::new(&path)
         .parent()
         .unwrap_or(std::path::Path::new("."));

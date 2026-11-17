@@ -1,4 +1,4 @@
-// 4cam web UI: job editor -> engine (WebAssembly, in a worker) -> G-code, checks, previews.
+// marcam web UI: job editor -> engine (WebAssembly, in a worker) -> G-code, checks, previews.
 
 import { blockSolid, cylinder, heightmapSolid, revolveProfile } from "./meshes.js";
 import { gpuDevice, simulateOnGpu } from "./gpu/gpusim.js";
@@ -6,6 +6,16 @@ import { setupMachining } from "./machining.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
 import { setupProject } from "./project.js";
+
+// Settings saved before the rename (4cam -> marcam) carry over once: "4cam.x" -> "marcam.x".
+try {
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("4cam.") && localStorage.getItem("marcam." + k.slice(5)) === null) localStorage.setItem("marcam." + k.slice(5), localStorage.getItem(k));
+  }
+} catch {
+  // storage blocked: nothing to carry over
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,7 +31,7 @@ worker.onmessage = (ev) => {
   ok ? p.resolve({ result, ms }) : p.reject(new Error(error));
 };
 worker.onerror = (ev) => setStatus(`Engine failed to start: ${ev.message || "see console"}`, "error");
-/** Engine calls by command, since the page loaded (window.__4cam.calls). */
+/** Engine calls by command, since the page loaded (window.__marcam.calls). */
 const calls = {};
 function engine(cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
@@ -41,7 +51,7 @@ const state = {
   tab: 0,
   three: null, // lazily loaded three.js view
 };
-window.__4cam = { state, engine, calls };
+window.__marcam = { state, engine, calls };
 
 function setStatus(text, mode = "") {
   $("status").textContent = text;
@@ -68,7 +78,7 @@ function readJob() {
  *  a project being opened or reset. */
 function writeJob(job, opts = {}) {
   $("job").value = JSON.stringify(job, null, 2);
-  if (!opts.load) window.__4cam.project?.changed({ stale: !opts.display });
+  if (!opts.load) window.__marcam.project?.changed({ stale: !opts.display });
 }
 
 /** The Generate button asks for attention when the results are out of date or missing. */
@@ -143,9 +153,9 @@ async function resetProject(msg, actions) {
   clearTimeout(autoTimer);
   autoTimer = null;
   autoPending = false;
-  window.__4cam.machining?.reset();
-  window.__4cam.tree?.reset();
-  window.__4cam.project?.dropUndo();
+  window.__marcam.machining?.reset();
+  window.__marcam.tree?.reset();
+  window.__marcam.project?.dropUndo();
   try {
     await engine("simClose");
   } catch {
@@ -191,7 +201,7 @@ function clearResults(msg, actions = ["import", "open"]) {
 async function refreshAll() {
   renderQuick();
   renderTools();
-  await window.__4cam.tree?.refresh();
+  await window.__marcam.tree?.refresh();
   updateSimResInfo();
 }
 
@@ -302,12 +312,12 @@ async function loadExampleInto(name) {
   if (jm) renderMachines(jm);
   renderQuick();
   renderTools();
-  if (window.__4cam.project) {
-    window.__4cam.project.state.fileName = null;
-    window.__4cam.project.clean(loaded.name || `example: ${name}`);
+  if (window.__marcam.project) {
+    window.__marcam.project.state.fileName = null;
+    window.__marcam.project.clean(loaded.name || `example: ${name}`);
   }
   clearResults("");
-  await window.__4cam.tree?.refresh();
+  await window.__marcam.tree?.refresh();
   updateSimResInfo();
   if (state.registry) setStatus(`Loaded the ${name} example: Generate to plan it`, "ready");
 }
@@ -340,7 +350,7 @@ export function fmtTime(sec) {
   if (s >= 60) return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
   return `${s} s`;
 }
-window.__4cam = Object.assign(window.__4cam || {}, { fmtTime });
+window.__marcam = Object.assign(window.__marcam || {}, { fmtTime });
 
 async function generate() {
   showError("");
@@ -376,7 +386,7 @@ async function generate() {
     selectTab(0);
     const issues = result.programs.reduce((n, p) => n + p.issues.length, 0);
     // the tree shows each operation's and file's estimated time
-    await window.__4cam.tree?.refresh();
+    await window.__marcam.tree?.refresh();
     updateSimResInfo();
     // done only once everything is shown and the buttons work again
     $("generate").disabled = $("simulate").disabled = false;
@@ -401,7 +411,7 @@ function simOpts() {
 
 function saveSimRes() {
   try {
-    localStorage.setItem("4cam.simRes", JSON.stringify({ v: $("simRes").value, dx: $("simDx").value, deg: $("simDeg").value, cell: $("simCell").value, gpu: $("simGpu").checked }));
+    localStorage.setItem("marcam.simRes", JSON.stringify({ v: $("simRes").value, dx: $("simDx").value, deg: $("simDeg").value, cell: $("simCell").value, gpu: $("simGpu").checked }));
   } catch {}
 }
 
@@ -420,7 +430,7 @@ function showBackend(text) {
 
 function loadSimRes() {
   try {
-    const s = JSON.parse(localStorage.getItem("4cam.simRes") || "null");
+    const s = JSON.parse(localStorage.getItem("marcam.simRes") || "null");
     if (s) {
       $("simRes").value = s.v;
       $("simDx").value = s.dx;
@@ -895,13 +905,13 @@ function simMesh(THREE, sim, s) {
 
 // ---------------------------------------------------------------- wiring
 $("loadExample").addEventListener("click", () => {
-  if (!window.__4cam.project.mayDiscard("Load the example")) return;
+  if (!window.__marcam.project.mayDiscard("Load the example")) return;
   loadExample($("example").value).catch((e) => {
     showError(e.message);
     setStatus("Loading failed", "error");
   });
 });
-$("job").addEventListener("input", () => window.__4cam.project.changed());
+$("job").addEventListener("input", () => window.__marcam.project.changed());
 $("summary").addEventListener("click", (ev) => {
   if (ev.target.id === "staleRegen") generate();
   if (ev.target.dataset?.empty === "import") $("importStl").click();
@@ -919,7 +929,7 @@ $("machine").addEventListener("change", () => {
     const z1 = state.registry.machines.find((m) => m.id === "makera-z1-4axis");
     $("machineJson").value = JSON.stringify(z1, null, 2);
   }
-  store("4cam.machineSel", $("machine").value);
+  store("marcam.machineSel", $("machine").value);
   renderMachineInfo();
   // the project remembers a built-in machine on its setup
   try {
@@ -929,17 +939,17 @@ $("machine").addEventListener("change", () => {
     if (s && state.registry.machines.some((m) => m.id === id) && s.machine !== id) {
       s.machine = id;
       writeJob(doc);
-      window.__4cam.tree?.refresh();
-    } else window.__4cam.project?.changed();
+      window.__marcam.tree?.refresh();
+    } else window.__marcam.project?.changed();
   } catch {
-    window.__4cam.project?.changed();
+    window.__marcam.project?.changed();
   }
 });
 $("mesh").addEventListener("change", async () => {
   const f = $("mesh").files[0];
   if (f) {
     setMesh(new Uint8Array(await f.arrayBuffer()), f.name);
-    window.__4cam.project.changed();
+    window.__marcam.project.changed();
   }
 });
 $("scrub").addEventListener("input", () => {
@@ -956,7 +966,7 @@ window.addEventListener("resize", drawSide);
     $("version").textContent = `v${result.version}`;
     state.registry = (await engine("profileList")).result;
     initLibraries();
-    renderMachines(load("4cam.machineSel", "makera-z1-4axis"));
+    renderMachines(load("marcam.machineSel", "makera-z1-4axis"));
     renderLibraries();
     await loadExample("knob");
     setMesh(null, "");
@@ -982,14 +992,14 @@ function store(key, value) {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {}
 }
-const userMachines = () => load("4cam.machines", []);
-const libraries = () => load("4cam.libraries", []);
+const userMachines = () => load("marcam.machines", []);
+const libraries = () => load("marcam.libraries", []);
 
 /** First run: "My tools" starts as a copy of the Makera starter library. */
 function initLibraries() {
   if (libraries().length) return;
   const starter = state.registry.libraries.find((l) => l.id === "makera-starter");
-  store("4cam.libraries", [{ ...structuredClone(starter), id: "my-tools", name: "My tools (from Makera starter)" }]);
+  store("marcam.libraries", [{ ...structuredClone(starter), id: "my-tools", name: "My tools (from Makera starter)" }]);
 }
 
 function renderMachines(selected) {
@@ -1050,12 +1060,12 @@ function currentLibrary() {
 }
 
 function saveLibrary(lib) {
-  store("4cam.libraries", libraries().map((l) => (l.id === lib.id ? lib : l)));
+  store("marcam.libraries", libraries().map((l) => (l.id === lib.id ? lib : l)));
 }
 
 function renderLibraries(selected) {
   const sel = $("library");
-  const keep = selected || sel.value || load("4cam.libSel", "my-tools");
+  const keep = selected || sel.value || load("marcam.libSel", "my-tools");
   sel.innerHTML = "";
   for (const l of libraries()) {
     const o = document.createElement("option");
@@ -1188,16 +1198,16 @@ async function importBytes(bytes, name) {
   if (result.kind === "tools") {
     const libs = libraries().filter((l) => l.id !== result.profile.id);
     libs.push(result.profile);
-    store("4cam.libraries", libs);
+    store("marcam.libraries", libs);
     renderLibraries(result.profile.id);
-    store("4cam.libSel", result.profile.id);
+    store("marcam.libSel", result.profile.id);
     $("importInfo").textContent = `Imported tool library "${result.profile.name}": ${result.profile.tools.length} tools${notes}`;
   } else {
     const ms = userMachines().filter((m) => m.id !== result.profile.id);
     ms.push(result.profile);
-    store("4cam.machines", ms);
+    store("marcam.machines", ms);
     renderMachines(result.profile.id);
-    store("4cam.machineSel", $("machine").value);
+    store("marcam.machineSel", $("machine").value);
     $("importInfo").textContent = `Imported machine "${result.profile.name}"${notes}`;
   }
 }
@@ -1214,7 +1224,7 @@ function downloadJson(obj, file) {
 }
 
 $("library").addEventListener("change", () => {
-  store("4cam.libSel", $("library").value);
+  store("marcam.libSel", $("library").value);
   renderTools();
 });
 $("toolTable").addEventListener("click", (ev) => {
@@ -1262,7 +1272,7 @@ $("importUrlBtn").addEventListener("click", async () => {
 $("job").addEventListener("change", renderTools);
 
 // ---------------------------------------------------------------- resizable panes
-window.__4cam.splitters = {
+window.__marcam.splitters = {
   left: splitter({ bar: $("splitLeft"), target: $("left"), axis: "x", min: 300, max: () => window.innerWidth - 520, id: "left" }),
   code: splitter({ bar: $("splitCode"), target: $("codeWrap"), axis: "x", after: true, min: 200, max: () => $("views").clientWidth - 288, id: "code" }),
   side: splitter({ bar: $("split3d"), target: $("side"), axis: "y", after: true, min: 80, max: () => Math.max(80, $("viewWrap").clientHeight - 260), id: "side" }),
@@ -1272,39 +1282,39 @@ window.__4cam.splitters = {
 new ResizeObserver(() => drawSide()).observe($("side"));
 
 // ---------------------------------------------------------------- project tree (0.2)
-window.__4cam.tree = setupTree({
+window.__marcam.tree = setupTree({
   engine, $, state, readJob, writeJob, showError, getThree,
   machineArg: () => (typeof machineArg() === "string" && machineArg() !== "custom" ? machineArg() : null),
   onChange: () => { renderQuick(); renderTools(); },
 });
-$("job").addEventListener("change", () => window.__4cam.tree.refresh());
+$("job").addEventListener("change", () => window.__marcam.tree.refresh());
 
 // ---------------------------------------------------------------- auto-regenerate setting
 try {
-  $("autoGen").checked = localStorage.getItem("4cam.autoGen") === "1";
+  $("autoGen").checked = localStorage.getItem("marcam.autoGen") === "1";
 } catch {}
 $("autoGen").addEventListener("change", () => {
   try {
-    localStorage.setItem("4cam.autoGen", $("autoGen").checked ? "1" : "0");
+    localStorage.setItem("marcam.autoGen", $("autoGen").checked ? "1" : "0");
   } catch {}
   if ($("autoGen").checked && state.stale) scheduleAuto();
 });
-window.__4cam.autoDelay = AUTO_DELAY;
+window.__marcam.autoDelay = AUTO_DELAY;
 
 // ---------------------------------------------------------------- project workflow
-window.__4cam.project = setupProject({
+window.__marcam.project = setupProject({
   $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, markStale, resetProject,
   machineArg, currentMachine, selectMachine: (id) => renderMachines(id),
 });
 
 // ---------------------------------------------------------------- machining simulation
-window.__4cam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend });
-window.__4cam.updateSimResInfo = updateSimResInfo;
+window.__marcam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend });
+window.__marcam.updateSimResInfo = updateSimResInfo;
 
 // ---------------------------------------------------------------- view hooks (used by the e2e test)
 /** Camera presets: "iso", "front" (looking down the axis from +X), "back" (from -X). `show`
  *  picks layers: { path, part, stock, sim }. Renders immediately. */
-window.__4cam.setView = async (name, show = {}) => {
+window.__marcam.setView = async (name, show = {}) => {
   const v = await getThree();
   if (!v || v.failed || !v.bounds) return false;
   const { xmin, xmax, R } = v.bounds;
@@ -1322,7 +1332,7 @@ window.__4cam.setView = async (name, show = {}) => {
 };
 
 /** "r,g,b" at a fraction (fx, fy) of the 3D canvas, after a fresh render. */
-window.__4cam.pixelAt = (fx, fy) => {
+window.__marcam.pixelAt = (fx, fy) => {
   const v = state.three;
   v.renderer.render(v.scene, v.camera);
   const gl = v.renderer.getContext();

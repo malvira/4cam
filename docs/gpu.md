@@ -1,6 +1,6 @@
 # GPU acceleration: findings and plan
 
-**Question.** Mar asked whether 4cam should use the GPU when one is available, natively with
+**Question.** Mar asked whether marcam should use the GPU when one is available, natively with
 wgpu (Vulkan/DX12/Metal) and in the browser with WebGPU. Any GPU path needs an automatic
 CPU fallback, and the G-code must not depend on whether a GPU is present.
 
@@ -9,7 +9,7 @@ This note records:
 - what cheaper CPU changes gained;
 - where a GPU can help without risking G-code determinism.
 
-Every number here comes from `cargo run --release -p fourcam-core --example profile` on the
+Every number here comes from `cargo run --release -p marcam-core --example profile` on the
 development PC.
 
 ## The machine
@@ -109,7 +109,7 @@ so the G-code would depend on whether a GPU was present. Bit-exact `f32` emulati
 - **B. Threaded simulation and drop-cutter, bit-identical, on by default natively.** Tested
   by comparing against the single-threaded results bit for bit. This removes most of the
   Fine-grid wait in the CLI and Python with no new dependency.
-- **C. GPU simulation prototype in a separate crate** (`fourcam-gpu`, wgpu), behind a
+- **C. GPU simulation prototype in a separate crate** (`marcam-gpu`, wgpu), behind a
   feature flag, falling back to the CPU when no adapter is found. Tests compare the GPU
   heightmap with the CPU's within the quantization, and skip cleanly without a GPU. A
   benchmark runs on the knob and ring at Fine and Ultra.
@@ -127,7 +127,7 @@ and stamps only its own rows. The stock, the operation tags and the statistics a
 to the single-threaded run; a test compares them bit for bit at 1, 3 and 7 threads on the
 indexed knob.
 
-`simulate` uses all cores natively (`FOURCAM_THREADS` overrides) and one thread on wasm.
+`simulate` uses all cores natively (`MARCAM_THREADS` overrides) and one thread on wasm.
 Playback runs long seeks the same way, between snapshots.
 
 | Stage | One thread | Threads |
@@ -143,9 +143,9 @@ finish early. Interleaving rows across threads would even that out.
 
 ## C: GPU simulation prototype (done)
 
-**The crate.** `crates/fourcam-gpu` uses wgpu 25 and one WGSL compute shader. It is not in
-the default build. The CLI uses it with `cargo build -p fourcam-cli --features gpu`, which
-adds `4cam simulate --gpu`. `simulate_or_cpu` falls back to the CPU simulation in two cases:
+**The crate.** `crates/marcam-gpu` uses wgpu 25 and one WGSL compute shader. It is not in
+the default build. The CLI uses it with `cargo build -p marcam-cli --features gpu`, which
+adds `marcam simulate --gpu`. `simulate_or_cpu` falls back to the CPU simulation in two cases:
 - when there is no hardware adapter (software adapters count as none);
 - when a job has indexed 3+1 moves or more than 255 operations.
 
@@ -155,7 +155,7 @@ adds `4cam simulate --gpu`. `simulate_or_cpu` falls back to the CPU simulation i
 - The shader evaluates the CPU's ray-entry iteration per (position, cell) in f32 and keeps
   the lowest with `atomicMin` on height (µm) << 8 | tag.
 
-**Agreement with the CPU** (`cargo test -p fourcam-gpu`, on the RTX 5080):
+**Agreement with the CPU** (`cargo test -p marcam-gpu`, on the RTX 5080):
 
 | Example | Tool positions | Largest height difference | Tags that differ |
 | --- | ---: | ---: | ---: |
@@ -168,7 +168,7 @@ The test also checks that an indexed job falls back and gives the plain CPU resu
 `%` of a negative `i32` behaved like the unsigned remainder, so cells just before angle 0
 were written to the wrong column. The shader now keeps the index positive before wrapping.
 
-**Speed** (`cargo run --release -p fourcam-gpu --example bench`; whole job, GPU time
+**Speed** (`cargo run --release -p marcam-gpu --example bench`; whole job, GPU time
 includes upload and readback):
 
 | Example | Grid | Cells | CPU 1 thread | CPU 32 threads | RTX 5080 |
@@ -191,9 +191,9 @@ does not yet simulate on the GPU:
 ## D: WebGPU in the web app (done)
 
 **What changed.**
-- **One shader, two hosts.** `web/gpu/stamp.wgsl` is used natively (`fourcam-gpu`) and in
+- **One shader, two hosts.** `web/gpu/stamp.wgsl` is used natively (`marcam-gpu`) and in
   the browser. It has two modes: rotary (radial stamp) and block (3-axis heightmap).
-- **Inputs from the engine.** The tool positions come from `fourcam::gpu_input`, which has
+- **Inputs from the engine.** The tool positions come from `marcam::gpu_input`, which has
   no GPU dependency, so the WASM build provides them: `gpuOpen` returns the positions,
   per-segment and per-program ranges, rapid flags, starting keys and the part map.
 - **Report numbers stay in the engine.** `gpuStats` turns a GPU stock into its report

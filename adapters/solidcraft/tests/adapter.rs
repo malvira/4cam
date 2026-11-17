@@ -1,7 +1,7 @@
 //! The SolidCraft adapter without SolidCraft: the manifest it ships, and every entry run on
-//! the knob fixture as `model.mesh` would hand it over, checked against the 4cam CLI.
+//! the knob fixture as `model.mesh` would hand it over, checked against the marcam CLI.
 
-use fourcam_solidcraft::*;
+use marcam_solidcraft::*;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -12,7 +12,7 @@ fn root() -> PathBuf {
 /// The knob fixture as a `model.mesh` result (positions and index triangles).
 fn knob_mesh_result() -> Value {
     let bytes = std::fs::read(root().join("examples/knob/knob.stl")).unwrap();
-    let mesh = fourcam::Mesh::from_bytes(&bytes).unwrap();
+    let mesh = marcam::Mesh::from_bytes(&bytes).unwrap();
     let mut positions = Vec::new();
     let mut triangles = Vec::new();
     for t in &mesh.triangles {
@@ -54,7 +54,7 @@ fn manifest_fits_solidcraft_rules() {
         json!([{"name": "output", "read": false, "write": true}])
     );
     let entries = rt["entries"].as_array().unwrap();
-    let kinds: Vec<&str> = fourcam::ops::registry()
+    let kinds: Vec<&str> = marcam::ops::registry()
         .iter()
         .map(|t| t.kind)
         .filter(|k| *k != "rotary_turning")
@@ -76,7 +76,7 @@ fn manifest_fits_solidcraft_rules() {
         assert_eq!(s["properties"]["bodies"]["type"], "array");
         assert_eq!(s["required"], json!(["bodies"]));
         // every operation field (but the tool, which the adapter makes) is an input
-        for p in fourcam::ops::find(kind).unwrap().params {
+        for p in marcam::ops::find(kind).unwrap().params {
             if p.name != "tool" {
                 assert!(s["properties"].get(p.name).is_some(), "{kind}.{}", p.name);
             }
@@ -165,18 +165,18 @@ fn placement_and_defaults() {
     assert_eq!(pz["setups"][0]["stock"], p["setups"][0]["stock"]);
 }
 
-/// Every entry plans on the knob, and its G-code is what `4cam run` makes from the files
+/// Every entry plans on the knob, and its G-code is what `marcam run` makes from the files
 /// the entry wrote.
 #[test]
 fn every_entry_matches_the_cli() {
     let mesh = knob_mesh_result();
     let cli = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target");
-    // the most recently built 4cam CLI (check.sh builds it before the tests)
+    // the most recently built marcam CLI (check.sh builds it before the tests)
     let exe = [
-        "release/4cam.exe",
-        "release/4cam",
-        "debug/4cam.exe",
-        "debug/4cam",
+        "release/marcam.exe",
+        "release/marcam",
+        "debug/marcam.exe",
+        "debug/marcam",
     ]
     .iter()
     .map(|p| cli.join(p))
@@ -184,9 +184,9 @@ fn every_entry_matches_the_cli() {
     .max()
     .map(|(_, p)| p);
     if exe.is_none() {
-        eprintln!("no 4cam CLI built: G-code not compared with `4cam run`");
+        eprintln!("no marcam CLI built: G-code not compared with `marcam run`");
     }
-    let tmp = std::env::temp_dir().join(format!("fourcam-solidcraft-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("marcam-solidcraft-{}", std::process::id()));
     for t in offered() {
         let entry = entry_name(t.kind);
         let out = run_entry(&entry, &json!({"bodies": ["Knob"]}), &mesh)
@@ -247,7 +247,7 @@ fn every_entry_matches_the_cli() {
         });
         assert!(
             from_cli == text,
-            "{entry}: the plugin's G-code differs from 4cam run's"
+            "{entry}: the plugin's G-code differs from marcam run's"
         );
     }
     let _ = std::fs::remove_dir_all(&tmp);

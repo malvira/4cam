@@ -91,7 +91,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     let n = 0;
     // estimated times from the last Generate of this setup
     const res = state.result;
-    const fmt = window.__4cam?.fmtTime || ((x) => `${Math.round(x)} s`);
+    const fmt = window.__marcam?.fmtTime || ((x) => `${Math.round(x)} s`);
     const fileTime = (name) => res?.programs?.find((p) => p.name === name)?.time?.total_s;
     // by project id, or (a 0.1 job shown as a project) by planning order: the enabled
     // operations of the outputs in turn
@@ -339,11 +339,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     if (el.id === "treeEditSetup") {
-      await window.__4cam.project.editSetup(t.setup);
+      await window.__marcam.project.editSetup(t.setup);
       return;
     }
     if (el.id === "treeAddSetup") {
-      await window.__4cam.project.addSetup();
+      await window.__marcam.project.addSetup();
       return;
     }
     if (el.id === "cancelDraft") {

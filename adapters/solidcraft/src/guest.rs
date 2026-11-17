@@ -14,7 +14,7 @@ fn to_plugin_error(e: Error) -> PluginError {
     match e {
         Error::Input { field, reason } => PluginError::InvalidInput(FieldFailure { field, reason }),
         // No other variant fits an engine refusal; `trap` carries the reason as text.
-        Error::Engine(reason) => PluginError::Trap(format!("4cam: {reason}")),
+        Error::Engine(reason) => PluginError::Trap(format!("marcam: {reason}")),
     }
 }
 
@@ -30,7 +30,7 @@ impl exports::craft::plugin::entry::Guest for Plugin {
         if crate::entry_kind(&entry).is_none() {
             return Err(to_plugin_error(Error::Input {
                 field: "entry".into(),
-                reason: format!("no 4cam operation {entry:?}"),
+                reason: format!("no marcam operation {entry:?}"),
             }));
         }
         let request = crate::mesh_request(&params).map_err(to_plugin_error)?;
@@ -49,7 +49,7 @@ impl exports::craft::plugin::entry::Guest for Plugin {
         }
         log::log(
             log::Level::Info,
-            &format!("4cam {entry}: wrote {} file(s)", out.files.len()),
+            &format!("marcam {entry}: wrote {} file(s)", out.files.len()),
         );
         Ok(out.result.to_string())
     }

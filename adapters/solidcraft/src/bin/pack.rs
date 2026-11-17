@@ -6,8 +6,8 @@
 //!
 //! Wraps the core module (built for wasm32-unknown-unknown, carrying wit-bindgen's component
 //! type) as a WebAssembly component with no WASI adapter, writes `plugin.json` from the
-//! operation registry, and zips both as `<out-dir>/fourcam.zip`. The unzipped package is
-//! left in `<out-dir>/fourcam/` too.
+//! operation registry, and zips both as `<out-dir>/marcam.zip`. The unzipped package is
+//! left in `<out-dir>/marcam/` too.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,8 +21,7 @@ fn pack(core: &Path, out: &Path) -> Result<PathBuf, String> {
         .validate(true)
         .encode()
         .map_err(|e| format!("component encoding: {e:#}"))?;
-    let manifest =
-        serde_json::to_vec(&fourcam_solidcraft::manifest()).map_err(|e| e.to_string())?;
+    let manifest = serde_json::to_vec(&marcam_solidcraft::manifest()).map_err(|e| e.to_string())?;
     if manifest.len() > 16 * 1024 {
         return Err(format!(
             "plugin.json is {} bytes; SolidCraft takes at most 16 KiB",
@@ -35,12 +34,12 @@ fn pack(core: &Path, out: &Path) -> Result<PathBuf, String> {
             component.len()
         ));
     }
-    let dir = out.join(fourcam_solidcraft::PLUGIN_ID);
+    let dir = out.join(marcam_solidcraft::PLUGIN_ID);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     std::fs::write(dir.join("plugin.json"), &manifest).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("plugin.wasm"), &component).map_err(|e| e.to_string())?;
 
-    let zip_path = out.join(format!("{}.zip", fourcam_solidcraft::PLUGIN_ID));
+    let zip_path = out.join(format!("{}.zip", marcam_solidcraft::PLUGIN_ID));
     let file =
         std::fs::File::create(&zip_path).map_err(|e| format!("{}: {e}", zip_path.display()))?;
     let mut zip = zip::ZipWriter::new(file);

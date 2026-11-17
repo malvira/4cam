@@ -1,7 +1,7 @@
 # Hand-timed fixtures
 
 Small programs whose cutting time can be worked out on paper. The test
-`crates/fourcam-core/tests/timing.rs` plans each one and checks that:
+`crates/marcam-core/tests/timing.rs` plans each one and checks that:
 
 - the estimate at the programmed feeds (no acceleration, no axis limits) matches the
   hand figure;

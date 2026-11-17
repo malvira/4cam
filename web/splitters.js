@@ -3,7 +3,7 @@
 // (pointer events with capture), arrow keys when focused (Shift = bigger steps), double-click
 // to reset, sizes saved in localStorage. Off on narrow (stacked) layouts.
 
-const KEY = "4cam.split";
+const KEY = "marcam.split";
 const WIDE = window.matchMedia("(min-width: 901px)");
 
 function load() {

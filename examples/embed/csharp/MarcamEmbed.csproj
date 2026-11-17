@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Calls the marcam C library (marcam_c.dll / libmarcam_c.so) through P/Invoke, the way
+       a SolidWorks or other .NET add-in would. Put the library next to the program or on
+       PATH (LD_LIBRARY_PATH on Linux). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+</Project>
