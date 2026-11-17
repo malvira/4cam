@@ -22,8 +22,10 @@ use std::collections::HashMap;
 /// The frame the part is recognised in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Frame {
-    /// Z up (vise; indexed 3+1 with the part turned to `index_a` degrees about X).
-    Xyz { index_a: f64 },
+    /// Z up (vise; indexed 3+1 with the part turned to `index_a` degrees about X). `sides`:
+    /// also the planar faces facing other ways, with the A index that turns each up
+    /// (indexed setups).
+    Xyz { index_a: f64, sides: bool },
     /// The rotary axis along X.
     Rotary,
 }
@@ -87,8 +89,13 @@ struct Region {
 pub fn pickables(mesh: &Mesh, frame: Frame) -> Vec<Pickable> {
     let (infos, of) = face_regions(mesh, 30.0);
     match frame {
-        Frame::Rotary => rotary(&infos),
-        Frame::Xyz { index_a } => {
+        Frame::Rotary => {
+            let mut out = rotary(&infos);
+            out.extend(round_edges(mesh, &infos, &of));
+            add_band_ends(&mut out, mesh, &infos, &of);
+            out
+        }
+        Frame::Xyz { index_a, sides } => {
             let turned;
             let m = if index_a != 0.0 {
                 turned = mesh.rotated_x(index_a);
@@ -96,9 +103,149 @@ pub fn pickables(mesh: &Mesh, frame: Frame) -> Vec<Pickable> {
             } else {
                 mesh
             };
-            xyz(m, infos, &of)
+            let mut out = xyz(m, infos.clone(), &of);
+            if sides {
+                out.extend(side_faces(mesh, &infos, &of, index_a));
+            }
+            out
         }
     }
+}
+
+/// The radius at each end of every band (X min, X max): a cone's two radii.
+fn add_band_ends(out: &mut [Pickable], mesh: &Mesh, infos: &[FaceRegion], of: &[usize]) {
+    for p in out.iter_mut() {
+        if p.kind != "cylindrical_band" && p.kind != "revolved_band" {
+            continue;
+        }
+        let Some(k) = infos.iter().position(|r| p.faces.first() == Some(&r.id)) else {
+            continue;
+        };
+        let [x0, x1] = infos[k].x;
+        let (mut lo, mut hi) = ((0.0, 0usize), (0.0, 0usize));
+        for (i, t) in mesh.triangles.iter().enumerate() {
+            if of[i] != k {
+                continue;
+            }
+            for q in t {
+                let r = q[1].hypot(q[2]);
+                if (q[0] - x0).abs() < 1e-6 {
+                    lo = (lo.0 + r, lo.1 + 1);
+                }
+                if (q[0] - x1).abs() < 1e-6 {
+                    hi = (hi.0 + r, hi.1 + 1);
+                }
+            }
+        }
+        if lo.1 > 0 && hi.1 > 0 {
+            p.data["r_ends"] = json!([round_um(lo.0 / lo.1 as f64), round_um(hi.0 / hi.1 as f64)]);
+        }
+    }
+}
+
+/// Round edges where two full-round faces meet (a shoulder's corner, a chamfer's place):
+/// their X and radius.
+fn round_edges(mesh: &Mesh, infos: &[FaceRegion], of: &[usize]) -> Vec<Pickable> {
+    let mut by_pair: HashMap<(usize, usize), Vec<[f64; 3]>> = HashMap::new();
+    let mut edge_tri: HashMap<(Key, Key), usize> = HashMap::new();
+    for (i, t) in mesh.triangles.iter().enumerate() {
+        for e in 0..3 {
+            edge_tri.insert((key(&t[e]), key(&t[(e + 1) % 3])), i);
+        }
+    }
+    for (i, t) in mesh.triangles.iter().enumerate() {
+        for e in 0..3 {
+            let (a, b) = (&t[e], &t[(e + 1) % 3]);
+            let Some(&j) = edge_tri.get(&(key(b), key(a))) else {
+                continue;
+            };
+            let (ri, rj) = (of[i], of[j]);
+            if ri < rj && infos[ri].a.is_none() && infos[rj].a.is_none() {
+                by_pair.entry((ri, rj)).or_default().extend([*a, *b]);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for ((ri, rj), pts) in by_pair {
+        let xs: Vec<f64> = pts.iter().map(|p| p[0]).collect();
+        let rs: Vec<f64> = pts.iter().map(|p| p[1].hypot(p[2])).collect();
+        let span = |v: &[f64]| {
+            v.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+                - v.iter().cloned().fold(f64::INFINITY, f64::min)
+        };
+        // a circle about the axis: one X, one radius
+        if span(&xs) > 1e-3 || span(&rs) > 1e-2 {
+            continue;
+        }
+        let x = xs.iter().sum::<f64>() / xs.len() as f64;
+        let r = rs.iter().sum::<f64>() / rs.len() as f64;
+        let (ia, ib) = (&infos[ri].id, &infos[rj].id);
+        out.push(Pickable {
+            id: format!("circular_edge:{ia}:{ib}"),
+            kind: "circular_edge".into(),
+            label: format!("Round edge at X{x:.2}, {:.2} mm", 2.0 * r),
+            faces: vec![ia.clone(), ib.clone()],
+            similar: format!("circular_edge:{}", r2(r)),
+            data: json!({"x": round_um(x), "r": round_um(r)}),
+        });
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// Planar faces whose normal is square to the rotary axis but not up at `index_a`: the A
+/// index that turns each up, and its distance from the axis.
+fn side_faces(mesh: &Mesh, infos: &[FaceRegion], of: &[usize], index_a: f64) -> Vec<Pickable> {
+    let mut acc: Vec<([f64; 3], f64, f64, bool)> = vec![([0.0; 3], 0.0, 0.0, true); infos.len()];
+    let mut first: Vec<Option<[f64; 3]>> = vec![None; infos.len()];
+    for (i, t) in mesh.triangles.iter().enumerate() {
+        let a = tri_area(t);
+        if a < 1e-12 {
+            continue;
+        }
+        let n = unit_normal(t);
+        let e = &mut acc[of[i]];
+        match first[of[i]] {
+            None => first[of[i]] = Some(n),
+            Some(f) => {
+                if f[0] * n[0] + f[1] * n[1] + f[2] * n[2] < 0.9999 {
+                    e.3 = false; // not planar
+                }
+            }
+        }
+        for (acc_k, n_k) in e.0.iter_mut().zip(n) {
+            *acc_k += a * n_k;
+        }
+        e.1 += a;
+        e.2 += a * (n[0] * t[0][0] + n[1] * t[0][1] + n[2] * t[0][2]);
+    }
+    let mut out = Vec::new();
+    for (k, (n, area, d, planar)) in acc.into_iter().enumerate() {
+        if !planar || area < 1e-6 {
+            continue;
+        }
+        let n = [n[0] / area, n[1] / area, n[2] / area];
+        if n[0].abs() > 0.01 {
+            continue;
+        }
+        // the part turned by A about X brings (ny, nz) up: A = atan2(ny, nz)
+        let a = n[1].atan2(n[2]).to_degrees();
+        let a = (a * 1000.0).round() / 1000.0;
+        if ((a - index_a + 180.0).rem_euclid(360.0) - 180.0).abs() < 0.01 {
+            continue; // already up: a flat face at this index
+        }
+        let dist = d / area;
+        let id = &infos[k].id;
+        out.push(Pickable {
+            id: format!("side_face:{id}"),
+            kind: "side_face".into(),
+            label: format!("Side face at A{a:.1}, {dist:.2} from the axis, {area:.1} mm2"),
+            faces: vec![id.clone()],
+            similar: format!("side_face:{}", r2(dist)),
+            data: json!({"index_a": a, "distance": round_um(dist), "area": area, "x": infos[k].x}),
+        });
+    }
+    out
 }
 
 fn rotary(infos: &[FaceRegion]) -> Vec<Pickable> {
@@ -151,7 +298,11 @@ fn rotary(infos: &[FaceRegion]) -> Vec<Pickable> {
                 label,
                 faces: vec![r.id.clone()],
                 similar,
-                data: json!({"x": r.x, "r": r.r, "a": r.a, "shape": r.shape, "area": r.area}),
+                data: json!({
+                    "x": [round_um(r.x[0]), round_um(r.x[1])],
+                    "r": [round_um(r.r[0]), round_um(r.r[1])],
+                    "a": r.a, "shape": r.shape, "area": r.area
+                }),
             }
         })
         .collect()
@@ -482,7 +633,11 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                 label: format!("Flat face at Z{z:.2}, {:.1} mm2", r.area),
                 faces: vec![id.clone()],
                 similar: format!("flat_face:{}", r2(z)),
-                data: json!({"z": z, "area": r.area, "loops": lps.len()}),
+                data: json!({
+                    "z": z, "area": r.area, "loops": lps.len(),
+                    "cx": round_um(lps.first().map_or(0.0, |l| { let (lo, hi) = bbox(l); (lo[0] + hi[0]) / 2.0 })),
+                    "cy": round_um(lps.first().map_or(0.0, |l| { let (lo, hi) = bbox(l); (lo[1] + hi[1]) / 2.0 }))
+                }),
             });
             if walls_up && !lps.is_empty() && !wall_regions.iter().any(|w| hole_set.contains(w)) {
                 let outline = lps[0].clone();
@@ -649,7 +804,10 @@ pub fn setup_part(
     let frame = if kind == "rotary" {
         Frame::Rotary
     } else {
-        Frame::Xyz { index_a }
+        Frame::Xyz {
+            index_a,
+            sides: kind == "indexed",
+        }
     };
     Ok((s.id.clone(), part, frame))
 }
@@ -672,10 +830,13 @@ pub fn accepts(op_type: &str) -> &'static [&'static str] {
         "drill" => &["hole"],
         "pocket" => &["pocket"],
         "contour" => &["edge_loop"],
-        "face" => &["flat_face"],
-        "raster3d" | "rough3d" => &["surface", "flat_face", "pocket", "hole"],
+        "face" => &["flat_face", "side_face"],
+        "raster3d" | "rough3d" => &["surface", "flat_face", "pocket", "hole", "side_face"],
         "rotary_finish" => &["cylindrical_band", "revolved_band", "surface"],
-        "rotary_rough" => &["cylindrical_band", "revolved_band", "surface"],
+        "rotary_rough" | "rotary_turning" => &["cylindrical_band", "revolved_band", "surface"],
+        "helical_knurl" => &["revolved_band", "cylindrical_band"],
+        "flank_chamfer" => &["circular_edge"],
+        "engrave" | "vcarve" => &["flat_face", "side_face", "cylindrical_band"],
         _ => &[],
     }
 }
@@ -689,6 +850,8 @@ pub struct ApplyContext {
     pub tool_diameter: Option<f64>,
     /// The part model the face ids belong to.
     pub model: String,
+    /// The operation as it is (its text and height place an engraving).
+    pub op: Option<Value>,
 }
 
 /// The parameters `picks` set on an operation of type `op_type`, and notes for the person
@@ -791,7 +954,112 @@ pub fn apply(
         "face" => {
             let p = picks[0];
             let top = cx.stock_top.unwrap_or(f(p, "z"));
-            v.insert("depth".into(), json!(round_um((top - f(p, "z")).max(0.01))));
+            if p.kind == "side_face" {
+                // indexed: turn the face up, take the bar down to it
+                v.insert("index_a".into(), p.data["index_a"].clone());
+                v.insert(
+                    "depth".into(),
+                    json!(round_um((top - f(p, "distance")).max(0.01))),
+                );
+            } else {
+                v.insert("depth".into(), json!(round_um((top - f(p, "z")).max(0.01))));
+            }
+        }
+        "rotary_turning" => {
+            let lo = picks
+                .iter()
+                .map(|p| p.data["x"][0].as_f64().unwrap_or(0.0))
+                .fold(f64::INFINITY, f64::min);
+            let hi = picks
+                .iter()
+                .map(|p| p.data["x"][1].as_f64().unwrap_or(0.0))
+                .fold(f64::NEG_INFINITY, f64::max);
+            v.insert("x_range".into(), json!([round_um(lo), round_um(hi)]));
+        }
+        "helical_knurl" => {
+            // the knurled body: back (X min) and front (X max), each with its radius
+            let p = picks[0];
+            if picks.len() > 1 {
+                notes.push("a knurl covers one body: the first one picked".into());
+            }
+            let x = [
+                p.data["x"][0].as_f64().unwrap_or(0.0),
+                p.data["x"][1].as_f64().unwrap_or(0.0),
+            ];
+            let r = match p.data["r_ends"].as_array() {
+                Some(e) => [e[0].as_f64().unwrap_or(0.0), e[1].as_f64().unwrap_or(0.0)],
+                None => [p.data["r"][1].as_f64().unwrap_or(0.0); 2],
+            };
+            v.insert("body_back".into(), json!([round_um(x[0]), r[0]]));
+            v.insert("body_front".into(), json!([round_um(x[1]), r[1]]));
+        }
+        "flank_chamfer" => {
+            let p = picks[0];
+            v.insert("edge".into(), json!([f(p, "x"), f(p, "r")]));
+        }
+        "engrave" | "vcarve" => {
+            // the surface the text is cut into, and the text centred on the picked face
+            let p = picks[0];
+            let op = cx.op.clone().unwrap_or(Value::Null);
+            let h = op["text_height"].as_f64().unwrap_or(5.0);
+            let text = op["text"].as_str().unwrap_or("").to_string();
+            // the text's width at its height (the same font the operation cuts)
+            let width = if text.is_empty() {
+                0.0
+            } else {
+                crate::engrave::text_paths(&text, h, [0.0, 0.0], 0.0)
+                    .ok()
+                    .map(|paths| {
+                        let xs = paths.iter().flatten().map(|q| q[0]);
+                        let (lo, hi) = xs.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                            (a.min(x), b.max(x))
+                        });
+                        if hi > lo {
+                            hi - lo
+                        } else {
+                            0.0
+                        }
+                    })
+                    .unwrap_or(0.0)
+            };
+            let (top, centre) = match p.kind.as_str() {
+                // wrapped round the bar: Y is arc length from the top at A0
+                "cylindrical_band" => {
+                    let x = &p.data["x"];
+                    (
+                        p.data["r"][1].as_f64().unwrap_or(0.0),
+                        [
+                            (x[0].as_f64().unwrap_or(0.0) + x[1].as_f64().unwrap_or(0.0)) / 2.0,
+                            0.0,
+                        ],
+                    )
+                }
+                "side_face" => {
+                    v.insert("index_a".into(), p.data["index_a"].clone());
+                    let x = &p.data["x"];
+                    (
+                        f(p, "distance"),
+                        [
+                            (x[0].as_f64().unwrap_or(0.0) + x[1].as_f64().unwrap_or(0.0)) / 2.0,
+                            0.0,
+                        ],
+                    )
+                }
+                _ => (f(p, "z"), [f(p, "cx"), f(p, "cy")]),
+            };
+            v.insert("top".into(), json!(round_um(top)));
+            v.insert(
+                "text_at".into(),
+                json!([
+                    round_um(centre[0] - width / 2.0),
+                    round_um(centre[1] - h / 2.0)
+                ]),
+            );
+            if text.is_empty() {
+                notes.push(
+                    "the placement is for text: set the text (paths keep their own places)".into(),
+                );
+            }
         }
         _ => {
             // finishing: the faces, and for rotary roughing the X span they cover

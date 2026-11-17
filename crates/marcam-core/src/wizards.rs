@@ -174,6 +174,7 @@ impl KnurlWizard {
                     finish_feed: self.finish_feed,
                     plunge_feed: self.plunge_feed,
                     ramp_angle: crate::job::default_ramp_angle(),
+                    x_range: None,
                     segment_deg: 6.0,
                     grid: 0.02,
                     footprint_step: 0.01,

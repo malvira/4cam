@@ -59,7 +59,11 @@ pub fn rotary_turning(
     op: &RotaryTurning,
 ) {
     let rt = tool_diameter / 2.0;
-    let (x_min, x_max) = (geom.x_min(), geom.x_max());
+    // a picked span: only that part of the profile
+    let (x_min, x_max) = match op.x_range {
+        Some([a, b]) => (geom.x_min().max(a.min(b)), geom.x_max().min(a.max(b))),
+        None => (geom.x_min(), geom.x_max()),
+    };
     let lo = x_min - rt - 1.0;
     let hi = x_max + rt + 1.0;
     let table = DropTable::new(geom, rt, op, lo, hi);

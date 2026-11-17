@@ -505,6 +505,9 @@ pub struct RotaryTurning {
     pub grid: f64,
     #[serde(default = "default_footprint_step")]
     pub footprint_step: f64,
+    /// Turn only this X span of the profile (picked bands); None: all of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_range: Option<[f64; 2]>,
 }
 
 /// Diamond knurl: families of helical V grooves over a conical body.

@@ -1263,6 +1263,88 @@ try {
     await shot("17c_picked_generated");
   }
 
+  // 8m. picking on every operation type: rotary turning (a band -> its X span), knurl (a
+  // cone -> the body), chamfer (a round edge), engraving wrapped round the bar (its radius,
+  // the text centred), facing on an indexed setup (a side face -> its A index and depth)
+  {
+    const screenOf = (pred) => js(`(() => { const v = window.__marcam.state.three, t = window.__marcam.state.tree; const pk = t.pick; const target = pk.list.find(${pred}); if (!target) return null;
+      const want = new Set(target.faces); const el = v.renderer.domElement; const r = el.getBoundingClientRect(); const tri = t.regions.tri; const ray = new v.THREE.Raycaster();
+      const W = [[1/3, 1/3, 1/3], [0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9]];
+      for (let k = 0; k < t.regions.of.length; k++) { if (!want.has(t.regions.list[t.regions.of[k]].id)) continue;
+        for (const w of W) {
+          const c = new v.THREE.Vector3(...[0, 1, 2].map((d) => w[0] * tri[9*k+d] + w[1] * tri[9*k+3+d] + w[2] * tri[9*k+6+d])).project(v.camera);
+          if (Math.abs(c.x) > 0.95 || Math.abs(c.y) > 0.95) continue;
+          ray.setFromCamera(new v.THREE.Vector2(c.x, c.y), v.camera); const hit = ray.intersectObject(t.pickMesh)[0];
+          if (hit && want.has(t.regions.list[t.regions.of[hit.faceIndex]].id)) { const px = (c.x + 1) / 2 * el.clientWidth, py = (1 - c.y) / 2 * el.clientHeight; return [r.left + px, r.top + py, px, py]; } } }
+      return null; })()`);
+    const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
+    // pick `pred` for operation `k` (by its row) and write it; returns the operation
+    async function pickFor(k, pred, what) {
+      const id = await js(`document.querySelectorAll('#tree .tree-op')[${k}].dataset.op`);
+      if ((await js("window.__marcam.state.tree.selected")) !== id) await js(`document.querySelector('#tree .tree-op[data-op="${id}"] [data-act="select"]').click(); true`);
+      await waitFor(() => js(`window.__marcam.state.tree.selected === '${id}' && !!document.getElementById('pickFaces')`), `${what}: its editor`, 15000);
+      await js("document.getElementById('pickFaces').click(); true");
+      await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), `${what}: picking`, 30000);
+      await sleep(300);
+      const at = await screenOf(pred);
+      if (!at) throw new Error(`${what}: the feature is not visible`);
+      const got = await js(`const pr = await window.__marcam.tree.pickAt(${at[2]}, ${at[3]}); pr && pr.pickable ? pr.pickable : null`);
+      await js("document.getElementById('pickFaces').click(); true");
+      await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), `${what}: done`, 15000);
+      await sleep(300);
+      const s = (await doc()).setups.find((x) => x.operations.some((o) => o.id === id));
+      return { op: s.operations.find((o) => o.id === id), got };
+    }
+    // the knob: turning, knurl, chamfer
+    await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const turn = await pickFor(0, "(x) => x.kind === 'cylindrical_band' && Math.abs(x.data.r[1] - 5) < 0.01", "turning");
+    const knurl = await pickFor(1, "(x) => x.kind === 'revolved_band' && x.data.shape === 'cone' && x.data.r[1] > 9.9", "knurl");
+    const chamfer = await pickFor(2, "(x) => x.kind === 'circular_edge'", "chamfer");
+    check("rotary picks: turning takes the boss's X span, the knurl the taper as its body, the chamfer a round edge",
+      turn.got?.kind === "cylindrical_band" && JSON.stringify(turn.op.x_range) === JSON.stringify(turn.got.data.x) &&
+      knurl.op.body_back[0] === -15 && Math.abs(knurl.op.body_back[1] - 10) < 0.01 && knurl.op.body_front[0] < 0 &&
+      chamfer.got?.kind === "circular_edge" && chamfer.op.edge[0] === chamfer.got.data.x && chamfer.op.edge[1] === chamfer.got.data.r,
+      JSON.stringify({ x_range: turn.op.x_range, back: knurl.op.body_back, front: knurl.op.body_front, edge: chamfer.op.edge }));
+    await shot("17d_rotary_picks");
+    // the ring: its text engraving onto the bar (R12), centred on the band picked
+    await js("document.getElementById('example').value = 'ring'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const rows = await js("[...document.querySelectorAll('#tree .tree-op')].map((r) => r.querySelector('.tree-label').textContent)");
+    const textRow = Math.max(0, (await doc()).setups[0].operations.findIndex((o) => o.type === "engrave" && o.text));
+    const eng = await pickFor(textRow, "(x) => x.kind === 'cylindrical_band'", "engraving");
+    check("engraving picks a cylinder: its radius is the surface, the text centred on it (round the top at A0)",
+      eng.got?.kind === "cylindrical_band" && Math.abs(eng.op.top - eng.got.data.r[1]) < 1e-6 && Math.abs(eng.op.text_at[1] + eng.op.text_height / 2) < 1e-6,
+      `${rows.length} rows; top ${eng.op.top}; text_at ${eng.op.text_at}`);
+    // the bracket on a 4th axis (indexed): a new facing operation, its underside picked
+    const fx = join(root, "tests", "fixtures", "picking");
+    const proj = JSON.parse(readFileSync(join(fx, "bracket.project.json"), "utf8"));
+    Object.assign(proj.setups[0], { id: "idx", name: "Indexed", kind: "indexed", machine: "makera-z1-4axis", stock: { shape: "cylinder", radius: 40, length: 70 }, holding: { kind: "rotary_chuck", tailstock: false } });
+    const file = JSON.stringify({ format: "marcam-project", version: 1, project: proj, meshes: { "bracket.stl": readFileSync(join(fx, "bracket.stl")).toString("base64") } });
+    await js(`window.__marcam.project.openText(${JSON.stringify(file)}, "bracket_indexed.marcam.json").then(() => true)`);
+    await settle();
+    await js("document.getElementById('treeAddType').value = 'face'; document.getElementById('treeAdd').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.draft && !!document.getElementById('pickFaces')"), "the facing draft", 15000);
+    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking a side face", 30000);
+    // orbit underneath to see the underside
+    await js("(() => { const v = window.__marcam.state.three; v.camera.position.set(30, -50, -70); v.controls.target.set(30, 20, -6); v.controls.update(); v.renderer.render(v.scene, v.camera); return true; })()");
+    await sleep(300);
+    const sideAt = await screenOf("(x) => x.kind === 'side_face' && Math.abs(Math.abs(x.data.index_a) - 180) < 1e-6");
+    const side = sideAt ? await js(`const pr = await window.__marcam.tree.pickAt(${sideAt[2]}, ${sideAt[3]}); pr && pr.pickable ? pr.pickable.kind : "none"`) : "not visible";
+    await js("document.getElementById('pickFaces').click(); true");
+    await sleep(400);
+    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await waitFor(async () => (await doc()).setups[0].operations.some((o) => o.type === "face"), "the facing applied", 15000);
+    const face = (await doc()).setups[0].operations.find((o) => o.type === "face");
+    check("indexed: picking the underside sets the facing's A index (180) and its depth from the bar (40 - 12 = 28)",
+      side === "side_face" && Math.abs(Math.abs(face.index_a) - 180) < 1e-6 && Math.abs(face.depth - 28) < 1e-6, `${side}; index_a ${face.index_a}; depth ${face.depth}`);
+    await shot("17e_indexed_side_face");
+    // every operation type offers picking
+    const types = await js("window.__marcam.state.tree.types.filter((t) => !(t.picks || []).length).map((t) => t.kind)");
+    check("every operation type takes picks", types.length === 0, types.join(", "));
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

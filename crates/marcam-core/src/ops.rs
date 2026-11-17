@@ -141,6 +141,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("segment_deg", "number", "deg", "Angular length of each rotary move.").opt(json!(6.0)).min(0.1).max(90.0),
                 p("grid", "number", "mm", "X spacing of the tool-radius table.").opt(json!(0.02)).min(0.001),
                 p("footprint_step", "number", "mm", "Sampling of the flat tool's footprint.").opt(json!(0.01)).min(0.001),
+                p("x_range", "vec2", "mm", "Turn only this X span of the profile (e.g. picked bands); empty: all of it.").opt(Value::Null),
             ],
             tool_shapes: &["flat"],
             geometry: &["profile"],
@@ -638,6 +639,8 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
     let fine = nice((0.125 * d).max(0.05), 0.05);
     match kind {
         "rotary_turning" => {
+            // the whole part (picking bands narrows it)
+            v.insert("x_range".into(), json!(x_range));
             v.insert("rough_depth".into(), json!(depth));
             v.insert("rough_step".into(), json!(step));
             v.insert("rough_feed".into(), json!(feed));

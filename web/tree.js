@@ -242,7 +242,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // operations record the picked faces (a faces selection); the others take the fields the
   // engine fills from the picks (drill points and depth, a pocket's outline, ...).
   const FACE_TYPES = ["raster3d", "rough3d", "rotary_finish"];
-  const SINGLE = ["pocket", "contour", "face"];
+  const SINGLE = ["pocket", "contour", "face", "helical_knurl", "flank_chamfer", "engrave", "vcarve"];
   function pickModeOf(ty) {
     if (!ty) return null;
     // before picking existed per type: rotary operations (and the raster) were bounded by faces
@@ -384,7 +384,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const ray = new v.THREE.Raycaster();
     ray.setFromCamera(ndc, v.camera);
     const hit = ray.intersectObject(t.pickMesh)[0];
-    return hit ? t.regions.list[t.regions.of[hit.faceIndex]] : null;
+    return hit ? { ...t.regions.list[t.regions.of[hit.faceIndex]], point: hit.point } : null;
   }
 
   /** The picks become the operation's faces, or the fields the engine fills from them. */
@@ -398,9 +398,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (ids.length) op.geometry.push({ kind: "faces", model: t.regions.model, ids });
       if (!op.geometry.length) delete op.geometry;
       pk.notes = [];
+      // a side face (indexed): the index that turns it up
+      const side = [...pk.sel].map((id) => pk.list.find((x) => x.id === id)).find((x) => x?.kind === "side_face");
+      if (side) op.index_a = side.data.index_a;
     } else if (pk.sel.size) {
       try {
-        const { result } = await engine("applyPicks", t.doc, { type: op.type, ids: [...pk.sel], setup: t.setup, model: t.regions.model, tool: op.tool, index_a: op.index_a ?? 0 }, state.mesh);
+        const { result } = await engine("applyPicks", t.doc, { type: op.type, ids: [...pk.sel], setup: t.setup, model: t.regions.model, tool: op.tool, index_a: op.index_a ?? 0, op }, state.mesh);
         Object.assign(op, result.params);
         // a rectangle no longer applies once the outline is picked
         if (op.type === "pocket" && result.params.paths) delete op.rect;
@@ -422,7 +425,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const region = regionAt(px, py);
     if (!region) return null;
     const pk = t.pick;
-    const x = pk.byFace.get(region.id)?.[0];
+    // the operation's preferred kind on this face; of several (a face bordered by two round
+    // edges), the one nearest the click along X
+    const cands = pk.byFace.get(region.id) || [];
+    const best = cands.filter((c) => c.kind === cands[0]?.kind);
+    const x = best.length > 1 && best.every((c) => typeof c.data.x === "number") ? best.reduce((a, c) => (Math.abs(c.data.x - region.point.x) < Math.abs(a.data.x - region.point.x) ? c : a)) : best[0];
     if (!x) {
       pk.notes = [`not a ${pk.mode.kinds.map((k) => k.replace(/_/g, " ")).join(" or ")}`];
       renderEditor();

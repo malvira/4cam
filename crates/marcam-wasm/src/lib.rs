@@ -1119,6 +1119,7 @@ pub mod api {
             stock_top,
             tool_diameter,
             model: o["model"].as_str().unwrap_or("").to_string(),
+            op: (!o["op"].is_null()).then(|| o["op"].clone()),
         };
         match pickables::apply(kind, &picks, &cx) {
             Ok((params, notes)) => json!({"params": params, "notes": notes}),
