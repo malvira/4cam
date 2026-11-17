@@ -26,6 +26,11 @@ USAGE:
   marcam faces <job-or-project.json> [--model <id>] [--crease <deg>]
       Face regions of each model (split at sharp edges) with their stable ids,
       for an operation's geometry selection (kind faces, with model and ids).
+  marcam pickables <project.json> [--setup <id>] [--model <id>] [--index <deg>]
+                  [--type <operation>] [--json]
+      The features of a setup's part an operation can be pointed at: holes,
+      pockets, flat faces, edge loops, surfaces (vise, indexed at --index) or
+      cylindrical and revolved bands (rotary). --type: only those it takes.
   marcam wizard knurl <job-or-project.json> [--params <p.json>] [--out <file>]
       Add turning, a diamond knurl on the body face and a V-bit front chamfer,
       derived from the model's faces (defaults: the Z1 knob).
@@ -350,6 +355,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         }
         "verify" => cmd_verify(&parse(rest, &["plunge", "safe", "ramp"])?),
         "estimate" => cmd_estimate(&parse(rest, &["machine"])?),
+        "pickables" => cmd_pickables(&parse(rest, &["setup", "model", "index", "type", "json?"])?),
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
         "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
         "ops" => cmd_ops(rest),
@@ -513,6 +519,49 @@ fn run_setup(
         }
     }
     Ok((bad, seconds))
+}
+
+fn cmd_pickables(o: &Opts) -> Result<ExitCode, String> {
+    use marcam::pickables;
+    let path = o.one_input()?;
+    let (p, _) = marcam::project::Project::from_json_any(&read(path)?)?;
+    let dir = Path::new(path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let index = match o.flag("index") {
+        Some(v) => v
+            .parse::<f64>()
+            .map_err(|_| format!("--index: not a number: {v}"))?,
+        None => 0.0,
+    };
+    let (setup, part, frame) =
+        pickables::setup_part(&p, o.flag("setup"), o.flag("model"), index, &|src| {
+            src.load(&dir).map_err(|e| e.to_string())
+        })?;
+    let mut list = pickables::pickables(&part, frame);
+    if let Some(t) = o.flag("type") {
+        let ok = pickables::accepts(t);
+        if ok.is_empty() {
+            return Err(format!(
+                "{t}: picking does not apply (pick nothing, set its fields)"
+            ));
+        }
+        list.retain(|x| ok.contains(&x.kind.as_str()));
+    }
+    if o.has("json") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"setup": setup, "pickables": list}))
+                .map_err(|e| e.to_string())?
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!("setup {setup}: {} pickable(s)", list.len());
+    for x in &list {
+        println!("  {:<40} {}", x.id, x.label);
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_estimate(o: &Opts) -> Result<ExitCode, String> {

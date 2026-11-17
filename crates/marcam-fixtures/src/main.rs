@@ -8,6 +8,10 @@
 //! - examples/plaque/plaque.png: a grayscale relief (rim, hill, ripples) for the plaque example
 //! - examples/plate/dome.stl: a spherical cap (base radius 6, height 4) standing on Z -4.5
 //!   at X46 Y20, for the 3-axis plate example
+//! - tests/fixtures/picking/bracket.stl: a prismatic bracket with through and blind holes, a
+//!   pocket with an island and a step, for the picking tests (see `prism::bracket`)
+
+mod prism;
 
 use marcam::job::Profile;
 use marcam::{Job, Mesh};
@@ -90,6 +94,10 @@ fn files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
         (root.join("examples/knob/knob.stl"), knob_stl(root)),
         (root.join("examples/plate/dome.stl"), dome_mesh().to_stl()),
         (root.join("examples/plaque/plaque.png"), plaque_png()),
+        (
+            root.join("tests/fixtures/picking/bracket.stl"),
+            prism::bracket().to_stl(),
+        ),
     ]
 }
 

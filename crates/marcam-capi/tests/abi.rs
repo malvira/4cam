@@ -164,6 +164,37 @@ fn bad_input_is_an_error_not_a_crash() {
             0
         ))["error"]
             .is_string());
+        // picking: the bracket's holes, and a drill filled from them
+        let fx = root().join("tests/fixtures/picking");
+        let project =
+            CString::new(std::fs::read_to_string(fx.join("bracket.project.json")).unwrap())
+                .unwrap();
+        let stl = std::fs::read(fx.join("bracket.stl")).unwrap();
+        let empty = CString::new("{}").unwrap();
+        let pk = take(marcam_pickables(
+            project.as_ptr(),
+            empty.as_ptr(),
+            stl.as_ptr(),
+            stl.len(),
+        ));
+        let ids: Vec<String> = pk["pickables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|x| x["kind"] == "hole" && x["data"]["through"] == true)
+            .map(|x| x["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids.len(), 4);
+        let req =
+            CString::new(serde_json::json!({"type": "drill", "ids": ids, "tool": 1}).to_string())
+                .unwrap();
+        let filled = take(marcam_apply_picks(
+            project.as_ptr(),
+            req.as_ptr(),
+            stl.as_ptr(),
+            stl.len(),
+        ));
+        assert_eq!(filled["params"]["depth"], 12.5, "{filled}");
         let unknown = CString::new("no_such_function").unwrap();
         assert!(take(marcam_call(
             unknown.as_ptr(),

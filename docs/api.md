@@ -65,6 +65,19 @@ All calls take and return JSON. No wasm-bindgen is needed.
   - `checkProject(doc)` upgrades and validates a document.
 - **Geometry and wizards:**
   - `faceRegions(doc, model, mesh)` returns the model's faces with stable ids;
+  - `pickables(doc, {setup, model, index_a}, mesh)` returns the features of a setup's part
+    an operation can be pointed at (`hole`, `pocket`, `flat_face`, `edge_loop`, `surface`
+    on a vise or an indexed setup turned to `index_a`; `cylindrical_band`,
+    `revolved_band`, `surface` on a rotary one), each with an `id`, a `label`, the face ids
+    it covers, a `similar` key ("select all similar") and its numbers (`data`), plus
+    `accepts`: the kinds each operation type takes;
+  - `applyPicks(doc, {type, ids, setup, tool, index_a}, mesh)` returns `{params, notes}`:
+    the fields picked features set on an operation of that type (drill: points, top, depth,
+    peck; pocket: paths, top, depth; contour: path, side, top, depth; face: depth; finishing:
+    faces; rotary roughing: x_range), and notes such as "use Bore instead" for a hole the
+    tool cannot drill. Python: `marcam.pickables(project, mesh, setup=...)` and
+    `marcam.apply_picks(project, type, ids, mesh, ...)`; C: `marcam_pickables`,
+    `marcam_apply_picks`; Rust: `marcam::pickables`;
   - `wizardKnurl(doc, params, mesh)` runs the knurl wizard.
 - **Simulation:**
   - `gpuOpen(doc, {res, dx, na, cell, setup}, mesh)` / `gpuStats(opts, keyBytes)`: inputs
@@ -98,6 +111,7 @@ The CLI covers the same features:
 - `upgrade`;
 - `ops list|show|check|defaults`;
 - `faces`;
+- `pickables` (`--type drill` lists only what drilling takes, `--json` for programs);
 - `wizard knurl`;
 - `profiles list|show|import|export`;
 - `mesh-info`.

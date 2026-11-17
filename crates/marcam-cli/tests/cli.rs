@@ -478,6 +478,43 @@ fn ops_defaults_for_every_type_are_valid_and_plan() {
 }
 
 #[test]
+fn pickables_lists_the_brackets_features() {
+    let o = bin()
+        .args([
+            "pickables",
+            "tests/fixtures/picking/bracket.project.json",
+            "--type",
+            "drill",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        o.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        stdout.contains("5 pickable(s)") && stdout.matches("through").count() == 4,
+        "{stdout}"
+    );
+    let o = bin()
+        .args([
+            "pickables",
+            "tests/fixtures/picking/bracket.project.json",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert!(v["pickables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|x| x["kind"] == "pocket"));
+}
+
+#[test]
 fn the_old_command_name_still_works() {
     // `4cam` (the name before the rename) runs marcam with the same arguments
     let o = Command::new(env!("CARGO_BIN_EXE_4cam"))

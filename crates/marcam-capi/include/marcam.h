@@ -85,6 +85,32 @@ char *marcam_op_defaults(const char *project,
                          size_t mesh_len);
 
 /*
+ The features of a setup's part an operation can be pointed at, and the kinds each
+ operation type takes. `request`: `{"setup": "id", "model": "id", "index_a": 0}` (all
+ optional).
+
+ # Safety
+ As [`marcam_plan_and_post`].
+ */
+char *marcam_pickables(const char *project,
+                       const char *request,
+                       const uint8_t *mesh,
+                       size_t mesh_len);
+
+/*
+ The parameters picked features set on an operation: `request` =
+ `{"type": "drill", "ids": ["hole:..."], "setup": "id", "tool": 1}`; returns
+ `{"params": {...}, "notes": [...]}`.
+
+ # Safety
+ As [`marcam_plan_and_post`].
+ */
+char *marcam_apply_picks(const char *project,
+                         const char *request,
+                         const uint8_t *mesh,
+                         size_t mesh_len);
+
+/*
  Upgrade a 0.1 job to a 0.2 project and check its operations:
  `{"project": ..., "upgraded": bool, "problems": [...]}`.
 

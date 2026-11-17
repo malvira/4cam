@@ -1,0 +1,67 @@
+{
+  "schema_version": "0.2",
+  "name": "bracket",
+  "models": [
+    {
+      "id": "bracket",
+      "name": "bracket",
+      "kind": "mesh",
+      "file": "bracket.stl"
+    }
+  ],
+  "tools": [
+    {
+      "number": 1,
+      "description": "5 mm flat",
+      "kind": "flat",
+      "diameter": 5.0,
+      "flute_length": 15
+    },
+    {
+      "number": 2,
+      "description": "3.175 mm flat",
+      "kind": "flat",
+      "diameter": 3.175,
+      "flute_length": 12
+    },
+    {
+      "number": 3,
+      "description": "3 mm ball",
+      "kind": "ball",
+      "diameter": 3.0,
+      "flute_length": 12
+    }
+  ],
+  "setups": [
+    {
+      "id": "vise",
+      "name": "Vise, top",
+      "machine": "makera-carvera-4axis",
+      "kind": "vise",
+      "stock": {
+        "shape": "box",
+        "min": [
+          0.0,
+          0.0,
+          -12.0
+        ],
+        "max": [
+          60.0,
+          40.0,
+          0.0
+        ]
+      },
+      "clearance": 3.0,
+      "holding": {
+        "kind": "vise",
+        "tailstock": false
+      },
+      "part": [
+        "bracket"
+      ],
+      "spindle_rpm": 12000,
+      "operations": [],
+      "outputs": []
+    }
+  ]
+}

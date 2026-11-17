@@ -19,6 +19,7 @@ pub mod mesh;
 pub mod numeric;
 pub mod offset;
 pub mod ops;
+pub mod pickables;
 pub mod post;
 pub mod profiles;
 pub mod project;

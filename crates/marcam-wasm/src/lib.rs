@@ -6,6 +6,7 @@
 
 pub mod api {
     use marcam::job::{Job, StockBox};
+    use marcam::pickables;
     use marcam::profiles::{self, MachineProfile, ToolLibrary};
     use marcam::{
         gouge_check, limits_for, plan_with_mesh, post, render, sim, sim3, simulate_job,
@@ -1032,6 +1033,99 @@ pub mod api {
         json!({"regions": regions, "triangles": f32s(&tri), "region_of": u16s(&idx)})
     }
 
+    /// The setup, its part model as a mesh in the setup's frame, and the recognition frame:
+    /// `opts` = {setup?, model?, index_a?}.
+    fn pick_context(
+        doc: &str,
+        o: &Value,
+        mesh: &[u8],
+    ) -> Result<(marcam::project::Project, String, Mesh, pickables::Frame), String> {
+        let (p, _) = marcam::project::Project::from_json_any(doc)?;
+        let (setup, part, frame) = pickables::setup_part(
+            &p,
+            o["setup"].as_str(),
+            o["model"].as_str(),
+            o["index_a"].as_f64().unwrap_or(0.0),
+            &|src| src.mesh(mesh).map_err(|e| e.to_string()),
+        )?;
+        Ok((p, setup, part, frame))
+    }
+
+    /// The features of the setup's part an operation can be pointed at, and which kinds each
+    /// operation type takes: `opts` = {setup?, model?, index_a?}.
+    pub fn pickables(doc: &str, opts: &str, mesh: &[u8]) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let (_, setup, part, frame) = match pick_context(doc, &o, mesh) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let list = pickables::pickables(&part, frame);
+        let accepts: serde_json::Map<String, Value> = marcam::ops::registry()
+            .iter()
+            .map(|t| (t.kind.to_string(), json!(pickables::accepts(t.kind))))
+            .collect();
+        json!({
+            "setup": setup,
+            "frame": match frame { pickables::Frame::Rotary => "rotary", _ => "xyz" },
+            "pickables": list,
+            "accepts": accepts,
+        })
+    }
+
+    /// The parameters picked features set on an operation: `opts` = {type, ids, setup?,
+    /// model?, index_a?, tool?}. Returns {params, notes}.
+    pub fn apply_picks(doc: &str, opts: &str, mesh: &[u8]) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let Some(kind) = o["type"].as_str() else {
+            return err("apply_picks needs a type");
+        };
+        let (p, setup, part, frame) = match pick_context(doc, &o, mesh) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let list = pickables::pickables(&part, frame);
+        let ids: Vec<&str> = o["ids"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let mut picks = Vec::new();
+        for id in &ids {
+            match list.iter().find(|x| x.id == *id) {
+                Some(x) => picks.push(x),
+                None => return err(format!("the part has no pickable {id:?}")),
+            }
+        }
+        let stock_top = pickables::stock_top(&p, &setup);
+        let libs = libraries(&o).unwrap_or_default();
+        let tool_diameter = o["tool"]
+            .as_u64()
+            .and_then(|n| p.tools.iter().find(|t| t.number() == n as u32))
+            .and_then(|t| match t {
+                marcam::project::ToolEntry::Inline(t) => Some(match t.shape {
+                    marcam::job::ToolShape::Flat { diameter }
+                    | marcam::job::ToolShape::Ball { diameter }
+                    | marcam::job::ToolShape::TaperedBall { diameter, .. } => diameter,
+                    marcam::job::ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0),
+                }),
+                marcam::project::ToolEntry::Library { library, tool, .. } => libs
+                    .iter()
+                    .find(|l| &l.id == library)
+                    .and_then(|l| l.tool(tool))
+                    .map(|t| t.shape.diameter()),
+            });
+        let cx = pickables::ApplyContext {
+            stock_top,
+            tool_diameter,
+            model: o["model"].as_str().unwrap_or("").to_string(),
+        };
+        match pickables::apply(kind, &picks, &cx) {
+            Ok((params, notes)) => json!({"params": params, "notes": notes}),
+            Err(e) => err(e),
+        }
+    }
+
     /// Defaults for a new operation: `opts` = {type, setup?, tool?, geometry?, machine?,
     /// libraries?}. Every parameter comes back filled.
     pub fn op_defaults(doc: &str, opts: &str, mesh: &[u8]) -> Value {
@@ -1166,6 +1260,8 @@ pub mod api {
             "wizard_knurl" => wizard_knurl(&s(a), &s(b), c),
             "body_project" => body_project(&s(a), b),
             "op_defaults" => op_defaults(&s(a), &s(b), c),
+            "pickables" => pickables(&s(a), &s(b), c),
+            "apply_picks" => apply_picks(&s(a), &s(b), c),
             "op_types" => serde_json::to_value(marcam::ops::registry()).unwrap_or(Value::Null),
             "check_project" => match marcam::project::Project::from_json_any(&s(a)) {
                 Ok((p, upgraded)) => {

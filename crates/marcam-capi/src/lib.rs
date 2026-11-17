@@ -166,6 +166,42 @@ pub unsafe extern "C" fn marcam_op_defaults(
     guarded(|| api::op_defaults(&p, &r, b))
 }
 
+/// The features of a setup's part an operation can be pointed at, and the kinds each
+/// operation type takes. `request`: `{"setup": "id", "model": "id", "index_a": 0}` (all
+/// optional).
+///
+/// # Safety
+/// As [`marcam_plan_and_post`].
+#[no_mangle]
+pub unsafe extern "C" fn marcam_pickables(
+    project: *const c_char,
+    request: *const c_char,
+    mesh: *const u8,
+    mesh_len: usize,
+) -> *mut c_char {
+    // SAFETY: forwarded from the caller's contract above.
+    let (p, r, b) = unsafe { (text(project), text(request), bytes(mesh, mesh_len)) };
+    guarded(|| api::pickables(&p, &r, b))
+}
+
+/// The parameters picked features set on an operation: `request` =
+/// `{"type": "drill", "ids": ["hole:..."], "setup": "id", "tool": 1}`; returns
+/// `{"params": {...}, "notes": [...]}`.
+///
+/// # Safety
+/// As [`marcam_plan_and_post`].
+#[no_mangle]
+pub unsafe extern "C" fn marcam_apply_picks(
+    project: *const c_char,
+    request: *const c_char,
+    mesh: *const u8,
+    mesh_len: usize,
+) -> *mut c_char {
+    // SAFETY: forwarded from the caller's contract above.
+    let (p, r, b) = unsafe { (text(project), text(request), bytes(mesh, mesh_len)) };
+    guarded(|| api::apply_picks(&p, &r, b))
+}
+
 /// Upgrade a 0.1 job to a 0.2 project and check its operations:
 /// `{"project": ..., "upgraded": bool, "problems": [...]}`.
 ///

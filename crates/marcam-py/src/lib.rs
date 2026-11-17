@@ -146,6 +146,47 @@ fn call(
     to_py(py, v)
 }
 
+/// The features of a setup's part an operation can be pointed at (holes, pockets, faces,
+/// edge loops, surfaces, rotary bands), and which kinds each operation type takes.
+#[pyfunction]
+#[pyo3(signature = (project, mesh = None, setup = None, model = None, index_a = 0.0))]
+fn pickables(
+    py: Python<'_>,
+    project: &Bound<'_, PyAny>,
+    mesh: Option<&Bound<'_, PyAny>>,
+    setup: Option<&str>,
+    model: Option<&str>,
+    index_a: f64,
+) -> PyResult<Py<PyAny>> {
+    let doc = json_text(py, project)?;
+    let mesh = mesh_bytes(mesh)?;
+    let req = serde_json::json!({"setup": setup, "model": model, "index_a": index_a}).to_string();
+    let v = py.detach(|| api::pickables(&doc, &req, &mesh));
+    to_py(py, v)
+}
+
+/// The parameters picked features (`ids` from [`pickables`]) set on an operation of type
+/// `op_type`: `{"params": {...}, "notes": [...]}`.
+#[pyfunction]
+#[pyo3(signature = (project, op_type, ids, mesh = None, setup = None, tool = None, index_a = 0.0))]
+#[allow(clippy::too_many_arguments)]
+fn apply_picks(
+    py: Python<'_>,
+    project: &Bound<'_, PyAny>,
+    op_type: &str,
+    ids: Vec<String>,
+    mesh: Option<&Bound<'_, PyAny>>,
+    setup: Option<&str>,
+    tool: Option<u32>,
+    index_a: f64,
+) -> PyResult<Py<PyAny>> {
+    let doc = json_text(py, project)?;
+    let mesh = mesh_bytes(mesh)?;
+    let req = serde_json::json!({"type": op_type, "ids": ids, "setup": setup, "tool": tool, "index_a": index_a}).to_string();
+    let v = py.detach(|| api::apply_picks(&doc, &req, &mesh));
+    to_py(py, v)
+}
+
 /// A one-setup project around a part mesh, for CAD adapters: `operation` (e.g.
 /// "rotary_finish"), the body's STL/3MF bytes (or a path), and inputs such as `axis`,
 /// `machine`, `tool_kind`, `tool_diameter`, `stock_radius`, `name` or any of the operation's
@@ -180,5 +221,7 @@ fn marcam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate, m)?)?;
     m.add_function(wrap_pyfunction!(call, m)?)?;
     m.add_function(wrap_pyfunction!(body_project, m)?)?;
+    m.add_function(wrap_pyfunction!(pickables, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_picks, m)?)?;
     Ok(())
 }

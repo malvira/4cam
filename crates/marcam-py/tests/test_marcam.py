@@ -64,6 +64,20 @@ def test_time_estimates():
     assert e["machine"] == "makera-z1-4axis" and 10.0 < e["feed_s"] < 10.1, e
 
 
+def test_picking():
+    fx = ROOT / "tests" / "fixtures" / "picking"
+    project = (fx / "bracket.project.json").read_text()
+    stl = (fx / "bracket.stl").read_bytes()
+    pk = marcam.pickables(project, stl)
+    holes = [x for x in pk["pickables"] if x["kind"] == "hole"]
+    assert len(holes) == 5
+    pocket = next(x for x in pk["pickables"] if x["kind"] == "pocket")
+    res = marcam.apply_picks(project, "pocket", [pocket["id"]], stl, tool=2)
+    assert res["params"]["depth"] == 5.0 and len(res["params"]["paths"]) == 2
+    # the generic call reaches it too
+    assert marcam.call("pickables", project, {}, stl)["setup"] == "vise"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
