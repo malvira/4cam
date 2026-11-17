@@ -17,6 +17,9 @@ pub struct Limits {
     pub feed_mode: FeedMode,
     /// `surface_speed` radius pad (mm), see [`crate::machine::Machine::surface_radius_pad`].
     pub surface_radius_pad: f64,
+    /// Descents gentler than this (degrees) may run at any feed; steeper ones and pure
+    /// plunges are held to `plunge_feed` (0: every descent is).
+    pub ramp_angle: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -169,12 +172,23 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                             radius,
                         );
                         let time = len / f;
+                        // the travel along the surface (rotary: the arc at the mean radius,
+                        // as the planner measures it); printed coordinates are rounded, so
+                        // a move within 2 microns of the ramp counts as on it
+                        let arc = radius.max(0.5) * (ta - a).to_radians();
+                        let across = (dx * dx + (y1 - y0).powi(2) + arc * arc).sqrt();
+                        let ramp_tan = limits.ramp_angle.clamp(0.0, 89.0).to_radians().tan();
+                        let gentle = crate::toolpath::gentle_descent(
+                            -dz,
+                            across * 1.001 + 0.002 / ramp_tan.max(1e-9),
+                            ramp_tan,
+                        );
                         let rate = if time > 0.0 {
                             -dz / time
                         } else {
                             f64::INFINITY
                         };
-                        if rate > limits.plunge_feed * SLACK {
+                        if !gentle && rate > limits.plunge_feed * SLACK {
                             issues.push(Issue {
                                 line: idx + 1,
                                 kind: IssueKind::FastDescent { rate },
@@ -203,6 +217,7 @@ mod tests {
             safe_r: 15.5,
             feed_mode: FeedMode::DegreesAsLength,
             surface_radius_pad: 0.0,
+            ramp_angle: 0.0,
         }
     }
 

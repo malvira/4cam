@@ -42,7 +42,7 @@ USAGE:
       controller reads them (degrees-as-length, linear-only, inverse time), rapids,
       acceleration and corner slow-downs, dwells and tool changes. `run` prints the
       same per program, per operation and in total.
-  4cam verify <file.nc> [--plunge <mm/min>] [--safe <radius>]
+  4cam verify <file.nc> [--plunge <mm/min>] [--safe <radius>] [--ramp <deg>]
       Check G-code for over-fast Z descents and low X/A rapids.
       Defaults: --plunge 60, --safe = highest Z reached by a G0 move.
   4cam toolpath <job.json>
@@ -348,7 +348,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             profiles_cmd::cmd(rest)?;
             Ok(ExitCode::SUCCESS)
         }
-        "verify" => cmd_verify(&parse(rest, &["plunge", "safe"])?),
+        "verify" => cmd_verify(&parse(rest, &["plunge", "safe", "ramp"])?),
         "estimate" => cmd_estimate(&parse(rest, &["machine"])?),
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
         "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
@@ -579,12 +579,16 @@ fn cmd_verify(o: &Opts) -> Result<ExitCode, String> {
             FeedMode::DegreesAsLength
         },
         surface_radius_pad: 0.0,
+        // the planner's rule: descents gentler than the ramp angle (default the engine's 30
+        // degrees; --ramp 0 holds every descent) may run faster than the plunge limit
+        ramp_angle: num("ramp")?.unwrap_or(fourcam::job::default_ramp_angle()),
     };
     let issues = verify_gcode(&text, &limits);
     println!(
-        "{}: {} issue(s) (plunge limit {plunge_feed} mm/min, safe Z {safe_r})",
+        "{}: {} issue(s) (plunge limit {plunge_feed} mm/min, safe Z {safe_r}, ramp {} deg)",
         Path::new(path).display(),
-        issues.len()
+        issues.len(),
+        limits.ramp_angle
     );
     for i in &issues {
         println!("  {i}");

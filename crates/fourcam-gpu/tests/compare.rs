@@ -157,6 +157,7 @@ fn gpu_reports_the_rapids_that_cut_like_the_cpu() {
         moves: b.moves,
         origin_comment: None,
         plunge_limit: None,
+        ramp_angle: None,
     };
     let g = sim::Grid::new(-20.0, 0.0, 0.1, 240);
     let cutter = |_| Some(fourcam::dropcutter::Cutter::Flat { radius: 1.5 });

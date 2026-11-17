@@ -173,6 +173,7 @@ impl KnurlWizard {
                     finish_step: self.finish_step,
                     finish_feed: self.finish_feed,
                     plunge_feed: self.plunge_feed,
+                    ramp_angle: crate::job::default_ramp_angle(),
                     segment_deg: 6.0,
                     grid: 0.02,
                     footprint_step: 0.01,
@@ -202,6 +203,7 @@ impl KnurlWizard {
                 approach_clearance: 0.5,
                 feed: self.knurl_feed,
                 plunge_feed: self.plunge_feed,
+                ramp_angle: crate::job::default_ramp_angle(),
             }),
         });
         if self.chamfer {
@@ -228,6 +230,7 @@ impl KnurlWizard {
                     segment_deg: 6.0,
                     feed: self.knurl_feed,
                     plunge_feed: self.plunge_feed,
+                    ramp_angle: crate::job::default_ramp_angle(),
                 }),
             });
         }

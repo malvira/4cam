@@ -105,6 +105,7 @@ fn pose_program(moves: Vec<fourcam::Move>) -> fourcam::Toolpath {
         moves,
         origin_comment: None,
         plunge_limit: None,
+        ramp_angle: None,
     }
 }
 

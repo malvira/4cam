@@ -19,6 +19,7 @@ fn tp(b: Builder) -> Toolpath {
         moves: b.moves,
         origin_comment: None,
         plunge_limit: None,
+        ramp_angle: None,
     }
 }
 

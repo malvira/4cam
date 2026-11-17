@@ -108,6 +108,18 @@ fn plunge() -> ParamSpec {
     .min(0.001)
 }
 
+fn ramp() -> ParamSpec {
+    p(
+        "ramp_angle",
+        "number",
+        "deg",
+        "Descents gentler than this run at the cutting feed; steeper ones (and plunges) are slowed so the tip falls no faster than the plunge feed. 0: slow every descent.",
+    )
+    .opt(json!(crate::job::default_ramp_angle()))
+    .min(0.0)
+    .max(89.0)
+}
+
 /// Every operation type 4cam can plan.
 pub fn registry() -> Vec<OperationType> {
     vec![
@@ -125,6 +137,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("finish_step", "number", "mm/rev", "X advance per turn while finishing.").min(0.01),
                 p("finish_feed", "number", "mm/min", "Finishing feed.").min(0.001),
                 plunge(),
+                ramp(),
                 p("segment_deg", "number", "deg", "Angular length of each rotary move.").opt(json!(6.0)).min(0.1).max(90.0),
                 p("grid", "number", "mm", "X spacing of the tool-radius table.").opt(json!(0.02)).min(0.001),
                 p("footprint_step", "number", "mm", "Sampling of the flat tool's footprint.").opt(json!(0.01)).min(0.001),
@@ -150,6 +163,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
                 feed(),
                 plunge(),
+                ramp(),
             ],
             tool_shapes: &["flat", "ball", "vbit", "tapered_ball"],
             geometry: &["mesh", "profile", "axial_range"],
@@ -176,6 +190,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("clean_walls", "boolean", "", "'around': a full turn at the foot of each wall.").opt(json!(true)),
                 feed(),
                 plunge(),
+                ramp(),
             ],
             tool_shapes: &["flat", "ball", "vbit", "tapered_ball"],
             geometry: &["mesh", "profile", "axial_range"],
@@ -201,6 +216,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("approach_clearance", "number", "mm", "Rapid down to this far above the body.").opt(json!(0.5)).min(0.0),
                 feed(),
                 plunge(),
+                ramp(),
             ],
             tool_shapes: &["vbit"],
             geometry: &["axial_range"],
@@ -221,6 +237,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("segment_deg", "number", "deg", "Angular length of each move.").opt(json!(6.0)).min(0.1),
                 feed(),
                 plunge(),
+                ramp(),
             ],
             tool_shapes: &["vbit"],
             geometry: &["edge"],
@@ -348,6 +365,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("step_down", "number", "mm", "Depth per pass.").min(0.001),
                 feed(),
                 plunge(),
+                ramp(),
             ],
             tool_shapes: &["vbit", "ball", "flat", "tapered_ball"],
             geometry: &["curve"],
@@ -374,6 +392,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the carved surface.").opt(json!(0.005)).min(0.0001),
                 feed(),
                 plunge(),
+                ramp(),
             ],
             tool_shapes: &["vbit"],
             geometry: &["curve"],
@@ -1009,6 +1028,7 @@ fn raster_params() -> Vec<ParamSpec> {
         .min(0.0001),
         feed(),
         plunge(),
+        ramp(),
     ]
 }
 

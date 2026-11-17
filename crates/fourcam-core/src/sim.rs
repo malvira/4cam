@@ -1198,6 +1198,7 @@ mod tests {
             moves: b.moves,
             origin_comment: None,
             plunge_limit: None,
+            ramp_angle: None,
         };
         let st = simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1);
         assert!(st.rapid_hits.is_empty());
@@ -1263,6 +1264,7 @@ mod tests {
             ],
             origin_comment: None,
             plunge_limit: None,
+            ramp_angle: None,
         };
         let st = simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1);
         assert_eq!(st.rapid_hits, vec![2]);

@@ -53,7 +53,8 @@ pub enum Move {
     /// Straight radial feed move at `feed` (mm/min).
     Plunge { r: f64, feed: f64 },
     /// Coordinated cut. `feed` is the surface feed (mm/min) along the true path; the tip never
-    /// descends faster than `plunge_cap` (mm/min).
+    /// descends faster than `plunge_cap` (mm/min). A descent gentler than the operation's ramp
+    /// angle carries its own feed as the cap (it runs at the cutting feed).
     Cut {
         x: f64,
         r: f64,
@@ -82,6 +83,16 @@ pub struct Toolpath {
     /// (3-axis): the slowest plunge feed of its operations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plunge_limit: Option<f64>,
+    /// Descents gentler than this (degrees) may run at the cutting feed: the largest ramp
+    /// angle of the program's operations (None: every descent keeps to the plunge feed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp_angle: Option<f64>,
+}
+
+/// Whether a descent of `drop` mm over `across` mm of travel (along the surface, not down) is
+/// no steeper than the ramp, `ramp_tan` = tan(ramp angle); never for a pure plunge.
+pub fn gentle_descent(drop: f64, across: f64, ramp_tan: f64) -> bool {
+    ramp_tan > 0.0 && across > 1e-9 && drop <= ramp_tan * across
 }
 
 /// True length of a move at the mean radius (minimum 0.5 mm so moves near the axis still count).
@@ -100,6 +111,9 @@ pub struct Builder {
     pub a: f64,
     /// 3-axis position (tool tip, work XYZ).
     pub p3: Option<[f64; 3]>,
+    /// tan(ramp angle) of the operation being planned: gentler descents run at the cutting
+    /// feed (0: every descent keeps to the plunge feed).
+    pub ramp_tan: f64,
 }
 
 impl Default for Builder {
@@ -116,6 +130,7 @@ impl Builder {
             r: None,
             a: 0.0,
             p3: None,
+            ramp_tan: 0.0,
         }
     }
 
@@ -207,6 +222,13 @@ impl Builder {
         if true_length(x - x0, r - r0, a - self.a, r0, r) < 1e-6 {
             return;
         }
+        // across: the travel along the surface (X and the arc at the mean radius)
+        let across = true_length(x - x0, 0.0, a - self.a, r0, r);
+        let plunge_cap = if r < r0 && gentle_descent(r0 - r, across, self.ramp_tan) {
+            feed
+        } else {
+            plunge_cap
+        };
         self.moves.push(Move::Cut {
             x,
             r,

@@ -390,6 +390,7 @@ mod tests {
             moves: b.moves,
             origin_comment: None,
             plunge_limit: None,
+            ramp_angle: None,
         }
     }
 

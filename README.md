@@ -75,9 +75,11 @@ target/release/4cam run examples/knob/knob_finish.job.json --machine linuxcnc --
 
 The other commands:
 
-- `4cam verify file.nc [--plunge 60] [--safe 15.5]` flags feed moves where Z falls faster
-  than the plunge feed, and X/A rapids below the safe radius. It reads `G93` (inverse-time)
-  files too.
+- `4cam verify file.nc [--plunge 60] [--safe 15.5] [--ramp 30]` flags feed moves where Z
+  falls faster than the plunge feed, and X/A rapids below the safe radius. It reads `G93`
+  (inverse-time) files too. Like the planner, it lets descents gentler than the ramp angle
+  (default 30 degrees, each operation's `ramp_angle`) run at any feed; steeper descents and
+  plunges keep to the plunge feed. `--ramp 0` holds every descent to it.
 - `4cam simulate job.json [--out dir] [--dx 0.05] [--na 720]` runs every program in order
   on one simulated bar (a radial heightmap) and compares the result with the part.
   - It reports rapids through stock, the material left and any gouges.

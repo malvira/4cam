@@ -41,6 +41,7 @@ fn finish(angle: f64, pattern: &str, direction: &str, scallop: f64) -> Raster3d 
         faces: Vec::new(),
         feed: 600.0,
         plunge_feed: 60.0,
+        ramp_angle: fourcam::job::default_ramp_angle(),
     }
 }
 
@@ -55,6 +56,7 @@ fn toolpath(b: Builder) -> Toolpath {
         moves: b.moves,
         origin_comment: None,
         plunge_limit: None,
+        ramp_angle: None,
     }
 }
 

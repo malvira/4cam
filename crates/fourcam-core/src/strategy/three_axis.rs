@@ -727,16 +727,22 @@ fn line_refined(
         p1[1],
         p1[2],
         UP,
-        descent_feed(p0, p1, feed[0], feed[1]),
+        descent_feed(p0, p1, feed[0], feed[1], b.ramp_tan),
     );
 }
 
-/// Feed for a move from `p0` to `p1` so Z never falls faster than `plunge` mm/min, even
-/// after the post rounds coordinates to 0.001 mm (whole mm/min, rounded down).
-pub fn descent_feed(p0: [f64; 3], p1: [f64; 3], feed: f64, plunge: f64) -> f64 {
+/// Feed for a move from `p0` to `p1`: a descent no steeper than the ramp (`ramp_tan` =
+/// tan(ramp angle)) runs at `feed`; a steeper one so Z never falls faster than `plunge`
+/// mm/min, even after the post rounds coordinates to 0.001 mm (whole mm/min, rounded down).
+pub fn descent_feed(p0: [f64; 3], p1: [f64; 3], feed: f64, plunge: f64, ramp_tan: f64) -> f64 {
     const ROUND: f64 = 1e-3;
     let dz = p0[2] - p1[2];
     if dz <= -ROUND {
+        return feed;
+    }
+    let across = (p1[0] - p0[0]).hypot(p1[1] - p0[1]);
+    // the post's rounding may make a move up to 2 microns steeper than planned
+    if crate::toolpath::gentle_descent(dz + 2.0 * ROUND, across, ramp_tan) {
         return feed;
     }
     let len = ((p1[0] - p0[0]).powi(2) + (p1[1] - p0[1]).powi(2) + dz * dz).sqrt();

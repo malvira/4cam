@@ -353,6 +353,9 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
     let mut current: Option<u32> = None;
     let mut first_tool = None;
     for op in &prog.operations {
+        b.ramp_tan = op
+            .ramp_angle()
+            .map_or(0.0, |deg| deg.clamp(0.0, 89.0).to_radians().tan());
         let number = op.tool();
         let tool = job.tool(number).ok_or_else(|| Error::UnknownTool {
             program: prog.name.clone(),
@@ -606,6 +609,12 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     .fold(f64::INFINITY, f64::min)
             })
             .filter(|v| v.is_finite()),
+        ramp_angle: prog
+            .operations
+            .iter()
+            .filter_map(Operation::ramp_angle)
+            .reduce(f64::max)
+            .filter(|&r| r > 0.0),
     })
 }
 
@@ -673,6 +682,7 @@ pub fn limits_for(tp: &Toolpath, machine: &Machine) -> Limits {
         safe_r: tp.safe_r,
         feed_mode: machine.feed_mode,
         surface_radius_pad: machine.surface_radius_pad,
+        ramp_angle: tp.ramp_angle.unwrap_or(0.0),
     }
 }
 

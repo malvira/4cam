@@ -105,7 +105,7 @@ goldens are still byte-identical.
      comment and a 3-axis machine-limit check (X/Y/Z spans, feed cap; no rotary checks);
    - `face`, `pocket` (rectangle, or any closed outline with islands), `drill` (pecking), `contour` (outside/inside/on a closed
      path) and `raster3d` (drop-cutter zigzag over the mesh in step-down levels, rows linked at
-     depth, descents slowed to the plunge feed) in `strategy/three_axis.rs`, with registry
+     depth, descents steeper than the ramp angle slowed to the plunge feed) in `strategy/three_axis.rs`, with registry
      entries and engine defaults from the block;
    - `sim3::Heightmap3` simulates them. A test plans `examples/plate/plate.project.json`
      (Carvera, 60x40x10 block, dome fixture) and checks each operation's result in the cut

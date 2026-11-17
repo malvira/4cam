@@ -70,7 +70,7 @@ fn cut(b: &mut Builder, s: Surface, at: [f64; 3], feed: f64, plunge: f64) {
         Surface::Flat { .. } => {
             // down a V's side no faster than the plunge feed
             let f = b.p3.map_or(feed, |p| {
-                super::three_axis::descent_feed(p, at, feed, plunge)
+                super::three_axis::descent_feed(p, at, feed, plunge, b.ramp_tan)
             });
             b.line3(at[0], at[1], at[2], UP, f)
         }

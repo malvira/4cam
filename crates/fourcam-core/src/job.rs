@@ -335,6 +335,11 @@ pub struct Raster3d {
     pub faces: Vec<String>,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Descents gentler than this (degrees below the horizontal, along the path) run at
+    /// the cutting feed; steeper ones are slowed so the tip falls no faster than
+    /// `plunge_feed`. 0: every descent is slowed.
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
 }
 
 /// Follow paths and single-line text at `depth` below the surface, in `step_down` passes:
@@ -367,6 +372,11 @@ pub struct Engrave {
     pub step_down: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Descents gentler than this (degrees below the horizontal, along the path) run at
+    /// the cutting feed; steeper ones are slowed so the tip falls no faster than
+    /// `plunge_feed`. 0: every descent is slowed.
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
 }
 
 fn default_text_weight() -> f64 {
@@ -412,6 +422,11 @@ pub struct Vcarve {
     pub tolerance: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Descents gentler than this (degrees below the horizontal, along the path) run at
+    /// the cutting feed; steeper ones are slowed so the tip falls no faster than
+    /// `plunge_feed`. 0: every descent is slowed.
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
 }
 
 fn default_pattern() -> String {
@@ -431,6 +446,21 @@ impl Operation {
             Operation::Drill(o) => Some(o.index_a),
             Operation::Contour(o) => Some(o.index_a),
             Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.index_a),
+            _ => None,
+        }
+    }
+
+    /// The ramp angle of an operation that descends along its path (None: plunges only).
+    pub fn ramp_angle(&self) -> Option<f64> {
+        match self {
+            Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.ramp_angle),
+            Operation::Engrave(o) => Some(o.ramp_angle),
+            Operation::Vcarve(o) => Some(o.ramp_angle),
+            Operation::RotaryTurning(o) => Some(o.ramp_angle),
+            Operation::HelicalKnurl(o) => Some(o.ramp_angle),
+            Operation::FlankChamfer(o) => Some(o.ramp_angle),
+            Operation::RotaryFinish(o) => Some(o.ramp_angle),
+            Operation::RotaryRough(o) => Some(o.ramp_angle),
             _ => None,
         }
     }
@@ -464,6 +494,11 @@ pub struct RotaryTurning {
     pub finish_step: f64,
     pub finish_feed: f64,
     pub plunge_feed: f64,
+    /// Descents gentler than this (degrees below the horizontal, along the path) run at
+    /// the cutting feed; steeper ones are slowed so the tip falls no faster than
+    /// `plunge_feed`. 0: every descent is slowed.
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
     #[serde(default = "default_segment_deg")]
     pub segment_deg: f64,
     #[serde(default = "default_grid")]
@@ -493,6 +528,11 @@ pub struct HelicalKnurl {
     pub approach_clearance: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Descents gentler than this (degrees below the horizontal, along the path) run at
+    /// the cutting feed; steeper ones are slowed so the tip falls no faster than
+    /// `plunge_feed`. 0: every descent is slowed.
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
 }
 
 /// Chamfer an edge with the flank of a V-bit while the part rotates.
@@ -511,6 +551,11 @@ pub struct FlankChamfer {
     pub segment_deg: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Descents gentler than this (degrees below the horizontal, along the path) run at
+    /// the cutting feed; steeper ones are slowed so the tip falls no faster than
+    /// `plunge_feed`. 0: every descent is slowed.
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
 }
 
 /// Raster direction for [`RotaryFinish`].
@@ -567,6 +612,16 @@ pub struct RotaryFinish {
     pub clean_walls: bool,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Descents gentler than this (degrees below the horizontal, along the path) run at
+    /// the cutting feed; steeper ones are slowed so the tip falls no faster than
+    /// `plunge_feed`. 0: every descent is slowed.
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
+}
+
+/// Descents at up to 30 degrees run at the cutting feed (Mar, 2026-11-17).
+pub fn default_ramp_angle() -> f64 {
+    30.0
 }
 
 fn default_true() -> bool {
@@ -597,6 +652,11 @@ pub struct RotaryRough {
     pub min_radius: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Descents gentler than this (degrees below the horizontal, along the path) run at
+    /// the cutting feed; steeper ones are slowed so the tip falls no faster than
+    /// `plunge_feed`. 0: every descent is slowed.
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
 }
 
 fn default_rough_sample_deg() -> f64 {
