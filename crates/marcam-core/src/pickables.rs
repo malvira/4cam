@@ -395,7 +395,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
             faces,
             similar: format!("hole:{}:{}:{}", r2(d), through, r2(depth)),
             data: json!({
-                "center": [c[0], c[1]], "diameter": d, "top": top, "bottom": bottom,
+                "center": [round_um(c[0]), round_um(c[1])], "diameter": round_um(d), "top": top, "bottom": bottom,
                 "depth": depth, "through": through
             }),
         });
@@ -774,7 +774,6 @@ pub fn apply(
                 paths.extend(is.iter().cloned());
             }
             v.insert("paths".into(), Value::Array(paths));
-            v.insert("rect".into(), json!([0.0, 0.0, 0.0, 0.0]));
             v.insert("top".into(), json!(round_um(f(p, "top"))));
             v.insert("depth".into(), json!(round_um(f(p, "depth"))));
         }

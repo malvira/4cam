@@ -147,3 +147,11 @@ body.stale #gcode, body.stale #view3d, body.stale #side { opacity: 0.45; }
 /* Generate asks for attention when the results are out of date or missing */
 #generate.attention { box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.85); animation: attention 1.6s ease-in-out infinite; }
 @keyframes attention { 50% { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.35); } }
+
+/* picking: chips for what is picked, notes from the engine, detected features */
+.pick-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.pick-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 4px 1px 9px; font-size: 12px; }
+.pick-chip button { background: transparent; border: none; color: #fff; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 4px; }
+.pick-notes { color: #b45309; margin: 2px 0 4px; }
+.detected { flex-wrap: wrap; gap: 4px; align-items: center; }
+.detected-btn { font-size: 12px; padding: 1px 8px; border-radius: 999px; }

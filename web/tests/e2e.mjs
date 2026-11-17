@@ -1169,6 +1169,100 @@ try {
     await shot("16c_auto_regenerated");
   }
 
+  // 8l. picking: the bracket's detected holes and pocket start operations; the picking mode
+  // lights up what an operation takes, chips list the picks, "select all similar", hover
+  // labels, a click on the canvas toggles a feature, wrong features are refused with a note
+  {
+    await S("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
+    const fx = join(root, "tests", "fixtures", "picking");
+    const proj = JSON.parse(readFileSync(join(fx, "bracket.project.json"), "utf8"));
+    const stl64 = readFileSync(join(fx, "bracket.stl")).toString("base64");
+    const file = JSON.stringify({ format: "marcam-project", version: 1, project: proj, meshes: { "bracket.stl": stl64 } });
+    cdp.dialogAnswer = true;
+    await js(`window.__marcam.project.openText(${JSON.stringify(file)}, "bracket.marcam.json").then(() => true)`);
+    await waitFor(() => js("document.querySelectorAll('#detected .detected-btn').length === 3"), "the detected features", 30000);
+    const detectedText = await js("[...document.querySelectorAll('#detected .detected-btn')].map((b) => b.textContent)");
+    check("an imported part's holes and pockets are detected, holes grouped by size",
+      detectedText.includes("Drill 4 × 5.00 mm through") && detectedText.includes("Drill 1 × 6.00 mm blind") && detectedText.some((x) => /^Pocket 20\.00 x 24\.00/.test(x)), detectedText.join(" | "));
+    await shot("17a_detected_features");
+    const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
+    // Drill 4 x 5.00: a drilling operation with the 5 mm tool, the four centres, through depth
+    await js("[...document.querySelectorAll('#detected .detected-btn')][0].click(); true");
+    await waitFor(async () => (await doc()).setups[0].operations.length === 1, "the drilling operation", 15000);
+    const drill = (await doc()).setups[0].operations[0];
+    check("Drill 4 × 5.00: drilling with the 5 mm tool, four points, from the top, through (12.5), peck one diameter",
+      drill.type === "drill" && drill.tool === 1 && drill.points.length === 4 && drill.top === 0 && drill.depth === 12.5 && drill.peck === 5, JSON.stringify(drill));
+    // picking mode on it: the four holes picked as chips
+    // the new operation is selected: its editor offers picking
+    await waitFor(() => js("window.__marcam.state.tree.selected === 'op1' && !!document.getElementById('pickFaces')"), "the drilling editor", 15000);
+    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && document.querySelectorAll('#pickChips .pick-chip').length === 4"), "picking on the drill", 30000);
+    await sleep(400);
+    // a canvas point that hits the feature `pred` picks (by its pickable), found by casting a
+    // ray at its triangles' centres: [client x, y, canvas x, y]
+    const screenOf = (pred) => js(`(() => { const v = window.__marcam.state.three, t = window.__marcam.state.tree; const pk = t.pick; const target = pk.list.find(${pred}); if (!target) return null;
+      const want = new Set(target.faces); const el = v.renderer.domElement; const r = el.getBoundingClientRect(); const tri = t.regions.tri; const ray = new v.THREE.Raycaster();
+      // the centre and points near each corner (a deep wall shows only near its rim)
+      const W = [[1/3, 1/3, 1/3], [0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9]];
+      for (let k = 0; k < t.regions.of.length; k++) { if (!want.has(t.regions.list[t.regions.of[k]].id)) continue;
+        for (const w of W) {
+          const c = new v.THREE.Vector3(...[0, 1, 2].map((d) => w[0] * tri[9*k+d] + w[1] * tri[9*k+3+d] + w[2] * tri[9*k+6+d])).project(v.camera);
+          if (Math.abs(c.x) > 0.95 || Math.abs(c.y) > 0.95) continue;
+          ray.setFromCamera(new v.THREE.Vector2(c.x, c.y), v.camera); const hit = ray.intersectObject(t.pickMesh)[0];
+          if (hit && want.has(t.regions.list[t.regions.of[hit.faceIndex]].id)) { const px = (c.x + 1) / 2 * el.clientWidth, py = (1 - c.y) / 2 * el.clientHeight; return [r.left + px, r.top + py, px, py]; } } }
+      return null; })()`);
+    const chips = () => js("document.querySelectorAll('#pickChips .pick-chip').length");
+    // remove one chip: three points
+    await js("document.querySelector('#pickChips [data-unpick]').click(); true");
+    await waitFor(async () => (await chips()) === 3, "a chip removed", 10000);
+    const three = await js("window.__marcam.state.tree.draft?.op || JSON.parse(JSON.stringify(window.__marcam.state.tree.doc.setups[0].operations[0]))");
+    // select all similar: back to four
+    await js("document.getElementById('pickSimilar').click(); true");
+    await waitFor(async () => (await chips()) === 4, "select all similar", 10000);
+    check("chips list the picks; removing one drops its point; select all similar adds the rest",
+      three.points.length === 3 && (await js("window.__marcam.state.tree.doc.setups[0].operations[0].points.length")) === 4);
+    // the hole at (40, 8) on the canvas: hover shows its label, a click un-picks it
+    const at = await screenOf("(x) => x.kind === 'hole' && x.data.through && Math.abs(x.data.center[0] - 40) < 0.01 && Math.abs(x.data.center[1] - 8) < 0.01");
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1], buttons: 0 });
+    await waitFor(() => js("/Hole 5\\.00 mm through/.test(document.getElementById('pickInfo').textContent)"), "the hover label", 10000);
+    const hovered = await js("document.getElementById('pickInfo').textContent");
+    await shot("17b_picking_holes");
+    const picked = await js(`const pr = await window.__marcam.tree.pickAt(${at[2]}, ${at[3]}); pr && pr.pickable ? pr.pickable.kind : "none"`);
+    await waitFor(async () => (await chips()) === 3, "the hole clicked off", 10000);
+    // a click on the pocket floor: drilling does not take it
+    // (the pocket floor is no drilling target, so it is not in the picking list: find it by
+    // its faces among all regions instead)
+    const floor = await js(`(() => { const v = window.__marcam.state.three, t = window.__marcam.state.tree; const el = v.renderer.domElement; const tri = t.regions.tri; const ray = new v.THREE.Raycaster();
+      for (let k = 0; k < t.regions.of.length; k++) { const z = (tri[9*k+2]+tri[9*k+5]+tri[9*k+8])/3; if (Math.abs(z + 5) > 1e-6) continue;
+        const c = new v.THREE.Vector3((tri[9*k]+tri[9*k+3]+tri[9*k+6])/3, (tri[9*k+1]+tri[9*k+4]+tri[9*k+7])/3, z).project(v.camera);
+        ray.setFromCamera(new v.THREE.Vector2(c.x, c.y), v.camera); const hit = ray.intersectObject(t.pickMesh)[0];
+        if (hit && hit.faceIndex === k) return [(c.x + 1) / 2 * el.clientWidth, (1 - c.y) / 2 * el.clientHeight]; }
+      return null; })()`);
+    await js(`window.__marcam.tree.pickAt(${floor[0]}, ${floor[1]}).then(() => true)`);
+    const refused = await js("document.getElementById('pickNotes')?.textContent || ''");
+    check("hovering a hole shows its label; clicking it toggles it; a face drilling cannot take is refused with a note",
+      /Hole 5\.00 mm through/.test(hovered) && picked === "hole" && (await chips()) === 3 && /not a hole/.test(refused), `${hovered} | ${picked} | ${refused}`);
+    await js("document.getElementById('pickFaces').click(); true");
+    await sleep(400);
+    check("done picking writes the picks once: three points", (await doc()).setups[0].operations[0].points.length === 3 && !(await js("!!window.__marcam.state.tree.pickMesh")));
+    // the blind 6 mm hole with the 5 mm tool: use Bore instead
+    await js("[...document.querySelectorAll('#detected .detected-btn')].find((b) => /6\\.00 mm blind/.test(b.textContent)).click(); true");
+    await waitFor(async () => (await doc()).setups[0].operations.length === 2, "the blind-hole drilling", 15000);
+    const bore = await js("document.getElementById('error').textContent");
+    // the pocket: its outline and island, its depth
+    await js("[...document.querySelectorAll('#detected .detected-btn')].find((b) => b.dataset.start === 'pocket').click(); true");
+    await waitFor(async () => (await doc()).setups[0].operations.length === 3, "the pocket operation", 15000);
+    const pocket = (await doc()).setups[0].operations[2];
+    check("a hole the tool cannot drill says use Bore instead; the pocket takes its outline, island and depth",
+      /Bore/.test(bore) && pocket.type === "pocket" && pocket.paths.length === 2 && pocket.depth === 5 && pocket.top === 0, `${bore} | ${JSON.stringify({ paths: pocket.paths?.length, depth: pocket.depth })}`);
+    // it all plans and verifies
+    await js("document.getElementById('error').textContent = ''; document.getElementById('generate').click(); true");
+    await waitDone("generation of the picked bracket", 240000);
+    const tabs = await js("[...document.querySelectorAll('#tabs button')].map((b) => b.textContent)");
+    check("the picked operations plan and verify clean", tabs.length >= 1 && tabs.every((x) => x.endsWith("OK")), tabs.join(", "));
+    await shot("17c_picked_generated");
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

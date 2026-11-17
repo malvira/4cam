@@ -86,7 +86,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       <button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
       <button type="button" id="treeAddSetup" title="Another setup for the same part (e.g. the other side, or a vise setup)">+ Setup</button>
       <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>
-      <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>`;
+      <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
+      <div class="row small detected" id="detected"></div>`;
     if (t.upgraded) html += `<div class="muted small">0.1 job shown as a 0.2 project; it is saved as 0.2 on the first edit.</div>`;
     let n = 0;
     // estimated times from the last Generate of this setup
@@ -129,6 +130,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     box.innerHTML = html;
     box.dataset.ops = String(n);
     renderEditor();
+    detectFeatures();
   }
 
   /** Form for the selected operation, built from the registry's parameter specs. */
@@ -174,15 +176,24 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     const faces = op.geometry?.find((g) => g.kind === "faces");
     const ax = op.geometry?.find((g) => g.kind === "axial_range");
-    // face and axial selections bound rotary operations (X/A); picked faces bound the 3D raster
-    // too (it cuts only where the tool rests on them); other 3-axis types take their area as
-    // parameters
-    if (ty.kind === "raster3d" || (!ty.machine_needs.includes("xyz") && ty.geometry.some((g) => g === "mesh" || g === "profile" || g === "axial_range"))) {
-      html += `<div class="row small"><button type="button" id="pickFaces">${t.picking ? "Done picking" : "Pick faces on the model"}</button>
-        <span id="pickInfo">${faces ? `${faces.ids.length} face(s): ${faces.ids.map(esc).join(", ")}` : "whole model"}</span>
-        ${faces ? '<button type="button" id="clearFaces">Clear</button>' : ""}</div>
-        <label>axial range (mm)<input name="__axial" value="${ax ? ax.x.join(", ") : ""}" placeholder="all"></label>`;
+    const mode = pickModeOf(ty);
+    if (mode) {
+      const pk = t.picking ? t.pick : null;
+      html += `<div class="row small"><button type="button" id="pickFaces" title="Pick ${esc(mode.kinds.map((k) => k.replace(/_/g, " ")).join(", "))} on the 3D view">${t.picking ? "Done picking" : "Pick on the model"}</button>
+        ${pk && pk.sel.size && !mode.single ? '<button type="button" id="pickSimilar" title="Add every feature like the ones picked">Select all similar</button>' : ""}
+        <span id="pickInfo">${esc(pickInfoText(op, mode))}</span>
+        ${mode.faces && faces ? '<button type="button" id="clearFaces">Clear</button>' : ""}</div>`;
+      if (pk) {
+        html += `<div id="pickChips" class="pick-chips">${[...pk.sel]
+          .map((id) => pk.list.find((x) => x.id === id))
+          .filter(Boolean)
+          .map((x) => `<span class="pick-chip" data-chip="${esc(x.id)}">${esc(x.label)}<button type="button" data-unpick="${esc(x.id)}" aria-label="Remove ${esc(x.label)}">×</button></span>`)
+          .join("")}</div>`;
+        if (pk.notes.length) html += `<div id="pickNotes" class="pick-notes small">${pk.notes.map(esc).join("<br>")}</div>`;
+      }
     }
+    // face and axial selections bound rotary operations (X/A) and the 3D raster
+    if (mode?.legacy) html += `<label>axial range (mm)<input name="__axial" value="${ax ? ax.x.join(", ") : ""}" placeholder="all"></label>`;
     html += `<div id="opErrors" class="error small hidden"></div><div class="row"><button type="submit" class="primary">Apply</button>${t.draft ? ' <button type="button" id="cancelDraft">Cancel</button>' : ""}</div></form>`;
     ed.innerHTML = html;
   }
@@ -225,18 +236,81 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     return out;
   }
 
-  // ------------------------------------------------------------ face picking
+  // ------------------------------------------------------------ picking
+  // One picking mode for every operation: the features it takes light up, a click toggles one
+  // (pocket, contour and face take one), "select all similar" adds the ones alike. Finishing
+  // operations record the picked faces (a faces selection); the others take the fields the
+  // engine fills from the picks (drill points and depth, a pocket's outline, ...).
+  const FACE_TYPES = ["raster3d", "rough3d", "rotary_finish"];
+  const SINGLE = ["pocket", "contour", "face"];
+  function pickModeOf(ty) {
+    if (!ty) return null;
+    // before picking existed per type: rotary operations (and the raster) were bounded by faces
+    const legacy = ty.kind === "raster3d" || (!ty.machine_needs.includes("xyz") && ty.geometry.some((g) => g === "mesh" || g === "profile" || g === "axial_range"));
+    const own = ty.picks || [];
+    const kinds = own.length ? own : legacy ? ["cylindrical_band", "revolved_band", "surface"] : [];
+    if (!kinds.length) return null;
+    return { kinds, faces: FACE_TYPES.includes(ty.kind) || !own.length, single: SINGLE.includes(ty.kind), legacy };
+  }
+
+  function pickInfoText(op, mode) {
+    const pk = t.picking ? t.pick : null;
+    if (pk?.hover) return pk.list.find((x) => x.id === pk.hover)?.label || "";
+    if (pk) return pk.sel.size ? `${pk.sel.size} picked` : `click ${mode.kinds.map((k) => k.replace(/_/g, " ")).join(" / ")}`;
+    if (mode.faces) {
+      const f = op.geometry?.find((g) => g.kind === "faces");
+      return f ? `${f.ids.length} face(s): ${f.ids.join(", ")}` : "whole model";
+    }
+    return "";
+  }
+
+  /** Which of `list` the operation already uses (its faces, or its fields). */
+  function initialSel(op, list, mode) {
+    if (mode.faces) {
+      const f = op.geometry?.find((g) => g.kind === "faces");
+      if (!f) return [];
+      return list.filter((x) => x.faces.every((id) => f.ids.includes(id))).map((x) => x.id);
+    }
+    const near = (a, b) => Math.abs(a - b) < 0.01;
+    if (op.type === "drill") return list.filter((h) => (op.points || []).some((q) => near(q[0], h.data.center[0]) && near(q[1], h.data.center[1]))).map((h) => h.id);
+    const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((q, k) => near(q[0], b[k][0]) && near(q[1], b[k][1]));
+    if (op.type === "pocket") return list.filter((x) => same(x.data.outline, op.paths?.[0])).map((x) => x.id);
+    if (op.type === "contour") return list.filter((x) => same(x.data.path, op.path)).map((x) => x.id);
+    return [];
+  }
+
+  function partModel(s) {
+    return s.part.find((id) => t.doc.models.find((m) => m.id === id)?.kind === "mesh") || s.part[0];
+  }
+
   async function startPicking() {
     const v = await getThree();
-    if (!v || v.failed) return showError("Face picking needs the 3D view");
+    if (!v || v.failed) return showError("Picking needs the 3D view");
     const s = setup();
-    const model = s.part.find((id) => t.doc.models.find((m) => m.id === id)?.kind === "mesh") || s.part[0];
+    const op = opById(t.selected);
+    const mode = pickModeOf(typeOf(op.type));
+    if (!mode) return;
+    const model = partModel(s);
     const doc = t.doc;
-    const { result } = await engine("faceRegions", t.doc, model, state.mesh);
+    let regions, picks;
+    try {
+      [{ result: regions }, { result: picks }] = await Promise.all([
+        engine("faceRegions", t.doc, model, state.mesh),
+        engine("pickables", t.doc, { setup: s.id, model, index_a: op.index_a ?? 0 }, state.mesh),
+      ]);
+    } catch (e) {
+      return showError(`Picking: ${e.message}`);
+    }
     // the project was replaced meanwhile (New, Open, an example)
     if (t.doc !== doc) return;
     const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-    t.regions = { model, list: result.regions, tri: new Float32Array(bytes(result.triangles).buffer), of: new Uint16Array(bytes(result.region_of).buffer) };
+    t.regions = { model, list: regions.regions, tri: new Float32Array(bytes(regions.triangles).buffer), of: new Uint16Array(bytes(regions.region_of).buffer) };
+    const list = picks.pickables.filter((x) => mode.kinds.includes(x.kind));
+    // a face may belong to several features: the one the operation prefers comes first
+    const byFace = new Map();
+    for (const x of list) for (const f of x.faces) (byFace.get(f) || byFace.set(f, []).get(f)).push(x);
+    for (const l of byFace.values()) l.sort((p, q) => mode.kinds.indexOf(p.kind) - mode.kinds.indexOf(q.kind));
+    t.pick = { mode, list, byFace, sel: new Set(initialSel(op, list, mode)), hover: null, notes: [] };
     const { THREE } = v;
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(t.regions.tri, 3));
@@ -245,6 +319,18 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     t.pickMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide }));
     v.scene.add(t.pickMesh);
     v.groups.part.visible = false;
+    // nothing generated yet, so the view was never framed: frame the part
+    if (!v.fitted) {
+      g.computeBoundingBox();
+      const b = g.boundingBox;
+      const c = b.getCenter(new THREE.Vector3());
+      const span = Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z);
+      v.camera.position.set(c.x - span * 0.3, c.y - span * 1.2, c.z + span * 0.9);
+      v.controls.target.copy(c);
+      v.controls.update();
+      v.fitted = "picking";
+    }
+    v.renderer.render(v.scene, v.camera);
     t.picking = true;
     paintPicked();
     renderEditor();
@@ -265,28 +351,32 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (v && !v.failed) v.groups.part.visible = $("showPart").checked;
     t.picking = false;
+    t.pick = null;
     renderEditor();
   }
 
-  function pickedIds() {
-    const f = opById(t.selected)?.geometry?.find((g) => g.kind === "faces" && g.model === t.regions?.model);
-    return f ? f.ids : [];
-  }
-
+  // colours: picked, under the pointer, can be picked, cannot
+  const COLORS = { sel: [0.15, 0.39, 0.92], hover: [0.96, 0.62, 0.04], ok: [0.55, 0.8, 0.76], off: [0.72, 0.74, 0.78] };
   function paintPicked() {
-    if (!t.pickMesh) return;
-    const ids = new Set(pickedIds());
+    if (!t.pickMesh || !t.pick) return;
+    const { byFace, sel, hover } = t.pick;
     const col = t.pickMesh.geometry.attributes.color.array;
+    const colorOfRegion = t.regions.list.map((r) => {
+      const ps = byFace.get(r.id);
+      if (!ps) return COLORS.off;
+      if (ps.some((x) => sel.has(x.id))) return COLORS.sel;
+      if (ps.some((x) => x.id === hover)) return COLORS.hover;
+      return COLORS.ok;
+    });
     for (let k = 0; k < t.regions.of.length; k++) {
-      const on = ids.has(t.regions.list[t.regions.of[k]].id);
-      const c = on ? [0.15, 0.39, 0.92] : [0.72, 0.74, 0.78];
+      const c = colorOfRegion[t.regions.of[k]];
       for (let v = 0; v < 3; v++) col.set(c, 9 * k + 3 * v);
     }
     t.pickMesh.geometry.attributes.color.needsUpdate = true;
   }
 
-  /** Toggle the face under a canvas point (CSS pixels relative to the canvas). */
-  async function pickAt(px, py) {
+  /** The face region under a canvas point (CSS pixels relative to the canvas), or null. */
+  function regionAt(px, py) {
     const v = state.three;
     if (!t.picking || !t.pickMesh) return null;
     const el = v.renderer.domElement;
@@ -294,22 +384,140 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const ray = new v.THREE.Raycaster();
     ray.setFromCamera(ndc, v.camera);
     const hit = ray.intersectObject(t.pickMesh)[0];
-    if (!hit) return null;
-    const region = t.regions.list[t.regions.of[hit.faceIndex]];
+    return hit ? t.regions.list[t.regions.of[hit.faceIndex]] : null;
+  }
+
+  /** The picks become the operation's faces, or the fields the engine fills from them. */
+  async function applySel() {
     const op = opById(t.selected);
-    op.geometry = op.geometry || [];
-    let f = op.geometry.find((g) => g.kind === "faces" && g.model === t.regions.model);
-    if (!f) op.geometry.push((f = { kind: "faces", model: t.regions.model, ids: [] }));
-    f.ids = f.ids.includes(region.id) ? f.ids.filter((x) => x !== region.id) : [...f.ids, region.id];
-    if (!f.ids.length) op.geometry = op.geometry.filter((g) => g !== f);
-    if (!op.geometry.length) delete op.geometry;
-    // written once, when picking is done (each pick here only marks the face)
+    const pk = t.pick;
+    const { mode } = pk;
+    if (mode.faces) {
+      const ids = [...new Set([...pk.sel].flatMap((id) => pk.list.find((x) => x.id === id)?.faces || []))];
+      op.geometry = (op.geometry || []).filter((g) => !(g.kind === "faces" && g.model === t.regions.model));
+      if (ids.length) op.geometry.push({ kind: "faces", model: t.regions.model, ids });
+      if (!op.geometry.length) delete op.geometry;
+      pk.notes = [];
+    } else if (pk.sel.size) {
+      try {
+        const { result } = await engine("applyPicks", t.doc, { type: op.type, ids: [...pk.sel], setup: t.setup, model: t.regions.model, tool: op.tool, index_a: op.index_a ?? 0 }, state.mesh);
+        Object.assign(op, result.params);
+        // a rectangle no longer applies once the outline is picked
+        if (op.type === "pocket" && result.params.paths) delete op.rect;
+        pk.notes = result.notes;
+      } catch (e) {
+        pk.notes = [e.message];
+      }
+    }
+    // written once, when picking is done (each pick here only marks the features)
     if (!t.draft) t.pickedChanged = true;
     paintPicked();
-    if (t.draft) await refreshDefaults();
+    if (t.draft && mode.faces) await refreshDefaults();
     else renderEditor();
-    $("pickInfo").textContent = f.ids.length ? `${f.ids.length} face(s): ${f.ids.join(", ")}` : "whole model";
-    return region;
+  }
+
+  /** Toggle the feature under a canvas point; returns the face region hit (with the feature
+   *  picked as `.pickable`), or null. */
+  async function pickAt(px, py) {
+    const region = regionAt(px, py);
+    if (!region) return null;
+    const pk = t.pick;
+    const x = pk.byFace.get(region.id)?.[0];
+    if (!x) {
+      pk.notes = [`not a ${pk.mode.kinds.map((k) => k.replace(/_/g, " ")).join(" or ")}`];
+      renderEditor();
+      return { ...region, pickable: null };
+    }
+    if (pk.mode.single) pk.sel = pk.sel.has(x.id) ? new Set() : new Set([x.id]);
+    else if (pk.sel.has(x.id)) pk.sel.delete(x.id);
+    else pk.sel.add(x.id);
+    await applySel();
+    return { ...region, pickable: x };
+  }
+
+  /** Add every feature alike the picked ones. */
+  async function pickSimilar() {
+    const pk = t.pick;
+    const keys = new Set([...pk.sel].map((id) => pk.list.find((x) => x.id === id)?.similar));
+    for (const x of pk.list) if (keys.has(x.similar)) pk.sel.add(x.id);
+    await applySel();
+  }
+
+  /** The feature under the pointer lights up, its label shows. */
+  let hoverFrame = 0;
+  function hoverAt(px, py) {
+    if (!t.picking || !t.pick || hoverFrame) return;
+    hoverFrame = requestAnimationFrame(() => {
+      hoverFrame = 0;
+      if (!t.pick) return;
+      const r = regionAt(px, py);
+      const id = r ? (t.pick.byFace.get(r.id)?.[0]?.id ?? null) : null;
+      if (id === t.pick.hover) return;
+      t.pick.hover = id;
+      paintPicked();
+      const info = $("pickInfo");
+      if (info) info.textContent = pickInfoText(opById(t.selected), t.pick.mode);
+    });
+  }
+
+  // ------------------------------------------------------------ detected features
+  // A vise or indexed setup's holes (grouped by "similar") and pockets, each with a button that
+  // adds the operation for it
+  let detected = { key: null, list: [] };
+  async function detectFeatures() {
+    const s = setup();
+    if (!$("detected") || !s || !state.mesh || !["vise", "indexed"].includes(kindOfSetup(s))) return;
+    const key = JSON.stringify([s.id, s.part, t.doc.models, state.mesh.length]);
+    if (detected.key !== key) {
+      try {
+        const { result } = await engine("pickables", t.doc, { setup: s.id, model: partModel(s) }, state.mesh);
+        detected = { key, list: result.pickables };
+      } catch {
+        detected = { key, list: [] };
+      }
+    }
+    const groups = new Map();
+    for (const x of detected.list) if (x.kind === "hole") (groups.get(x.similar) || groups.set(x.similar, []).get(x.similar)).push(x);
+    let html = "";
+    for (const hs of groups.values()) {
+      const h = hs[0].data;
+      html += `<button type="button" class="detected-btn" data-start="drill" data-ids="${esc(hs.map((x) => x.id).join(","))}">Drill ${hs.length} × ${h.diameter.toFixed(2)} mm ${h.through ? "through" : "blind"}</button>`;
+    }
+    for (const x of detected.list.filter((x) => x.kind === "pocket")) html += `<button type="button" class="detected-btn" data-start="pocket" data-ids="${esc(x.id)}">${esc(x.label)}</button>`;
+    if (setup() === s && $("detected")) $("detected").innerHTML = html ? `<span class="muted">Detected:</span> ${html}` : "";
+  }
+
+  /** A new operation of `type` for the features `ids`: engine defaults, then the picks. */
+  async function startFromDetected(type, ids) {
+    const s = setup();
+    let id;
+    for (let k = s.operations.length + 1; ; k++)
+      if (!s.operations.some((o) => o.id === `op${k}`)) {
+        id = `op${k}`;
+        break;
+      }
+    try {
+      // drilling: the flat tool of the holes' size, if the project has one
+      let tool;
+      if (type === "drill") {
+        const d = detected.list.find((x) => x.id === ids[0])?.data.diameter;
+        const fits = (t.doc.tools || []).filter((x) => x.kind === "flat" && Math.abs((x.diameter ?? -1) - d) <= 0.05);
+        tool = fits[0]?.number;
+      }
+      const { result: op } = await engine("opDefaults", t.doc, { type, setup: s.id, tool, machine: machineArg?.() ?? null }, state.mesh);
+      const { result: filled } = await engine("applyPicks", t.doc, { type, ids, setup: s.id, model: partModel(s), tool: op.tool }, state.mesh);
+      const full = { id, ...op, ...filled.params };
+      if (type === "pocket") delete full.rect;
+      s.operations.push(full);
+      let out = s.outputs[0];
+      if (!out) s.outputs.push((out = { name: `${s.id}_${id}`, title: typeOf(type)?.title || type, operations: [] }));
+      out.operations.push(id);
+      t.selected = id;
+      await commit();
+      if (filled.notes.length) showError(filled.notes.join("; "));
+    } catch (e) {
+      showError(`Cannot add ${type}: ${e.message}`);
+    }
   }
 
   // ------------------------------------------------------------ events
@@ -368,10 +576,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     if (el.id === "pickFaces") return t.picking ? stopPicking() : startPicking();
+    if (el.id === "pickSimilar") return pickSimilar();
+    if (el.dataset?.unpick && t.pick) {
+      t.pick.sel.delete(el.dataset.unpick);
+      return applySel();
+    }
+    if (el.dataset?.start) return startFromDetected(el.dataset.start, el.dataset.ids.split(","));
     if (el.id === "clearFaces") {
       const op = opById(t.selected);
       op.geometry = (op.geometry || []).filter((g) => g.kind !== "faces");
       if (!op.geometry.length) delete op.geometry;
+      if (t.pick) t.pick.sel.clear();
       paintPicked();
       return commit();
     }
@@ -512,6 +727,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   host.addEventListener("pointerdown", (ev) => {
     down = [ev.clientX, ev.clientY];
   });
+  host.addEventListener("pointermove", (ev) => {
+    if (!t.picking || ev.buttons) return;
+    const r = state.three.renderer.domElement.getBoundingClientRect();
+    hoverAt(ev.clientX - r.left, ev.clientY - r.top);
+  });
   host.addEventListener("click", (ev) => {
     if (!t.picking) return;
     if (down && Math.hypot(ev.clientX - down[0], ev.clientY - down[1]) > 4) return;
@@ -530,9 +750,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.pickMesh = null;
     }
     if (v && !v.failed) v.groups.part.visible = $("showPart").checked;
-    Object.assign(t, { doc: null, problems: [], setup: null, selected: null, picking: false, pickedChanged: false, regions: null, draft: null, upgraded: false });
+    Object.assign(t, { doc: null, problems: [], setup: null, selected: null, picking: false, pickedChanged: false, regions: null, pick: null, draft: null, upgraded: false });
+    detected = { key: null, list: [] };
     $("tree").innerHTML = "";
   }
 
-  return { refresh, pickAt, reset, state: t };
+  return { refresh, pickAt, pickSimilar, reset, state: t };
 }

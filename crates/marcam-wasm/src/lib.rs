@@ -1262,7 +1262,15 @@ pub mod api {
             "op_defaults" => op_defaults(&s(a), &s(b), c),
             "pickables" => pickables(&s(a), &s(b), c),
             "apply_picks" => apply_picks(&s(a), &s(b), c),
-            "op_types" => serde_json::to_value(marcam::ops::registry()).unwrap_or(Value::Null),
+            "op_types" => {
+                // each type with the pickable kinds it takes (marcam::pickables::accepts)
+                let mut v = serde_json::to_value(marcam::ops::registry()).unwrap_or(Value::Null);
+                for t in v.as_array_mut().into_iter().flatten() {
+                    let kind = t["kind"].as_str().unwrap_or("").to_string();
+                    t["picks"] = json!(pickables::accepts(&kind));
+                }
+                v
+            }
             "check_project" => match marcam::project::Project::from_json_any(&s(a)) {
                 Ok((p, upgraded)) => {
                     json!({"project": p, "upgraded": upgraded, "problems": p.check_operations()})

@@ -471,7 +471,10 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
                 .is_some_and(|a| a.len() == 2 && a.iter().all(Value::is_number)),
             "rect" => v.as_array().is_some_and(|a| {
                 let n: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
-                n.len() == 4 && a.len() == 4 && n[2] > n[0] && n[3] > n[1]
+                // all zeros: no rectangle (a pocket given by its paths)
+                n.len() == 4
+                    && a.len() == 4
+                    && (n[2] > n[0] && n[3] > n[1] || n.iter().all(|&x| x == 0.0))
             }),
             "string" => v.is_string(),
             "paths" => v.as_array().is_some_and(|a| {
