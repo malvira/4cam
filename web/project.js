@@ -200,7 +200,7 @@ const slug = (s) => (String(s).toLowerCase().replace(/\.[a-z0-9]+$/, "").replace
 // ------------------------------------------------------------------ the workflow
 
 export function setupProject(ctx) {
-  const { $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, machineArg, currentMachine } = ctx;
+  const { $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, resetProject, machineArg, currentMachine } = ctx;
   const p = { name: "untitled", dirty: false, fileName: null, pending: null, undo: null };
   state.project = p;
   const dialog = setupDialog({ $, state, parseStl, placePart, kindOf, KINDS });
@@ -256,17 +256,14 @@ export function setupProject(ctx) {
     if (!mayDiscard("Start a new project")) return false;
     const cfg = await dialog.open("new", { name: "untitled", machine: currentMachine()?.id, kind: p.pending?.kind ?? "rotary" });
     if (!cfg) return false;
-    showError("");
+    await resetProject("New project: import an STL (button or drop it here) or open a project to start.");
     setStatus("New project", "ready");
-    dropUndo();
     if (cfg.machine) ctx.selectMachine(cfg.machine);
     const doc = { schema_version: "0.2", name: cfg.name || "untitled", models: [], tools: [], setups: [] };
     writeJob(doc, { load: true });
-    setMesh(null, "");
     p.fileName = null;
     p.pending = cfg;
     clean(doc.name);
-    clearResults("New project: import an STL (button or drop it here) or open a project to start.");
     await refreshAll();
     if (cfg.file) await importParsed(cfg);
     return true;
@@ -275,12 +272,12 @@ export function setupProject(ctx) {
   async function openText(text, fileName) {
     const { project, mesh, meshName } = readProjectFile(text);
     const name = project.name || slug(fileName || "project");
+    await resetProject("");
     writeJob(project, { load: true });
     const wanted = meshFileOf(project);
     setMesh(mesh, mesh ? `${meshName} (in the project)` : "");
     p.fileName = fileName || null;
     p.pending = null;
-    dropUndo();
     clean(name);
     const sm = project.machine ?? project.setups?.[0]?.machine;
     if (sm) ctx.selectMachine(sm);
@@ -701,5 +698,5 @@ export function setupProject(ctx) {
   });
   show();
 
-  return { changed, clean, mayDiscard, newProject, openText, openFile, save, importMesh, editSetup, addSetup, undo, dialog, state: p };
+  return { changed, clean, mayDiscard, newProject, openText, openFile, save, importMesh, editSetup, addSetup, undo, dropUndo, dialog, state: p };
 }

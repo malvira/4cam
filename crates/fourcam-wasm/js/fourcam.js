@@ -71,6 +71,8 @@ export async function load(source) {
     // material-removal playback: open a session, then seek to any segment
     simOpen: (job, opts, meshBytes) => call("sim_open", job, opts || {}, meshBytes),
     simSeek: (n) => call("sim_seek", String(n)),
+    // drop the playback and GPU sessions (a new project)
+    simClose: () => call("sim_close"),
     // polylines (mm, Y up) from SVG text, placed with its box at opts.at and opts.height tall
     svgPaths: (svgText, opts) => call("svg_paths", svgText, opts || {}),
     // machining time of any G-code text: {total_s, feed_s, rapid_s, other_s, ...}

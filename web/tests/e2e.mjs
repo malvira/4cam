@@ -1001,6 +1001,83 @@ try {
       `${badStl} | ${badJson}`);
     await shot("14g_bad_file");
 
+    // full reset (Mar: "after a new project, the old model is still hanging around"): New ->
+    // Import A -> Generate (+ playback, face picking) -> New: nothing of A left; Import B:
+    // only B; New three times: the scene and the GPU memory do not grow
+    {
+      const domeStl = readFileSync(join(root, "examples", "plate", "dome.stl"));
+      const domeTris = domeStl.readUInt32LE(80);
+      const scene = () => js(`(() => { const v = window.__4cam.state.three; let objs = 0, tris = 0; v.scene.traverse((o) => { if (o.geometry) { objs++; if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; } });
+        const g = v.groups; const kids = (k) => g[k] ? g[k].children.length : 0;
+        return { objs, tris, part: kids('part'), stock: kids('stock'), path: kids('path'), sim: kids('sim'), tool: kids('tool'), machining: !!g.machining, pickMesh: !!window.__4cam.state.tree.pickMesh,
+          geometries: v.renderer.info.memory.geometries, textures: v.renderer.info.memory.textures,
+          partTris: g.part.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3, 0),
+          gcode: document.getElementById('gcode').value.length, tabs: document.querySelectorAll('#tabs button').length, ops: document.querySelectorAll('#tree .tree-op').length,
+          mesh: !!window.__4cam.state.mesh, meshInfo: document.getElementById('meshInfo').textContent, result: !!window.__4cam.state.result, sim: !!window.__4cam.state.sim,
+          playback: !!window.__4cam.state.machining.open, session: !!window.__4cam.state.machining.session, undo: !document.getElementById('undoBar').classList.contains('hidden'),
+          error: document.getElementById('error').textContent, side: (() => { const c = document.getElementById('side'); const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++; return ink; })() }; })()`);
+      const workerSession = () => js("await window.__4cam.engine('simSeek', 1).then((r) => !(r.result && r.result.error), () => false)");
+      const newEmpty = async () => {
+        await js("document.getElementById('projectNew').click(); true");
+        await inDialog({ name: "untitled", kind: "rotary" });
+        await emptyReady();
+        await sleep(300);
+        return scene();
+      };
+      const base = await newEmpty();
+      // A: the knob, generated, with the playback open and faces being picked
+      await setFile("importStlFile", "knob.stl", knobStl);
+      await inDialog({});
+      await waitDone("generation of part A", 240000);
+      await js("document.getElementById('simOpen').click(); true");
+      await waitFor(() => js("!!window.__4cam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the playback of A", 120000);
+      await js("document.getElementById('simClose').click(); true");
+      await js("document.querySelectorAll('#tree .tree-op [data-act=\"select\"]')[1].click(); true");
+      const canPick = await js("!!document.getElementById('pickFaces')");
+      if (canPick) {
+        await js("document.getElementById('pickFaces').click(); true");
+        await waitFor(() => js("!!window.__4cam.state.tree.pickMesh"), "picking on A", 15000);
+      }
+      const withA = await scene();
+      const sessionA = await workerSession();
+      // New: nothing of A
+      const afterNew = await newEmpty();
+      const sessionAfter = await workerSession();
+      check("full reset: after New, no part, stock, toolpaths, playback, pick highlight, G-code, tree, side view, mesh or worker session of the old project",
+        withA.part > 0 && withA.path > 0 && withA.machining && withA.gcode > 0 && sessionA &&
+        afterNew.objs === base.objs && afterNew.part + afterNew.stock + afterNew.path + afterNew.sim + afterNew.tool === 0 && !afterNew.machining && !afterNew.pickMesh &&
+        afterNew.gcode === 0 && afterNew.tabs === 0 && afterNew.ops === 0 && !afterNew.mesh && /No mesh/.test(afterNew.meshInfo) && !afterNew.result && !afterNew.sim &&
+        !afterNew.playback && !afterNew.session && !afterNew.undo && !afterNew.error && afterNew.side === 0 && !sessionAfter && afterNew.geometries <= base.geometries,
+        `picking ${canPick}; with A ${JSON.stringify(withA)}; after New ${JSON.stringify(afterNew)}; base ${base.objs} objects ${base.geometries} geometries; worker session ${sessionA} -> ${sessionAfter}`);
+      await shot("14h_reset_after_new");
+      // B: only B's geometry and G-code
+      await setFile("importStlFile", "dome.stl", domeStl);
+      await inDialog({});
+      await waitDone("generation of part B", 240000);
+      const withB = await scene();
+      const gB = await allGcode();
+      check("after the reset, importing B shows only B: B's triangles, B's G-code (nothing named after A)",
+        withB.partTris === domeTris && /dome\.stl/.test(withB.meshInfo) && !/knob/i.test(gB) && /dome/i.test(gB) && withB.tabs >= 2 && !withB.machining && !withB.pickMesh,
+        `${withB.partTris} part triangles (B has ${domeTris}); ${withB.meshInfo}; ${withB.tabs} programs`);
+      await shot("14i_only_b");
+      // New three times: no growth
+      const runs = [];
+      for (let k = 0; k < 3; k++) runs.push(await newEmpty());
+      check("New three times: the scene's objects and the renderer's geometries and textures do not grow",
+        runs.every((r) => r.objs === base.objs && r.geometries <= base.geometries && r.textures <= base.textures && !r.mesh && r.gcode === 0),
+        runs.map((r) => `${r.objs} objects, ${r.geometries} geometries, ${r.textures} textures`).join("; ") + ` (base ${base.objs}/${base.geometries}/${base.textures})`);
+      // an example goes through the same reset
+      await js("document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
+      await settle();
+      await js("document.getElementById('generate').click(); true");
+      await waitDone("the example after the resets", 240000);
+      await js("document.getElementById('example').value = 'ring'; document.getElementById('loadExample').click(); true");
+      await settle();
+      const ex = await scene();
+      check("loading an example resets too: the previous example's part, toolpaths and mesh are gone",
+        ex.objs === base.objs && !ex.mesh && ex.gcode === 0 && !ex.result, JSON.stringify(ex));
+    }
+
     // leaving with unsaved changes: the browser asks
     await js("document.getElementById('job').dispatchEvent(new Event('input')); true");
     await S("Page.reload");

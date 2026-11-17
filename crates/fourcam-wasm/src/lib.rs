@@ -925,6 +925,13 @@ pub mod api {
         out
     }
 
+    /// Drop the open playback and GPU sessions (their stock grids): a new project starts clean.
+    pub fn sim_close() -> Value {
+        let had = SESSION.with(|s| s.borrow_mut().take().is_some());
+        let had_gpu = GPU_SESSION.with(|s| s.borrow_mut().take().is_some());
+        json!({"closed": had, "gpu_closed": had_gpu})
+    }
+
     /// Move the open playback to segment `n`; returns the rows that changed (radii and
     /// cut-by tags, base64) so the display can update in place.
     pub fn sim_seek(n: usize) -> Value {
@@ -1168,6 +1175,7 @@ pub mod api {
             },
             "sim_open" => sim_open(&s(a), &s(b), c),
             "sim_seek" => sim_seek(s(a).trim().parse().unwrap_or(0)),
+            "sim_close" => sim_close(),
             "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&s(a), &s(b), c),
             "svg_paths" => svg_paths(&s(a), &s(b)),
@@ -1341,6 +1349,12 @@ mod tests {
         let s = api::sim_seek(10);
         assert_eq!(s["rows"][0], 0, "jumping back redraws all rows");
         let s = api::sim_seek(n + 100);
+        assert_eq!(api::sim_close()["closed"], true);
+        assert!(
+            api::sim_seek(5).get("error").is_some(),
+            "the playback is gone after sim_close"
+        );
+        assert_eq!(api::sim_close()["closed"], false);
         assert_eq!(s["pos"].as_u64().unwrap() as usize, n);
     }
 

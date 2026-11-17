@@ -127,6 +127,36 @@ function markStale() {
   scheduleAuto();
 }
 
+const RESULT_GROUPS = ["part", "stock", "path", "sim", "tool"];
+
+/**
+ * The one reset that New, Open and the examples go through: nothing of the previous project
+ * survives. A generate or simulation still running is dropped when it returns; the auto
+ * regenerate is cancelled; the machining playback closes and its meshes, GPU stock and the
+ * worker's sessions are freed; face picking stops and its highlight is disposed; the tree,
+ * the results (G-code, estimates, side view, toolpaths, part, stock, sim), the warnings, the
+ * undo and the mesh are cleared; the camera refits on the next project.
+ */
+async function resetProject(msg, actions) {
+  state.genRun = (state.genRun || 0) + 1;
+  state.epoch = (state.epoch || 0) + 1;
+  clearTimeout(autoTimer);
+  autoTimer = null;
+  autoPending = false;
+  window.__4cam.machining?.reset();
+  window.__4cam.tree?.reset();
+  window.__4cam.project?.dropUndo();
+  try {
+    await engine("simClose");
+  } catch {
+    // an engine without sessions (not loaded yet): nothing to free
+  }
+  state.simGrid = null;
+  setMesh(null, "");
+  showError("");
+  clearResults(msg, actions);
+}
+
 /** No results (a new or just opened project); `msg`, if given, says what to do. */
 function clearResults(msg, actions = ["import", "open"]) {
   state.result = null;
@@ -146,7 +176,7 @@ function clearResults(msg, actions = ["import", "open"]) {
   $("scrubLabel").textContent = "";
   const v = state.three;
   if (v && !v.failed) {
-    for (const g of Object.values(v.groups)) clear(g);
+    for (const k of RESULT_GROUPS) clear(v.groups[k]);
     v.key = null;
     v.simKey = null;
     v.fitted = null;
@@ -243,6 +273,7 @@ async function loadExample(name) {
 }
 
 async function loadExampleInto(name) {
+  await resetProject("");
   if (name === "knob") {
     const { result } = await engine("exampleJob");
     writeJob(result, { load: true });
@@ -462,6 +493,7 @@ async function simulate() {
   try {
     const t0 = performance.now();
     let result = null;
+    const epoch = state.epoch;
     const { gpu, why } = await simGpu();
     let backend = `CPU (${why})`;
     if (gpu) {
@@ -476,6 +508,7 @@ async function simulate() {
     }
     if (!result) result = (await engine("simulate", state.job, simOpts(), state.mesh)).result;
     const ms = performance.now() - t0;
+    if (epoch !== state.epoch) return;
     showBackend(backend);
     state.sim = result;
     selectTab(state.tab);
@@ -1260,7 +1293,7 @@ window.__4cam.autoDelay = AUTO_DELAY;
 
 // ---------------------------------------------------------------- project workflow
 window.__4cam.project = setupProject({
-  $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, markStale,
+  $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, markStale, resetProject,
   machineArg, currentMachine, selectMachine: (id) => renderMachines(id),
 });
 

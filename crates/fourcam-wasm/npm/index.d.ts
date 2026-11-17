@@ -22,6 +22,7 @@ export interface Fourcam {
   meshTriangles(doc: Doc, opts?: object, mesh?: Bytes): Json;
   simOpen(doc: Doc, opts?: object, mesh?: Bytes): Json;
   simSeek(n: number): Json;
+  simClose(): Json;
   svgPaths(svg: string, opts?: object): Json;
   estimateGcode(gcode: string, machine?: string | object): Json;
   simGrid(doc: Doc, opts?: object, mesh?: Bytes): Json;

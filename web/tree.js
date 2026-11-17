@@ -231,7 +231,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (!v || v.failed) return showError("Face picking needs the 3D view");
     const s = setup();
     const model = s.part.find((id) => t.doc.models.find((m) => m.id === id)?.kind === "mesh") || s.part[0];
+    const doc = t.doc;
     const { result } = await engine("faceRegions", t.doc, model, state.mesh);
+    // the project was replaced meanwhile (New, Open, an example)
+    if (t.doc !== doc) return;
     const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     t.regions = { model, list: result.regions, tri: new Float32Array(bytes(result.triangles).buffer), of: new Uint16Array(bytes(result.region_of).buffer) };
     const { THREE } = v;
@@ -257,6 +260,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (t.pickMesh) {
       v.scene.remove(t.pickMesh);
       t.pickMesh.geometry.dispose();
+      t.pickMesh.material.dispose();
       t.pickMesh = null;
     }
     if (v && !v.failed) v.groups.part.visible = $("showPart").checked;
@@ -515,5 +519,20 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     pickAt(ev.clientX - r.left, ev.clientY - r.top);
   });
 
-  return { refresh, pickAt, state: t };
+  /** A new project: stop picking without writing anything, drop the face regions and the
+   *  pick highlight, and forget the selection and any unsaved new operation. */
+  function reset() {
+    const v = state.three;
+    if (t.pickMesh) {
+      v?.scene?.remove(t.pickMesh);
+      t.pickMesh.geometry.dispose();
+      t.pickMesh.material.dispose();
+      t.pickMesh = null;
+    }
+    if (v && !v.failed) v.groups.part.visible = $("showPart").checked;
+    Object.assign(t, { doc: null, problems: [], setup: null, selected: null, picking: false, pickedChanged: false, regions: null, draft: null, upgraded: false });
+    $("tree").innerHTML = "";
+  }
+
+  return { refresh, pickAt, reset, state: t };
 }

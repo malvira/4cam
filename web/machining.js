@@ -37,6 +37,15 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     colors: {}, // tag -> [r, g, b]
   };
   state.machining = m;
+  // bumped by reset(): an open() still waiting on the engine then drops its result
+  let epoch = 0;
+
+  /** Dispose an object tree's geometries and materials. */
+  const disposeTree = (o) =>
+    o.traverse((c) => {
+      c.geometry?.dispose();
+      for (const mat of [].concat(c.material || [])) mat.dispose();
+    });
 
   const opKey = (o) => `${o.program}#${o.id}#${o.kind}`;
   const savedColors = () => {
@@ -217,7 +226,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const [x, y, z, a, , toolNo, opTag] = p.subarray(7 * k, 7 * k + 7);
     if (toolNo !== m.toolNumber) {
       const tm = v.groups.toolModel;
-      for (const c of [...tm.children]) tm.remove(c);
+      for (const c of [...tm.children]) {
+        tm.remove(c);
+        disposeTree(c);
+      }
       tm.add(toolModel(v.THREE, s.tools.find((t) => t.number === toolNo)));
       m.toolNumber = toolNo;
     }
@@ -325,6 +337,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       setStatus("Machining simulation not started", "done");
       return;
     }
+    const mine = epoch;
     try {
       const setup = job.schema_version === "0.2" ? state.tree?.setup : undefined;
       const { result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup }, state.mesh);
@@ -355,6 +368,13 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
           backend = `CPU (${e.message})`;
         }
       }
+      if (mine !== epoch) {
+        // the project was replaced meanwhile
+        m.gpu?.destroy();
+        m.gpu = null;
+        m.session = null;
+        return;
+      }
       m.backend = backend;
       showBackend?.(backend);
       await engine("simSeek", 0);
@@ -381,6 +401,22 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     $("simPlay").textContent = "Play";
     document.body.dataset.machining = "";
     showMachining(false);
+  }
+
+  /** A new project: close the playback and forget its session, GPU stock and meshes. */
+  function reset() {
+    epoch++;
+    close();
+    Object.assign(m, { session: null, r: null, op: null, pos: 0, target: 0, busy: false, stockMesh: null, ghost: null, dgrid: null, dr: null, dop: null, toolNumber: null, colors: {} });
+    $("opLegend").innerHTML = "";
+    const v = state.three;
+    if (v && !v.failed && v.groups.machining) {
+      v.scene.remove(v.groups.machining);
+      disposeTree(v.groups.machining);
+      delete v.groups.machining;
+      delete v.groups.work;
+      delete v.groups.toolModel;
+    }
   }
 
   /** Rebuild the display at the stride for the current state (playing or at rest). */
@@ -458,5 +494,5 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
   });
 
-  return { open, close, seek, state: m };
+  return { open, close, seek, reset, state: m };
 }
