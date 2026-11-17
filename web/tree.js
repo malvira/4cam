@@ -38,8 +38,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   }
 
   /** Write the project back to the editor and refresh everything that depends on it. */
-  async function commit() {
-    writeJob(t.doc);
+  async function commit(opts = {}) {
+    writeJob(t.doc, opts);
     await refresh();
     onChange?.();
   }
@@ -248,6 +248,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   }
 
   function stopPicking() {
+    // the selection is applied now: one edit
+    if (t.pickedChanged) {
+      t.pickedChanged = false;
+      writeJob(t.doc);
+    }
     const v = state.three;
     if (t.pickMesh) {
       v.scene.remove(t.pickMesh);
@@ -294,7 +299,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     f.ids = f.ids.includes(region.id) ? f.ids.filter((x) => x !== region.id) : [...f.ids, region.id];
     if (!f.ids.length) op.geometry = op.geometry.filter((g) => g !== f);
     if (!op.geometry.length) delete op.geometry;
-    if (!t.draft) writeJob(t.doc);
+    // written once, when picking is done (each pick here only marks the face)
+    if (!t.draft) t.pickedChanged = true;
     paintPicked();
     if (t.draft) await refreshDefaults();
     else renderEditor();
@@ -455,7 +461,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (!row) return;
     const op = opById(row.dataset.op);
     if (el.dataset.act === "enable") op.enabled = el.checked;
-    if (el.dataset.act === "color") op.color = el.value;
+    if (el.dataset.act === "color") {
+      // a colour is for the eye only: saved, but the toolpaths stay as they are
+      op.color = el.value;
+      return commit({ display: true });
+    }
     await commit();
   });
   $("tree").addEventListener("submit", async (ev) => {
@@ -472,7 +482,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       }
       s.outputs.find((o) => o.name === outName).operations.push(op.id);
     } else {
-      s.operations[s.operations.findIndex((o) => o.id === op.id)] = op;
+      const i = s.operations.findIndex((o) => o.id === op.id);
+      const strip = (o) => JSON.stringify({ ...o, name: undefined, color: undefined });
+      t.displayOnly = strip(s.operations[i]) === strip(op);
+      s.operations[i] = op;
     }
     // the engine parses and checks the result before it replaces the project
     try {
@@ -480,17 +493,24 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (result.problems.length) throw new Error(result.problems.join("; "));
       t.doc = result.project;
       t.draft = null;
-      await commit();
+      const display = !!t.displayOnly;
+      t.displayOnly = false;
+      await commit({ display });
     } catch (e) {
       const box = $("opErrors");
       box.textContent = e.message.replace(/^project 0\.2: /, "");
       box.classList.remove("hidden");
     }
   });
-  // clicks on the 3D view pick faces while picking
+  // clicks on the 3D view pick faces while picking; a drag (orbit, pan) is not a pick
   const host = $("view3d");
+  let down = null;
+  host.addEventListener("pointerdown", (ev) => {
+    down = [ev.clientX, ev.clientY];
+  });
   host.addEventListener("click", (ev) => {
     if (!t.picking) return;
+    if (down && Math.hypot(ev.clientX - down[0], ev.clientY - down[1]) > 4) return;
     const r = state.three.renderer.domElement.getBoundingClientRect();
     pickAt(ev.clientX - r.left, ev.clientY - r.top);
   });

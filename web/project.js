@@ -211,11 +211,12 @@ export function setupProject(ctx) {
     $("projectDirty").title = p.dirty ? "unsaved changes" : "";
     document.title = `${p.dirty ? "* " : ""}${p.name} - 4cam`;
   }
-  /** Something in the project changed: unsaved, and any results are out of date. */
-  function changed() {
+  /** Something in the project changed: unsaved, and (unless `stale: false`, a colour or a
+   *  name) any results are out of date. Nothing is planned here (see auto-regenerate). */
+  function changed({ stale = true } = {}) {
     p.dirty = true;
     show();
-    ctx.markStale();
+    if (stale) ctx.markStale();
   }
   function clean(name) {
     if (name) p.name = name;
@@ -246,9 +247,8 @@ export function setupProject(ctx) {
     dropUndo();
     writeJob(JSON.parse(u.job));
     setMesh(u.mesh, u.meshName);
-    clearResults("");
     await refreshAll();
-    await generate();
+    setStatus(`Undone: ${u.label} Generate to see it again.`, "ready");
   }
 
   // ------------------------------------------------------------ new, open, save
@@ -284,14 +284,17 @@ export function setupProject(ctx) {
     clean(name);
     const sm = project.machine ?? project.setups?.[0]?.machine;
     if (sm) ctx.selectMachine(sm);
-    clearResults("");
-    await refreshAll();
     if (wanted && !mesh) {
+      clearResults("");
+      await refreshAll();
       setStatus("Opened", "ready");
       showError(`This project uses the mesh "${wanted}", which is not in the file: import it (Import STL) to plan.`);
       return;
     }
-    await generate();
+    // opened, not planned: Generate when ready (it can take a while)
+    clearResults(`Opened ${name}. Generate to plan its toolpaths.`, ["generate"]);
+    await refreshAll();
+    setStatus(`Opened ${name}`, "ready");
   }
 
   async function openFile(file) {
@@ -512,24 +515,31 @@ export function setupProject(ctx) {
         await applySetup(doc, s, { kind: kindOf(s), machine: s.machine, axis: kindOf(s) === "vise" ? "z" : "x", tailstock: s.holding?.tailstock }, tris);
       }
     }
-    await commitSetupChange(doc, report, null);
+    // an import is a request for toolpaths: planned once
+    await commitSetupChange(doc, report, null, true);
     return true;
   }
 
   /** Write a changed project and regenerate; say what the change removed or added. */
-  async function commitSetupChange(doc, report, undoOf) {
+  async function commitSetupChange(doc, report, undoOf, planNow = false) {
     writeJob(doc);
-    changed();
     if (undoOf) keepUndo(undoOf.label, undoOf.job);
     const s0 = doc.setups.find((s) => s.id === state.tree?.setup) ?? doc.setups[0];
     const place = state.mesh && s0 ? placeInfo(doc, s0) : "";
     $("meshInfo").textContent = `${state.meshName}${place ? `: ${place}` : ""}`;
-    clearResults("");
-    await refreshAll();
     const notes = [];
     if (report?.removed?.length) notes.push(`removed (they do not fit this setup): ${report.removed.join(", ")}`);
     if (report?.added?.length) notes.push(`added: ${report.added.join(", ")}`);
-    await generate();
+    if (planNow) {
+      clearResults("");
+      await refreshAll();
+      await generate();
+    } else {
+      // the results (if any) stay, marked out of date, until Generate
+      await refreshAll();
+      if (!state.result) clearResults("The setup changed. Generate to plan its toolpaths.", ["generate"]);
+      setStatus("Setup changed: Generate to plan it again", "ready");
+    }
     if (notes.length) showError(`Setup changed: ${notes.join("; ")}`);
   }
 

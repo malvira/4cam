@@ -21,7 +21,10 @@ worker.onmessage = (ev) => {
   ok ? p.resolve({ result, ms }) : p.reject(new Error(error));
 };
 worker.onerror = (ev) => setStatus(`Engine failed to start: ${ev.message || "see console"}`, "error");
+/** Engine calls by command, since the page loaded (window.__4cam.calls). */
+const calls = {};
 function engine(cmd, ...args) {
+  calls[cmd] = (calls[cmd] || 0) + 1;
   const id = nextId++;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
@@ -38,7 +41,7 @@ const state = {
   tab: 0,
   three: null, // lazily loaded three.js view
 };
-window.__4cam = { state, engine };
+window.__4cam = { state, engine, calls };
 
 function setStatus(text, mode = "") {
   $("status").textContent = text;
@@ -61,31 +64,79 @@ function readJob() {
 }
 
 /** Write the project into the editor. An edit (the default) marks the project unsaved and
- *  its results stale; `{ load: true }` is a project being opened or reset. */
+ *  its results stale; `{ display: true }` (a colour, a name) only unsaved; `{ load: true }` is
+ *  a project being opened or reset. */
 function writeJob(job, opts = {}) {
   $("job").value = JSON.stringify(job, null, 2);
-  if (!opts.load) window.__4cam.project?.changed();
+  if (!opts.load) window.__4cam.project?.changed({ stale: !opts.display });
 }
+
+/** The Generate button asks for attention when the results are out of date or missing. */
+function updateGenerateButton() {
+  let ops = false;
+  try {
+    const j = readJob();
+    ops = j.schema_version === "0.2" ? j.setups?.some((s) => s.operations?.length) : !!j.programs?.length;
+  } catch {}
+  $("generate").classList.toggle("attention", ops && (state.stale || !state.result));
+  $("generate").title = state.stale ? "The project changed: generate the toolpaths again" : "";
+}
+
+// ---------------------------------------------------------------- auto-regenerate
+// Off by default. When on, an edit regenerates 800 ms after the last one, never while a
+// mouse button is held (a slider or a drag waits for its release), and a newer request
+// supersedes one still running (its result is dropped).
+const AUTO_DELAY = 800;
+let autoTimer = null;
+let autoPending = false;
+let pointerHeld = false;
+function autoOn() {
+  return $("autoGen").checked;
+}
+function scheduleAuto() {
+  if (!autoOn()) return;
+  clearTimeout(autoTimer);
+  if (pointerHeld) {
+    autoPending = true;
+    return;
+  }
+  autoPending = false;
+  autoTimer = setTimeout(() => {
+    autoTimer = null;
+    generate();
+  }, AUTO_DELAY);
+}
+window.addEventListener("pointerdown", () => {
+  pointerHeld = true;
+}, true);
+const released = () => {
+  pointerHeld = false;
+  if (autoPending) scheduleAuto();
+};
+window.addEventListener("pointerup", released, true);
+window.addEventListener("pointercancel", released, true);
 
 /** The results no longer match the project: say so on them until the next Generate. */
 function markStale() {
-  if (!state.result || state.stale) return;
-  state.stale = true;
-  document.body.classList.add("stale");
-  selectTab(state.tab);
+  if (state.result && !state.stale) {
+    state.stale = true;
+    document.body.classList.add("stale");
+    selectTab(state.tab);
+  }
+  updateGenerateButton();
+  scheduleAuto();
 }
 
 /** No results (a new or just opened project); `msg`, if given, says what to do. */
-function clearResults(msg) {
+function clearResults(msg, actions = ["import", "open"]) {
   state.result = null;
   state.sim = null;
   state.job = null;
   state.stale = false;
   document.body.classList.remove("stale");
   $("tabs").innerHTML = "";
-  $("summary").innerHTML = msg
-    ? `<div class="empty-state" id="emptyState">${msg}<br><button type="button" data-empty="import" class="primary">Import STL...</button><button type="button" data-empty="open">Open project...</button></div>`
-    : "";
+  const btn = { import: '<button type="button" data-empty="import" class="primary">Import STL...</button>', open: '<button type="button" data-empty="open">Open project...</button>', generate: '<button type="button" data-empty="generate" class="primary" id="emptyGenerate">Generate</button>' };
+  $("summary").innerHTML = msg ? `<div class="empty-state" id="emptyState">${msg}<br>${actions.map((k) => btn[k]).join("")}</div>` : "";
   $("gcode").value = "";
   $("codeInfo").textContent = "";
   $("download").disabled = true;
@@ -103,6 +154,7 @@ function clearResults(msg) {
   }
   const ctx = $("side").getContext("2d");
   ctx.clearRect(0, 0, $("side").width, $("side").height);
+  updateGenerateButton();
 }
 
 /** Everything that shows the project, again: quick settings, tools, the tree, the grid. */
@@ -278,9 +330,12 @@ async function generate() {
   }
   $("generate").disabled = $("simulate").disabled = true;
   setStatus("Generating...", "busy");
+  const run = (state.genRun = (state.genRun || 0) + 1);
   try {
     const setupId = state.tree?.setup;
     const { result, ms } = await engine("planAndPost", job, machineArg(), state.mesh, { max_points: 150000, libraries: libraries(), setup: job.schema_version === "0.2" ? setupId : undefined });
+    // an edit since then (auto-regenerate) has asked for a newer run: this one is dropped
+    if (run !== state.genRun) return;
     state.result = result;
     state.sim = null;
     state.job = job;
@@ -294,6 +349,7 @@ async function generate() {
     updateSimResInfo();
     // done only once everything is shown and the buttons work again
     $("generate").disabled = $("simulate").disabled = false;
+    updateGenerateButton();
     setStatus(`Generated ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s, ${issues} issue(s); estimated machining time ${fmtTime(result.time_total_s)}`, "done");
   } catch (e) {
     showError(e.message);
@@ -817,6 +873,7 @@ $("summary").addEventListener("click", (ev) => {
   if (ev.target.id === "staleRegen") generate();
   if (ev.target.dataset?.empty === "import") $("importStl").click();
   if (ev.target.dataset?.empty === "open") $("projectOpen").click();
+  if (ev.target.dataset?.empty === "generate") generate();
 });
 $("generate").addEventListener("click", generate);
 $("simulate").addEventListener("click", simulate);
@@ -1188,6 +1245,18 @@ window.__4cam.tree = setupTree({
   onChange: () => { renderQuick(); renderTools(); },
 });
 $("job").addEventListener("change", () => window.__4cam.tree.refresh());
+
+// ---------------------------------------------------------------- auto-regenerate setting
+try {
+  $("autoGen").checked = localStorage.getItem("4cam.autoGen") === "1";
+} catch {}
+$("autoGen").addEventListener("change", () => {
+  try {
+    localStorage.setItem("4cam.autoGen", $("autoGen").checked ? "1" : "0");
+  } catch {}
+  if ($("autoGen").checked && state.stale) scheduleAuto();
+});
+window.__4cam.autoDelay = AUTO_DELAY;
 
 // ---------------------------------------------------------------- project workflow
 window.__4cam.project = setupProject({

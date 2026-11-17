@@ -165,6 +165,8 @@ async function closedViews(tag) {
   return out;
 }
 
+// longer than the auto-regenerate delay (800 ms)
+const AUTO_WAIT = 1500;
 const golden = (name) => readFileSync(join(root, "tests", "golden", `${name}.nc`), "utf8").replace(/\r\n/g, "\n");
 
 let failed = false;
@@ -903,7 +905,11 @@ try {
     await inDialog({ cancel: true });
     const dialogsBefore = cdp.dialogs.length;
     await setFile("projectOpenFile", saved, Buffer.from(savedText));
+    await waitFor(() => js("document.body.dataset.state === 'ready' && !!document.getElementById('emptyGenerate')"), "the opened project", 30000);
+    const openedPlans = await js("window.__4cam.calls.planAndPost || 0");
+    await js("document.getElementById('emptyGenerate').click(); true");
     await waitDone("generation after opening the project", 240000);
+    check("Open plans nothing until asked: an empty state with Generate, then one plan", (await js("window.__4cam.calls.planAndPost")) === openedPlans + 1);
     const reopened = await allGcode();
     const v2 = await viewsOk();
     check("Open: the saved project comes back whole (no question asked, it was saved) and its G-code is byte-identical",
@@ -917,6 +923,11 @@ try {
     const editPre = await js("({ kind: document.querySelector('input[name=\"sdKind\"]:checked').value, machine: document.getElementById('sdMachine').value, title: document.getElementById('sdTitle').textContent })");
     const nDialogs = cdp.dialogs.length;
     await inDialog({ kind: "vise", shot: "15d_edit_setup_dialog" });
+    await waitFor(() => js("document.body.dataset.state === 'ready'"), "the converted setup", 60000);
+    const staleAfterEdit = await js("({ stale: document.body.classList.contains('stale'), attention: document.getElementById('generate').classList.contains('attention') })");
+    const convertMsg = await js("document.getElementById('error').textContent");
+    check("a setup change marks the results out of date and highlights Generate (nothing planned yet)", staleAfterEdit.stale && staleAfterEdit.attention, JSON.stringify(staleAfterEdit));
+    await js("document.getElementById('generate').click(); true");
     await waitDone("regeneration after the type change", 240000);
     const warned = cdp.dialogs.slice(nDialogs).map((d) => d.message).join(" ");
     const dc = await doc();
@@ -924,10 +935,12 @@ try {
     const undoShown = await js("!document.getElementById('undoBar').classList.contains('hidden')");
     const offeredC = await js("[...document.getElementById('treeAddType').options].map((o) => o.value)");
     check("Edit setup: rotary to 3-axis vise warns, removes the rotary operations, adds 3-axis ones, re-places the part in a block and regenerates",
-      editPre.kind === "rotary" && /removes op1 \(rotary_rough\), op2 \(rotary_finish\)/.test(warned) && dc.setups[0].kind === "vise" && dc.setups[0].stock.shape === "box" && dc.setups[0].operations.map((o) => o.type).join() === "rough3d,raster3d" && dc.models.find((m) => m.kind === "mesh").axis === "x" && vc.tabs.every((t) => t.endsWith("OK")) && vc.part > 0 && undoShown && !offeredC.includes("rotary_finish") && /removed/.test(await js("document.getElementById('error').textContent")),
+      editPre.kind === "rotary" && /removes op1 \(rotary_rough\), op2 \(rotary_finish\)/.test(warned) && dc.setups[0].kind === "vise" && dc.setups[0].stock.shape === "box" && dc.setups[0].operations.map((o) => o.type).join() === "rough3d,raster3d" && dc.models.find((m) => m.kind === "mesh").axis === "x" && vc.tabs.every((t) => t.endsWith("OK")) && vc.part > 0 && undoShown && !offeredC.includes("rotary_finish") && /removed/.test(convertMsg),
       `${JSON.stringify(editPre)}; ${warned.slice(0, 120)}; ${dc.setups[0].operations.map((o) => o.type)}; ${JSON.stringify(dc.setups[0].stock)}; axis ${dc.models.find((m) => m.kind === "mesh").axis}; tabs ${vc.tabs}; part ${vc.part}; undo ${undoShown}; error ${(await js("document.getElementById('error').textContent")).slice(0, 80)}`);
     await shot("15e_converted_to_vise");
     await js("document.getElementById('undoSetup').click(); true");
+    await waitFor(() => js("document.body.dataset.state === 'ready'"), "the undone setup", 60000);
+    await js("document.getElementById('generate').click(); true");
     await waitDone("regeneration after Undo", 240000);
     const du = await doc();
     check("Undo brings the rotary setup back, regenerated", du.setups[0].kind === "rotary" && du.setups[0].operations.map((o) => o.type).join() === "rotary_rough,rotary_finish" && (await allGcode()) === gcode2,
@@ -936,6 +949,8 @@ try {
     // + Setup: a second setup (indexed 3+1) for the same part, its own placement
     await js("document.getElementById('treeAddSetup').click(); true");
     await inDialog({ kind: "indexed", name: "Flats", shot: "15f_add_setup_dialog" });
+    await waitFor(() => js("document.body.dataset.state === 'ready'"), "the added setup", 60000);
+    await js("document.getElementById('generate').click(); true");
     await waitDone("generation of the added setup", 240000);
     const da = await doc();
     const va = await viewsOk();
@@ -991,6 +1006,90 @@ try {
     await S("Page.reload");
     await waitFor(() => js("document.body.dataset.state === 'ready'"), "the page after reload", 30000);
     check("leaving with unsaved changes: the browser asks first", cdp.dialogs.some((d) => d.type === "beforeunload"), dialogs().slice(-1).join());
+  }
+
+  // 8k. planning only when asked: view actions plan nothing and mark nothing stale; an edit
+  // marks the results out of date and waits for Generate; auto-regenerate (off by default)
+  // plans once after a drag is released
+  {
+    const plans = () => js("window.__4cam.calls.planAndPost || 0");
+    const isStale = () => js("document.body.classList.contains('stale')");
+    await js("document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await js("document.getElementById('generate').click()");
+    await waitDone("knob mesh generation for the plan count", 240000);
+    const p0 = await plans();
+    const autoDefault = await js("document.getElementById('autoGen').checked");
+    // orbit, pan and zoom on the 3D view (mouse drags and the wheel)
+    const [vx, vy, vw, vh] = await rect("view3d");
+    const drag = async (button, buttons) => {
+      await S("Input.dispatchMouseEvent", { type: "mousePressed", x: vx + vw / 2, y: vy + vh / 2, button, buttons, clickCount: 1 });
+      for (let k = 1; k <= 8; k++) await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: vx + vw / 2 + 12 * k, y: vy + vh / 2 + 5 * k, button, buttons });
+      await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: vx + vw / 2 + 96, y: vy + vh / 2 + 40, button, buttons: 0, clickCount: 1 });
+    };
+    await drag("left", 1);
+    await drag("right", 2);
+    for (let k = 0; k < 5; k++) await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: vx + vw / 2, y: vy + vh / 2, deltaX: 0, deltaY: k % 2 ? 120 : -120 });
+    await js("window.__4cam.setView('front', {}); window.__4cam.setView('back', {}); window.__4cam.setView('iso', {}); true");
+    // layers, scrubbing the moves, switching program tabs, resizing panes, selecting in the tree
+    for (const id of ["showRapids", "showStock", "showPart", "showSim"]) await js(`document.getElementById('${id}').click(); document.getElementById('${id}').click(); true`);
+    for (const v of [10, 200, 2000, 0]) await js(`const s = document.getElementById('scrub'); s.value = ${v}; s.dispatchEvent(new Event('input')); true`);
+    await js("document.querySelectorAll('#tabs button')[1].click(); document.querySelectorAll('#tabs button')[0].click(); true");
+    const [lx, ly, lw, lh] = await rect("splitLeft");
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: lx + lw / 2, y: ly + lh / 2, button: "left", buttons: 1, clickCount: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: lx + lw / 2 + 60, y: ly + lh / 2, button: "left", buttons: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: lx + lw / 2 + 60, y: ly + lh / 2, button: "left", buttons: 0, clickCount: 1 });
+    await js("document.querySelector('#tree .tree-op [data-act=\"select\"]').click(); true");
+    await sleep(300);
+    await js("document.querySelector('#tree .tree-op [data-act=\"select\"]').click(); true");
+    // machining playback: open, play a little, scrub, close
+    await js("document.getElementById('simOpen').click(); true");
+    await waitFor(() => js("!!window.__4cam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the machining playback", 120000);
+    await js("const s = document.getElementById('simScrub'); s.value = Math.floor(s.max / 2); s.dispatchEvent(new Event('input')); true");
+    await sleep(300);
+    await js("document.getElementById('simClose').click(); true");
+    await sleep(800);
+    const viewPlans = (await plans()) - p0;
+    const viewStale = await isStale();
+    const dirtyAfterView = await js("!document.getElementById('projectDirty').classList.contains('hidden')");
+    check("view actions (orbit, pan, zoom, presets, layers, scrub, tabs, pane resize, tree selection, playback) plan nothing and mark nothing stale",
+      viewPlans === 0 && !viewStale && !dirtyAfterView, `${viewPlans} plans; stale ${viewStale}; unsaved ${dirtyAfterView}`);
+    await shot("16a_after_view_actions");
+    // a colour (display only): saved, nothing stale, nothing planned
+    await js("const c = document.querySelector('#tree .tree-op input[data-act=\"color\"]'); c.value = '#ff00aa'; c.dispatchEvent(new Event('change', { bubbles: true })); true");
+    await sleep(600);
+    check("changing an operation's colour plans nothing and leaves the results current (only unsaved)",
+      (await plans()) === p0 && !(await isStale()) && (await js("!document.getElementById('projectDirty').classList.contains('hidden')")), `${(await plans()) - p0} plans; stale ${await isStale()}`);
+    // a real edit: out of date, Generate highlighted, nothing planned until Generate
+    await js("const f = document.querySelector('#quick input'); f.value = String(+f.value + 0.01); f.dispatchEvent(new Event('change')); true");
+    await sleep(AUTO_WAIT);
+    const edited = await js("({ stale: document.body.classList.contains('stale'), banner: !!document.getElementById('staleBanner'), attention: document.getElementById('generate').classList.contains('attention') })");
+    check("editing a parameter marks the results out of date and highlights Generate, and plans nothing",
+      autoDefault === false && edited.stale && edited.banner && edited.attention && (await plans()) === p0, `${JSON.stringify(edited)}; auto-regenerate on by default: ${autoDefault}; ${(await plans()) - p0} plans`);
+    await shot("16b_out_of_date");
+    await js("document.getElementById('generate').click()");
+    await waitDone("generation after the edit", 240000);
+    check("Generate: exactly one plan, and the results are current again", (await plans()) === p0 + 1 && !(await isStale()) && !(await js("document.getElementById('generate').classList.contains('attention')")));
+    // auto-regenerate on: twenty values while the mouse is held, one plan after the release
+    await js("document.getElementById('autoGen').click(); true");
+    const p1 = await plans();
+    const [qx, qy, qw, qh] = await js("(() => { const r = document.querySelector('#quick input').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()");
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: qx + qw / 2, y: qy + qh / 2, button: "left", buttons: 1, clickCount: 1 });
+    for (let k = 1; k <= 20; k++) {
+      await js(`const f = document.querySelector('#quick input'); f.value = String(+f.value + 0.001); f.dispatchEvent(new Event('change')); true`);
+      await sleep(60);
+    }
+    await sleep(AUTO_WAIT);
+    const whileHeld = (await plans()) - p1;
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: qx + qw / 2, y: qy + qh / 2, button: "left", buttons: 0, clickCount: 1 });
+    await waitFor(async () => (await plans()) > p1, "the auto-regenerate", 15000);
+    await waitDone("the auto-regenerated plan", 240000);
+    await sleep(AUTO_WAIT);
+    const afterRelease = (await plans()) - p1;
+    check("auto-regenerate: 20 edits while dragging plan nothing; one plan after the release",
+      whileHeld === 0 && afterRelease === 1 && !(await isStale()), `${whileHeld} while held, ${afterRelease} after`);
+    await js("document.getElementById('autoGen').click(); true");
+    await shot("16c_auto_regenerated");
   }
 
   // 9. phone width: layout stacks, no horizontal scroll
