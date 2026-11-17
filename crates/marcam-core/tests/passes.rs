@@ -146,8 +146,10 @@ fn no_pass_repeats_the_one_before_it() {
 }
 
 /// Mar's case: STL imported into a vise setup, the starter finishing raster3d with no
-/// roughing before it. Its engine defaults take the whole depth in one level; and even at a
-/// fine step-down, no level below the part is cut twice.
+/// roughing before it. Without a roughing it clears the stock too, so its engine defaults
+/// take levels of half the tool's diameter (one full-depth level would bury the tool); after
+/// a 3D roughing, the whole depth in one level; and at any step-down no level below the
+/// part is cut twice.
 #[test]
 fn an_unroughed_parallel_finish_cuts_the_surface_once() {
     let plate = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/plate"));
@@ -170,15 +172,51 @@ fn an_unroughed_parallel_finish_cuts_the_surface_once() {
             &|_| None,
         )
         .unwrap();
-    let setup = &mut doc["setups"][0];
-    let top = setup["stock"]["max"][2].as_f64().unwrap();
+    let top = doc["setups"][0]["stock"]["max"][2].as_f64().unwrap();
     let floor = defaults["floor"].as_f64().unwrap();
+    // the tool's diameter, as the project resolves it (a library tool)
+    let libs = marcam::profiles::builtin_libraries();
+    let job = project
+        .setup_job(project.setup("vise1").unwrap(), &libs)
+        .unwrap();
+    let tool_d = match job
+        .tool(dome["tool"].as_u64().unwrap() as u32)
+        .unwrap()
+        .shape
+    {
+        marcam::job::ToolShape::Ball { diameter } | marcam::job::ToolShape::Flat { diameter } => {
+            diameter
+        }
+        ref other => panic!("{other:?}"),
+    };
     assert!(
-        (defaults["step_down"].as_f64().unwrap() - (top - floor)).abs() < 0.011,
-        "an un-roughed raster3d defaults to one full-depth level: {defaults}"
+        (defaults["step_down"].as_f64().unwrap() - 0.5 * tool_d).abs() < 0.03,
+        "an un-roughed raster3d clears the stock in levels of half the tool: {defaults}"
+    );
+    assert!(
+        top - floor > 2.0 * 0.5 * tool_d,
+        "so here it takes several levels"
+    );
+    // after a 3D roughing: the whole depth in one level
+    let mut roughed = doc.clone();
+    let rough = json!({"id": "r1", "type": "rough3d", "tool": 1, "x_range": [37.0, 55.0], "y_range": [11.0, 29.0],
+        "stepover": 1.2, "sample": 0.3, "step_down": 1.0, "floor": floor, "leave": 0.2, "feed": 300.0, "plunge_feed": 60.0});
+    roughed["setups"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, rough);
+    roughed["setups"][0]["outputs"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, json!("r1"));
+    let after = fourcam_defaults(&roughed, &dome);
+    assert!(
+        (after["step_down"].as_f64().unwrap() - (top - floor)).abs() < 0.011,
+        "after a roughing: one full-depth level: {after}"
     );
     // a fine step-down: the passes stop at the first level below the whole surface
     dome["step_down"] = json!(0.4);
+    let setup = &mut doc["setups"][0];
     setup["operations"] = json!([dome]);
     setup["outputs"] =
         json!([{"name": "dome", "title": "dome", "operations": [dome["id"].clone()]}]);
@@ -197,4 +235,21 @@ fn an_unroughed_parallel_finish_cuts_the_surface_once() {
         p.len(),
         top - lowest
     );
+}
+
+/// The engine's raster3d defaults for `dome`'s tool in the project `doc`.
+fn fourcam_defaults(doc: &serde_json::Value, dome: &serde_json::Value) -> serde_json::Value {
+    marcam::project::Project::from_json_any(&doc.to_string())
+        .unwrap()
+        .0
+        .op_defaults(
+            "raster3d",
+            "vise1",
+            Some(dome["tool"].as_u64().unwrap() as u32),
+            &[],
+            &marcam::profiles::builtin_libraries(),
+            None,
+            &|_| None,
+        )
+        .unwrap()
 }

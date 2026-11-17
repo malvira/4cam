@@ -1281,6 +1281,15 @@ try {
     const arcs = await js("window.__marcam.state.result.programs.reduce((n, p) => n + p.gcode.split('\\n').filter((l) => l.startsWith('G3 ')).length, 0)");
     check("the picked operations plan and verify clean; the bores are written as G3 arcs", tabs.length >= 1 && tabs.every((x) => x.endsWith("OK")) && arcs > 0, `${tabs.join(", ")}; ${arcs} arcs`);
     await shot("17c_picked_generated");
+    // a 3D parallel finish says what it will do: the plate's dome raster has no roughing
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const rid = await js("window.__marcam.state.tree.doc.setups[0].operations.find((o) => o.type === 'raster3d').id");
+    await js(`document.querySelector('#tree .tree-op[data-op="${rid}"] [data-act="select"]').click(); true`);
+    await waitFor(() => js("!!document.getElementById('rasterInfo')"), "the raster's info", 10000);
+    const rinfo = await js("document.getElementById('rasterInfo').textContent");
+    check("a 3D parallel finish shows its stepover, rows and levels, and suggests a roughing when none comes first",
+      /stepover [\d.]+ mm/.test(rinfo) && /\d+ rows/.test(rinfo) && /no 3D roughing before it/.test(rinfo), rinfo);
   }
 
   // 8m. picking on every operation type: rotary turning (a band -> its X span), knurl (a

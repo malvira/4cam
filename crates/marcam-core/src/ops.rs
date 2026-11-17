@@ -928,8 +928,9 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                     } else {
                         // finishing: a ball or V-bit works to a scallop target (the stepover
                         // shown is what it gives), a flat tool to 15% of its diameter
+                        // a 0.02 mm cusp: about a sixth of a 3 mm ball's diameter apart
                         let scallop = if matches!(shape, "ball" | "vbit" | "tapered_ball") {
-                            0.01
+                            0.02
                         } else {
                             0.0
                         };
@@ -959,9 +960,18 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                         _ => zb.max(sb.max[2] - hz / 2.0),
                     };
                     v.insert("floor".into(), json!(nice(floor, 0.01)));
-                    // the finish takes the whole depth in one level: deeper levels only repeat
-                    // the surface pass (a part that needs clearing first gets a rough3d)
-                    if kind == "raster3d" {
+                    // after a 3D roughing the finish takes the whole depth in one level; without
+                    // one it also clears the stock, in levels of half the tool's diameter (one
+                    // full-depth level would bury the tool in the stock)
+                    let roughed = job
+                        .programs
+                        .iter()
+                        .flat_map(|p| &p.operations)
+                        .any(|o| matches!(o, Operation::Rough3d(_)));
+                    if kind == "raster3d" && !roughed {
+                        v.insert("step_down".into(), json!(nice((0.5 * d).max(0.1), 0.05)));
+                    }
+                    if kind == "raster3d" && roughed {
                         v.insert(
                             "step_down".into(),
                             json!(nice((sb.max[2] - floor).max(0.01), 0.01)),

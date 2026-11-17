@@ -176,6 +176,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     const faces = op.geometry?.find((g) => g.kind === "faces");
     const ax = op.geometry?.find((g) => g.kind === "axial_range");
+    if (op.type === "raster3d") html += `<div class="muted small" id="rasterInfo">${esc(rasterInfo(op))}</div>`;
     const mode = pickModeOf(ty);
     if (mode) {
       const pk = t.picking ? t.pick : null;
@@ -235,6 +236,22 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (!out.geometry.length) delete out.geometry;
     }
     return out;
+  }
+
+  /** What a 3D parallel finish will do: its stepover, rows and levels (and a hint when no 3D
+   *  roughing comes before it, so it also clears the stock). */
+  function rasterInfo(op) {
+    const s = setup();
+    const span = Math.abs((op.y_range?.[1] ?? 0) - (op.y_range?.[0] ?? 0));
+    const step = op.stepover > 0 ? op.stepover : 0;
+    const rows = step ? Math.ceil(span / step) + 1 : 0;
+    const top = s.stock?.shape === "box" ? s.stock.max[2] : s.stock?.radius ?? 0;
+    const depth = top - ((op.floor ?? 0) + (op.leave ?? 0));
+    const levels = op.step_down > 0 ? Math.max(1, Math.ceil(depth / op.step_down - 1e-9)) : 1;
+    const roughed = s.operations.some((o) => o.type === "rough3d" && o.enabled !== false);
+    let text = `stepover ${step} mm${op.scallop > 0 ? ` (a ${op.scallop} mm cusp)` : ""} · ${rows} rows · up to ${levels} level${levels === 1 ? "" : "s"}`;
+    if (!roughed && levels > 1) text += " — no 3D roughing before it, so it clears the stock too: add a 3D roughing to finish in one pass";
+    return text;
   }
 
   // ------------------------------------------------------------ picking
