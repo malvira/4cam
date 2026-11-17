@@ -98,7 +98,7 @@ fn finish_job(pattern: &str) -> Job {
         _ => {
             r#"{"type": "rotary_finish", "tool": 9, "pattern": "around",
             "x_range": [0.5, -20.0], "stepover_mm": 1.0, "sample_deg": 6.0,
-            "feed": 300.0, "plunge_feed": 60.0}"#
+            "feed": 300.0, "plunge_feed": 60.0, "smoothing": 0.0}"#
         }
     };
     let extra: serde_json::Value = serde_json::from_str(&format!(
@@ -193,7 +193,16 @@ fn finish_toolpaths_follow_the_part_without_gouging() {
 
 #[test]
 fn along_rasters_hold_a_per_pass_and_around_is_one_helix() {
-    let tps = plan(&finish_job("along")).unwrap();
+    // the strategy's own points (smoothing off): every pass at one A
+    let mut job = finish_job("along");
+    for p in &mut job.programs {
+        for op in &mut p.operations {
+            if let marcam::job::Operation::RotaryFinish(o) = op {
+                o.smoothing = Some(0.0);
+            }
+        }
+    }
+    let tps = plan(&job).unwrap();
     let cuts: Vec<(f64, f64)> = tps[0]
         .moves
         .iter()

@@ -107,6 +107,14 @@ fn fit_arc(p0: [f64; 3], moves: &[Move], tol: f64) -> Option<Arc> {
         {
             break;
         }
+        // the straight moves it replaces stay within tol of it too (their sagitta): points
+        // far apart on a big circle are not an arc
+        if steps
+            .iter()
+            .any(|d| r * (1.0 - (d.abs() / 2.0).cos()) > tol)
+        {
+            break;
+        }
         // Z linear in the angle
         let (z0, z1) = (pts[0][2], pts[m][2]);
         let mut acc = 0.0;

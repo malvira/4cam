@@ -130,7 +130,7 @@ fn lines_are_moves(
         for c in &rep.collisions {
             let l = lines[c.line.unwrap() - 1];
             assert!(
-                l.starts_with("G0") || l.starts_with("G1"),
+                ["G0", "G1", "G2", "G3"].iter().any(|g| l.starts_with(g)),
                 "line {:?}: {l}",
                 c.line
             );

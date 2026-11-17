@@ -88,7 +88,8 @@
           "plunge_feed": 60.0,
           "segment_deg": 6.0,
           "grid": 0.02,
-          "footprint_step": 0.01
+          "footprint_step": 0.01,
+          "smoothing": 0.0
         },
         {
           "id": "op2",
@@ -118,7 +119,8 @@
           "samples": 120,
           "approach_clearance": 0.5,
           "feed": 200.0,
-          "plunge_feed": 60.0
+          "plunge_feed": 60.0,
+          "smoothing": 0.0
         },
         {
           "id": "op3",
@@ -137,7 +139,8 @@
           "revolutions": 2.0,
           "segment_deg": 6.0,
           "feed": 200.0,
-          "plunge_feed": 60.0
+          "plunge_feed": 60.0,
+          "smoothing": 0.0
         },
         {
           "id": "op4",

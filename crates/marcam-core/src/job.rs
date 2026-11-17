@@ -257,6 +257,10 @@ pub struct Pocket {
     pub stepover: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 /// 3-axis: holes at `points`, pecking `peck` at a time.
@@ -355,6 +359,10 @@ pub struct Contour {
     pub step_down: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 /// 3-axis: drop-cutter raster over the part mesh (passes along X, stepping in Y), cut in
@@ -402,6 +410,10 @@ pub struct Raster3d {
     /// `plunge_feed`. 0: every descent is slowed.
     #[serde(default = "default_ramp_angle")]
     pub ramp_angle: f64,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 /// Follow paths and single-line text at `depth` below the surface, in `step_down` passes:
@@ -439,6 +451,10 @@ pub struct Engrave {
     /// `plunge_feed`. 0: every descent is slowed.
     #[serde(default = "default_ramp_angle")]
     pub ramp_angle: f64,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 fn default_text_weight() -> f64 {
@@ -489,6 +505,10 @@ pub struct Vcarve {
     /// `plunge_feed`. 0: every descent is slowed.
     #[serde(default = "default_ramp_angle")]
     pub ramp_angle: f64,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 fn default_pattern() -> String {
@@ -527,6 +547,26 @@ impl Operation {
             Operation::Bore(o) => Some(o.ramp_angle),
             _ => None,
         }
+    }
+
+    /// The smoothing tolerance (mm) this operation is planned with: its own, else its type's
+    /// default (0.005 for finishing, 0.01 for roughing; 0 for operations without it).
+    pub fn smoothing(&self) -> f64 {
+        let (own, finishing) = match self {
+            Operation::RotaryTurning(o) => (o.smoothing, false),
+            Operation::HelicalKnurl(o) => (o.smoothing, true),
+            Operation::FlankChamfer(o) => (o.smoothing, true),
+            Operation::RotaryFinish(o) => (o.smoothing, true),
+            Operation::RotaryRough(o) => (o.smoothing, false),
+            Operation::Raster3d(o) => (o.smoothing, true),
+            Operation::Rough3d(o) => (o.smoothing, false),
+            Operation::Engrave(o) => (o.smoothing, true),
+            Operation::Vcarve(o) => (o.smoothing, true),
+            Operation::Contour(o) => (o.smoothing, true),
+            Operation::Pocket(o) => (o.smoothing, false),
+            _ => return 0.0,
+        };
+        own.unwrap_or(if finishing { 0.005 } else { 0.01 }).max(0.0)
     }
 
     pub fn tool(&self) -> u32 {
@@ -573,6 +613,10 @@ pub struct RotaryTurning {
     /// Turn only this X span of the profile (picked bands); None: all of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_range: Option<[f64; 2]>,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 /// Diamond knurl: families of helical V grooves over a conical body.
@@ -601,6 +645,10 @@ pub struct HelicalKnurl {
     /// `plunge_feed`. 0: every descent is slowed.
     #[serde(default = "default_ramp_angle")]
     pub ramp_angle: f64,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 /// Chamfer an edge with the flank of a V-bit while the part rotates.
@@ -624,6 +672,10 @@ pub struct FlankChamfer {
     /// `plunge_feed`. 0: every descent is slowed.
     #[serde(default = "default_ramp_angle")]
     pub ramp_angle: f64,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 /// Raster direction for [`RotaryFinish`].
@@ -685,6 +737,10 @@ pub struct RotaryFinish {
     /// `plunge_feed`. 0: every descent is slowed.
     #[serde(default = "default_ramp_angle")]
     pub ramp_angle: f64,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 /// Descents at up to 30 degrees run at the cutting feed (Mar, 2026-11-17).
@@ -725,6 +781,10 @@ pub struct RotaryRough {
     /// `plunge_feed`. 0: every descent is slowed.
     #[serde(default = "default_ramp_angle")]
     pub ramp_angle: f64,
+    /// Smoothing tolerance (mm): fewer, smoother moves within it (see
+    /// [`crate::smoothing`]); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
 }
 
 fn default_rough_sample_deg() -> f64 {

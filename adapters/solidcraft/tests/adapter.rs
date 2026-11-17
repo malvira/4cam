@@ -78,7 +78,7 @@ fn manifest_fits_solidcraft_rules() {
         // every operation field (but the tool, which the adapter makes, and the ramp angle,
         // left at marcam's default to keep the manifest under 16 KiB) is an input
         for p in marcam::ops::find(kind).unwrap().params {
-            if p.name != "tool" && p.name != "ramp_angle" {
+            if p.name != "tool" && !marcam_solidcraft::LEFT_AT_DEFAULT.contains(&p.name) {
                 assert!(s["properties"].get(p.name).is_some(), "{kind}.{}", p.name);
             }
         }

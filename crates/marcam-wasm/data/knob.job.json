@@ -1,17 +1,41 @@
 {
   "schema_version": "0.1",
-  "stock": { "radius": 12.5, "length": 100.0 },
+  "stock": {
+    "radius": 12.5,
+    "length": 100.0
+  },
   "clearance": 3.0,
   "part": {
     "profile": {
       "points": [
-        [-21.7, 3.0],
-        [-18.0, 3.0],
-        [-18.0, 5.0],
-        [-15.0, 5.0],
-        [-15.0, 10.0],
-        [-0.8, 8.106666666666667],
-        [0.0, 7.2]
+        [
+          -21.7,
+          3.0
+        ],
+        [
+          -18.0,
+          3.0
+        ],
+        [
+          -18.0,
+          5.0
+        ],
+        [
+          -15.0,
+          5.0
+        ],
+        [
+          -15.0,
+          10.0
+        ],
+        [
+          -0.8,
+          8.106666666666667
+        ],
+        [
+          0.0,
+          7.2
+        ]
       ],
       "beyond_front": 7.2
     }
@@ -47,36 +71,56 @@
           "finish_allowance": 0.15,
           "finish_step": 0.4,
           "finish_feed": 250.0,
-          "plunge_feed": 60.0
+          "plunge_feed": 60.0,
+          "smoothing": 0.0
         }
       ]
     },
     {
       "name": "knob_2_knurl",
       "title": "Knob diamond knurl",
-      "notes": ["Pattern is rotationally symmetric: A start position does not matter"],
+      "notes": [
+        "Pattern is rotationally symmetric: A start position does not matter"
+      ],
       "reset_a": true,
       "operations": [
         {
           "type": "helical_knurl",
           "tool": 2,
-          "body_back": [-15.0, 10.0],
-          "body_front": [0.0, 8.0],
+          "body_back": [
+            -15.0,
+            10.0
+          ],
+          "body_front": [
+            0.0,
+            8.0
+          ],
           "count": 30,
           "helix_angle": 30.0,
           "fill": 0.95,
-          "passes": [0.6, 1.0],
+          "passes": [
+            0.6,
+            1.0
+          ],
           "feed": 200.0,
-          "plunge_feed": 60.0
+          "plunge_feed": 60.0,
+          "smoothing": 0.0
         },
         {
           "type": "flank_chamfer",
           "tool": 2,
-          "edge": [0.0, 7.2],
+          "edge": [
+            0.0,
+            7.2
+          ],
           "tip_offset": 0.5,
-          "passes": [0.2, 0.0],
+          "passes": [
+            0.2,
+            0.0
+          ],
           "feed": 200.0,
-          "plunge_feed": 60.0
+          "plunge_feed": 60.0,
+          "smoothing": 0.0
         }
       ]
     }

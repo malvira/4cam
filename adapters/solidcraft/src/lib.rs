@@ -190,14 +190,17 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
     );
     props.insert("name".into(), json!({"type": "string"}));
     for p in &t.params {
-        // the ramp angle stays at marcam's default here (SolidCraft caps manifests at 16 KiB;
-        // a marcam project sets it per operation)
-        if p.name != "tool" && !p.name.is_empty() && p.name != "ramp_angle" {
+        // the ramp angle and the smoothing stay at marcam's defaults here (SolidCraft caps
+        // manifests at 16 KiB; a marcam project sets them per operation)
+        if p.name != "tool" && !p.name.is_empty() && !LEFT_AT_DEFAULT.contains(&p.name) {
             props.insert(p.name.into(), param_schema(p));
         }
     }
     json!({"type": "object", "required": ["bodies"], "properties": props})
 }
+
+/// Operation fields the plugin does not offer: marcam's defaults apply.
+pub const LEFT_AT_DEFAULT: [&str; 2] = ["ramp_angle", "smoothing"];
 
 /// The package manifest (`plugin.json`), generated from the operation registry.
 pub fn manifest() -> Value {

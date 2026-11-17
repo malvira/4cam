@@ -57,7 +57,8 @@
           "finish_step": 2.0,
           "finish_feed": 240.0,
           "plunge_feed": 60.0,
-          "segment_deg": 6.0
+          "segment_deg": 6.0,
+          "smoothing": 0.0
         }
       ],
       "outputs": [

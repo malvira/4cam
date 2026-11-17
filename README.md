@@ -80,6 +80,13 @@ target/release/marcam run examples/knob/knob_finish.job.json --machine linuxcnc 
 
 The other commands:
 
+- Toolpath smoothing: operations that make dense paths take a `smoothing` tolerance (engine
+  default 0.005 mm for finishing, 0.01 for roughing, 0 off). Points are dropped while the
+  path stays within it (measured square to the move and along the tool, so a steep wall is
+  not cut into), rotary moves are reduced in X, radius and arc length (at most 45 degrees of
+  A per move), corners at one Z are rounded where the blend is worth it, and on a vise the
+  post writes circular runs as G2/G3 (each replaced move within the tolerance of the arc).
+  The knob example keeps `smoothing: 0`, so its programs stay the ones that were cut.
 - `marcam verify file.nc [--plunge 60] [--safe 15.5] [--ramp 30]` flags feed moves where Z
   falls faster than the plunge feed, and X/A rapids below the safe radius. It reads `G93`
   (inverse-time) files too. Like the planner, it lets descents gentler than the ramp angle

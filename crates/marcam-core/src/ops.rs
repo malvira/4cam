@@ -108,6 +108,17 @@ fn plunge() -> ParamSpec {
     .min(0.001)
 }
 
+fn smoothing() -> ParamSpec {
+    p(
+        "smoothing",
+        "number",
+        "mm",
+        "Smoothing tolerance: fewer, smoother moves within it (points dropped, corners rounded, arcs as G2/G3 on a vise). 0: off.",
+    )
+    .opt(Value::Null)
+    .min(0.0)
+}
+
 fn ramp() -> ParamSpec {
     p(
         "ramp_angle",
@@ -138,6 +149,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("finish_feed", "number", "mm/min", "Finishing feed.").min(0.001),
                 plunge(),
                 ramp(),
+                smoothing(),
                 p("segment_deg", "number", "deg", "Angular length of each rotary move.").opt(json!(6.0)).min(0.1).max(90.0),
                 p("grid", "number", "mm", "X spacing of the tool-radius table.").opt(json!(0.02)).min(0.001),
                 p("footprint_step", "number", "mm", "Sampling of the flat tool's footprint.").opt(json!(0.01)).min(0.001),
@@ -165,6 +177,7 @@ pub fn registry() -> Vec<OperationType> {
                 feed(),
                 plunge(),
                 ramp(),
+                smoothing(),
             ],
             tool_shapes: &["flat", "ball", "vbit", "tapered_ball"],
             geometry: &["mesh", "profile", "axial_range"],
@@ -192,6 +205,7 @@ pub fn registry() -> Vec<OperationType> {
                 feed(),
                 plunge(),
                 ramp(),
+                smoothing(),
             ],
             tool_shapes: &["flat", "ball", "vbit", "tapered_ball"],
             geometry: &["mesh", "profile", "axial_range"],
@@ -218,6 +232,7 @@ pub fn registry() -> Vec<OperationType> {
                 feed(),
                 plunge(),
                 ramp(),
+                smoothing(),
             ],
             tool_shapes: &["vbit"],
             geometry: &["axial_range"],
@@ -239,6 +254,7 @@ pub fn registry() -> Vec<OperationType> {
                 feed(),
                 plunge(),
                 ramp(),
+                smoothing(),
             ],
             tool_shapes: &["vbit"],
             geometry: &["edge"],
@@ -280,6 +296,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("stepover", "number", "", "Stepover as a fraction of the tool diameter (shaped pockets: at most 0.7, so the loops' corners leave nothing).").min(0.05).max(1.0),
                 feed(),
                 plunge(),
+                smoothing(),
             ],
             tool_shapes: &["flat"],
             geometry: &["rectangle", "curve"],
@@ -349,6 +366,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("step_down", "number", "mm", "Depth per pass.").min(0.01),
                 feed(),
                 plunge(),
+                smoothing(),
             ],
             tool_shapes: &["flat"],
             geometry: &["curve"],
@@ -395,6 +413,7 @@ pub fn registry() -> Vec<OperationType> {
                 feed(),
                 plunge(),
                 ramp(),
+                smoothing(),
             ],
             tool_shapes: &["vbit", "ball", "flat", "tapered_ball"],
             geometry: &["curve"],
@@ -422,6 +441,7 @@ pub fn registry() -> Vec<OperationType> {
                 feed(),
                 plunge(),
                 ramp(),
+                smoothing(),
             ],
             tool_shapes: &["vbit"],
             geometry: &["curve"],
@@ -988,6 +1008,17 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
         }
         _ => return Err(format!("no defaults for {kind:?}")),
     }
+    // smoothing: finishing 0.005 mm, roughing 0.01
+    if t.params.iter().any(|p| p.name == "smoothing") && !v.contains_key("smoothing") {
+        let finishing = !matches!(
+            kind,
+            "rotary_turning" | "rotary_rough" | "rough3d" | "pocket"
+        );
+        v.insert(
+            "smoothing".into(),
+            json!(if finishing { 0.005 } else { 0.01 }),
+        );
+    }
     // every other parameter: its registry default
     for p in &t.params {
         if !v.contains_key(p.name) && !p.default.is_null() {
@@ -1081,6 +1112,7 @@ fn raster_params() -> Vec<ParamSpec> {
         feed(),
         plunge(),
         ramp(),
+        smoothing(),
     ]
 }
 

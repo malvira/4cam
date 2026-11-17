@@ -50,7 +50,8 @@
           "step_down": 1.0,
           "stepover": 0.5,
           "feed": 600.0,
-          "plunge_feed": 60.0
+          "plunge_feed": 60.0,
+          "smoothing": 0.0
         }
       ],
       "outputs": [

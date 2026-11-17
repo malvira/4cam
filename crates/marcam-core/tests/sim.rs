@@ -32,7 +32,7 @@ fn mesh_rough_then_finish_matches_part() {
             "{}: gouge check {} moves, deepest {:.4} mm",
             g.program, g.moves_checked, g.max_depth
         );
-        assert!(g.moves_checked > 1000);
+        assert!(g.moves_checked > 100, "{g:?}");
         assert!(g.max_depth < 0.01, "{g:?}");
     }
 

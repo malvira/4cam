@@ -62,7 +62,8 @@
           "depth": 2.0,
           "step_down": 1.0,
           "feed": 600.0,
-          "plunge_feed": 60.0
+          "plunge_feed": 60.0,
+          "smoothing": 0.0
         }
       ],
       "outputs": [

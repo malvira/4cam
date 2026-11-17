@@ -27,6 +27,7 @@ pub mod relief;
 pub mod render;
 pub mod sim;
 pub mod sim3;
+pub mod smoothing;
 pub mod strategy;
 pub mod toolpath;
 pub mod verify;
@@ -426,6 +427,16 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             }
         }
         *next_op += 1;
+        // smoothing: on a vise (or a flat engraving) the post also writes arcs as G2/G3
+        let smooth_tol = op.smoothing();
+        let flat = three
+            && (is_three_axis(op) || matches!(op, Operation::Engrave(_) | Operation::Vcarve(_)));
+        if smooth_tol > 0.0 && flat && op.index_a().unwrap_or(0.0) == 0.0 {
+            if let Some(Move::Operation { arcs, .. }) = b.moves.last_mut() {
+                arcs.get_or_insert(smooth_tol);
+            }
+        }
+        let op_start = b.moves.len();
         if current != Some(number) {
             b.tool_change(number, job.spindle_rpm);
             rapid_safe(&mut b);
@@ -579,6 +590,12 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     }
                     _ => unreachable!(),
                 }
+                // smoothed in the machine frame, before any conversion to general moves
+                if smooth_tol > 0.0 {
+                    let mut tail = b.moves.split_off(indexed_from);
+                    smoothing::smooth(&mut tail, smooth_tol, true);
+                    b.moves.extend(tail);
+                }
                 if !three {
                     // back on the axis centreline before any rotary move
                     b.rapid3(None, None, Some(safe_r));
@@ -592,6 +609,12 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 }
             }
             _ => unreachable!("tool shape validated above"),
+        }
+        // rotary operations and engravings: smoothed here (3-axis ones above)
+        if smooth_tol > 0.0 && !is_three_axis(op) {
+            let mut tail = b.moves.split_off(op_start);
+            smoothing::smooth(&mut tail, smooth_tol, flat);
+            b.moves.extend(tail);
         }
     }
     Ok(Toolpath {

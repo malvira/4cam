@@ -63,7 +63,8 @@
           "floor": -5.0,
           "scallop": 0.0,
           "feed": 600.0,
-          "plunge_feed": 60.0
+          "plunge_feed": 60.0,
+          "smoothing": 0.0
         }
       ],
       "outputs": [
