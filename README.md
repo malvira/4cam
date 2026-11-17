@@ -128,16 +128,26 @@ Then open <http://localhost:8000/web/>. Nothing is uploaded: the engine runs in 
 browser.
 
 - **Project bar** (top):
-  - **New**: an empty project.
+  - **New**: a dialog with the project name, the machine and the setup type: Rotary 4th
+    axis (simultaneous), Indexed 3+1 (the bar at fixed angles) or 3-axis vise. It also takes
+    the part (an STL, its units, its axis or up direction, with a placement preview) and the
+    stock (from the part with a margin, or given). The STL can also come later.
   - **Open**: a `.4cam.json` project file, or a `.project.json` / `.job.json`; or drop the
     file on the page.
   - **Save** / **Save as**: one `.4cam.json` file with the part mesh embedded, so it opens
     whole anywhere.
-  - **Import STL** (or drop one), binary or ASCII, mm or inch:
+  - **Import STL** (or drop one), binary or ASCII, mm or inch, through the same dialog, with
+    the current setup's type pre-selected:
     - The part is placed: on the rotary axis, its front at X0; or Z up on the vise.
     - Bar or block stock is sized round it, and the part size is shown.
     - A new part gets a roughing and a finishing operation from the engine's defaults; an
       existing project's operations are recomputed for it. Then it is generated.
+  - In the project tree, **Edit setup** changes a setup's type, machine, stock, origin and
+    holding. A new type converts the setup: the part is placed again, the stock re-sized, and
+    operations that do not fit are removed (with a warning first and an Undo after; starters
+    are added if none are left). The rest get their defaults again, and everything
+    regenerates. **+ Setup** adds a setup for the same part, with the same choices. Only
+    operation types that fit a setup are offered.
   - The project's name, with an "unsaved" mark. New, Open and examples ask before
     discarding changes. Results the project no longer matches are marked out of date until
     Generate.

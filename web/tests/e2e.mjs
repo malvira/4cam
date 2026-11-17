@@ -751,9 +751,10 @@ try {
   const reset = [(await rect("left"))[2], (await rect("side"))[3]];
   check("double-click resets bars to the default layout", reset[0] === L0 && reset[1] === s0, `left ${reset[0]} (default ${L0}), side ${reset[1]} (default ${s0})`);
 
-  // 8j. project workflow: New -> Import STL (binary, ASCII by drag-and-drop, inch) -> every
-  // view refreshed, stock sized, defaults filled -> Generate -> Save -> New -> Open the saved
-  // file -> the same G-code; unsaved-changes warnings; bad files; a vise import
+  // 8j. project workflow and setups: New (the setup dialog) -> Import STL (binary, ASCII by
+  // drag-and-drop, inch) -> every view refreshed, stock sized, defaults filled -> Generate ->
+  // Save -> New -> Open the saved file -> the same G-code; each setup type from New; editing a
+  // setup's type converts it (and Undo); adding a setup; unsaved-changes warnings; bad files
   {
     await S("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
     const knobStl = readFileSync(join(root, "examples", "knob", "knob.stl"));
@@ -774,12 +775,33 @@ try {
     }
     ascii += "endsolid knob\n";
     const fileJs = (name, buf) => `new File([Uint8Array.from(atob("${Buffer.from(buf).toString("base64")}"), (c) => c.charCodeAt(0))], ${JSON.stringify(name)})`;
-    const setFile = (input, name, buf) => js(`(() => { const dt = new DataTransfer(); dt.items.add(${fileJs(name, buf)}); const i = document.getElementById('${input}'); i.files = dt.files; i.dispatchEvent(new Event('change')); return true; })()`);
+    const setFile = (input, name, buf) => js(`(() => { const dt = new DataTransfer(); dt.items.add(${fileJs(name, buf)}); const i = document.getElementById('${input}'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     const drop = (name, buf) => js(`(() => { const dt = new DataTransfer(); dt.items.add(${fileJs(name, buf)}); document.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })); document.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); return true; })()`);
     const dialogs = () => cdp.dialogs.map((d) => `${d.type}: ${d.message}`);
     const allGcode = () => js("window.__4cam.state.result.programs.map((p) => p.name + '\\n' + p.gcode).join('\\n')");
     const viewsOk = () => js(`(() => { const v = window.__4cam.state.three; const s = document.getElementById('side'); const px = s.getContext('2d').getImageData(0, 0, s.width, s.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++;
       return { part: v.groups.part.children.length, stock: v.groups.stock.children.length, path: v.groups.path.children.length, side: ink, tabs: [...document.querySelectorAll('#tabs button')].map((b) => b.textContent), ops: document.querySelectorAll('#tree .tree-op').length, stale: document.body.classList.contains('stale') }; })()`);
+    const dialogOpen = () => waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 15000);
+    // fill the setup dialog: { kind, units, axis, name, file: [name, bytes] }, then OK
+    async function inDialog(o = {}) {
+      await dialogOpen();
+      if (o.name !== undefined) await js(`document.getElementById('sdName').value = ${JSON.stringify(o.name)}; true`);
+      if (o.kind) await js(`document.querySelector('.sd-kind[data-kind="${o.kind}"]').click(); true`);
+      if (o.units) await js(`const u = document.getElementById('sdUnits'); u.value = '${o.units}'; u.dispatchEvent(new Event('change', { bubbles: true })); true`);
+      if (o.axis) await js(`const a = document.getElementById('sdAxis'); a.value = '${o.axis}'; a.dispatchEvent(new Event('change', { bubbles: true })); true`);
+      if (o.file) {
+        await setFile("sdFile", o.file[0], o.file[1]);
+        await waitFor(() => js("document.getElementById('sdFileName').textContent.length > 0"), "the STL in the dialog", 15000);
+      }
+      await sleep(200);
+      if (o.shot) await shot(o.shot);
+      const info = await js("document.getElementById('sdInfo').textContent");
+      if (o.cancel) await js("document.getElementById('sdCancel').click(); true");
+      else await js("document.getElementById('sdOk').click(); true");
+      return info;
+    }
+    const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
+    const emptyReady = () => waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
 
     // New, from a project with unsaved edits: asked first; declining keeps it
     await js("document.getElementById('job').dispatchEvent(new Event('input')); true");
@@ -788,21 +810,62 @@ try {
     await js("document.getElementById('projectNew').click(); true");
     await sleep(300);
     const kept = await js("document.querySelectorAll('#tree .tree-op').length");
+    const noDialog = !(await js("document.getElementById('setupDialog').open"));
     cdp.dialogAnswer = true;
-    check("unsaved changes are marked, and New asks before discarding them (declined: nothing lost)", dirty0 && /unsaved changes/.test(dialogs().pop() || "") && kept > 0, `${dialogs().slice(-1)}; ${kept} operations kept`);
+    check("unsaved changes are marked, and New asks before discarding them (declined: nothing lost)", dirty0 && /unsaved changes/.test(dialogs().pop() || "") && kept > 0 && noDialog, `${dialogs().slice(-1)}; ${kept} operations kept`);
+
+    // New: the setup dialog (name, machine, setup type); without an STL, an empty project
     await js("document.getElementById('projectNew').click(); true");
-    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
+    await dialogOpen();
+    const choices = await js("[...document.querySelectorAll('.sd-kind')].map((k) => k.querySelector('b').textContent + ': ' + k.querySelector('small').textContent.slice(0, 30))");
+    await inDialog({ name: "bracket", kind: "vise", shot: "15a_new_dialog" });
+    await emptyReady();
     const empty = await js("({ name: document.getElementById('projectName').textContent, ops: document.querySelectorAll('#tree .tree-op').length, tabs: document.querySelectorAll('#tabs button').length, gcode: document.getElementById('gcode').value.length, cta: document.getElementById('emptyState').textContent })");
     await js("document.getElementById('generate').click(); true");
     const nothing = await js("document.getElementById('error').textContent");
-    check("New: an empty project with a call to action, no operations, no results", empty.name === "untitled" && empty.ops === 0 && empty.tabs === 0 && empty.gcode === 0 && /Import an STL/i.test(empty.cta) && /Nothing to generate/.test(nothing), JSON.stringify(empty));
+    check("New: a dialog with the three setup types; without an STL, an empty project with a call to action",
+      choices.length === 3 && /Rotary 4th axis/.test(choices[0]) && /Indexed 3\+1/.test(choices[1]) && /3-axis vise/.test(choices[2]) && empty.name === "bracket" && empty.ops === 0 && empty.tabs === 0 && /Import an STL/i.test(empty.cta) && /Nothing to generate/.test(nothing),
+      `${choices.join(" | ")}; ${JSON.stringify(empty)}`);
     await shot("14a_new_project");
+    // the type chosen in New is pre-selected when the STL comes
+    await setFile("importStlFile", "dome.stl", readFileSync(join(root, "examples", "plate", "dome.stl")));
+    await dialogOpen();
+    const pre = await js("document.querySelector('input[name=\"sdKind\"]:checked').value");
+    await inDialog({});
+    await waitDone("generation after importing into the new vise project", 240000);
+    const dv = await doc();
+    check("Import STL into it: the dialog keeps the vise chosen in New; block stock, 3-axis operations generated",
+      pre === "vise" && dv.setups[0].kind === "vise" && dv.setups[0].stock.shape === "box" && dv.setups[0].operations.map((o) => o.type).join() === "rough3d,raster3d" && (await viewsOk()).tabs.every((t) => t.endsWith("OK")),
+      `${pre}; ${JSON.stringify(dv.setups[0].stock)}`);
 
-    // Import a binary STL: placed, stock sized, starter operations, generated, views refreshed
+    // each setup type, from New with the STL chosen in the dialog
+    const byKind = {};
+    for (const [kind, ops] of [["rotary", "rotary_rough,rotary_finish"], ["indexed", "rough3d,rough3d,raster3d,raster3d"], ["vise", "rough3d,raster3d"]]) {
+      await js("document.getElementById('projectNew').click(); true");
+      const info = await inDialog({ name: `knob_${kind}`, kind, axis: kind === "vise" ? "x" : "x", file: ["knob.stl", knobStl], shot: `15b_new_${kind}` });
+      await waitDone(`generation of a new ${kind} project`, 240000);
+      const d = await doc();
+      const v = await viewsOk();
+      const offered = await js("[...document.getElementById('treeAddType').options].map((o) => o.value)");
+      byKind[kind] = { d, offered };
+      const fitsOffered = kind === "rotary" ? !offered.includes("pocket") && offered.includes("rotary_finish")
+        : kind === "indexed" ? offered.includes("pocket") && !offered.includes("rotary_finish") && !offered.includes("helical_knurl")
+        : offered.includes("pocket") && !offered.includes("rotary_finish");
+      check(`New ${kind} project with the STL: placed, ${kind === "vise" ? "block" : "bar"} stock, ${ops.split(",").length} starter operations, generated, only fitting types offered`,
+        d.setups[0].kind === kind && d.setups[0].operations.map((o) => o.type).join() === ops && (kind !== "indexed" || d.setups[0].operations.map((o) => o.index_a).join() === "0,180,0,180") && v.tabs.length >= 2 && v.tabs.every((t) => t.endsWith("OK")) && v.part > 0 && v.path > 0 && fitsOffered,
+        `${info}; ${d.setups[0].operations.map((o) => o.type + (o.index_a !== undefined ? "@" + o.index_a : "")).join(",")}; tabs ${v.tabs}; offered ${offered.length}`);
+      await shot(`15c_${kind}_generated`);
+    }
+
+    // a rotary project: import, save, reopen (the earlier round trip), then change its type
+    await js("document.getElementById('projectNew').click(); true");
+    await inDialog({ name: "knob", kind: "rotary" });
+    await emptyReady();
     await setFile("importStlFile", "knob.stl", knobStl);
+    await inDialog({});
     await waitDone("generation after the STL import", 240000);
     const info1 = await js("document.getElementById('meshInfo').textContent");
-    const doc1 = JSON.parse(await js("document.getElementById('job').value"));
+    const doc1 = await doc();
     const v1 = await viewsOk();
     check("Import STL (binary): part size shown, bar stock sized round it, the part on the axis with its front at X0",
       /binary STL, 10080 triangles/.test(info1) && /21\.70 x 20\.00 x 20\.00 mm/.test(info1) && JSON.stringify(doc1.setups[0].stock) === '{"shape":"cylinder","radius":10.5,"length":37}' && doc1.models[0].axis === "x" && Math.abs(doc1.models[0].translate[0]) < 1e-6, `${info1}; ${JSON.stringify(doc1.setups[0].stock)}`);
@@ -834,10 +897,10 @@ try {
     const savedObj = JSON.parse(savedText);
     const clean1 = await js("document.getElementById('projectDirty').classList.contains('hidden')");
     check("Save: one .4cam.json with the project and its STL embedded; the unsaved mark goes",
-      saved === `${name1}.4cam.json` && savedObj.format === "4cam-project" && Object.keys(savedObj.meshes)[0] === "knob.stl" && Buffer.from(savedObj.meshes["knob.stl"], "base64").length === 84 + 50 * 10080 && clean1,
+      saved === `${name1}.4cam.json` && savedObj.format === "4cam-project" && Object.keys(savedObj.meshes)[0] === "knob.stl" && Buffer.from(savedObj.meshes["knob.stl"], "base64").length === 84 + 50 * 10080 && clean1 && savedObj.project.setups[0].kind === "rotary",
       `${saved}; ${Object.keys(savedObj.meshes || {})}`);
     await js("document.getElementById('projectNew').click(); true");
-    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
+    await inDialog({ cancel: true });
     const dialogsBefore = cdp.dialogs.length;
     await setFile("projectOpenFile", saved, Buffer.from(savedText));
     await waitDone("generation after opening the project", 240000);
@@ -848,44 +911,67 @@ try {
       `${reopened.length} chars vs ${gcode2.length}; dialogs ${cdp.dialogs.length - dialogsBefore}`);
     await shot("14d_reopened");
 
+    // Edit setup: rotary -> 3-axis vise converts it (warned), regenerates, and can be undone
+    await js("document.getElementById('treeEditSetup').click(); true");
+    await dialogOpen();
+    const editPre = await js("({ kind: document.querySelector('input[name=\"sdKind\"]:checked').value, machine: document.getElementById('sdMachine').value, title: document.getElementById('sdTitle').textContent })");
+    const nDialogs = cdp.dialogs.length;
+    await inDialog({ kind: "vise", shot: "15d_edit_setup_dialog" });
+    await waitDone("regeneration after the type change", 240000);
+    const warned = cdp.dialogs.slice(nDialogs).map((d) => d.message).join(" ");
+    const dc = await doc();
+    const vc = await viewsOk();
+    const undoShown = await js("!document.getElementById('undoBar').classList.contains('hidden')");
+    const offeredC = await js("[...document.getElementById('treeAddType').options].map((o) => o.value)");
+    check("Edit setup: rotary to 3-axis vise warns, removes the rotary operations, adds 3-axis ones, re-places the part in a block and regenerates",
+      editPre.kind === "rotary" && /removes op1 \(rotary_rough\), op2 \(rotary_finish\)/.test(warned) && dc.setups[0].kind === "vise" && dc.setups[0].stock.shape === "box" && dc.setups[0].operations.map((o) => o.type).join() === "rough3d,raster3d" && dc.models.find((m) => m.kind === "mesh").axis === "x" && vc.tabs.every((t) => t.endsWith("OK")) && vc.part > 0 && undoShown && !offeredC.includes("rotary_finish") && /removed/.test(await js("document.getElementById('error').textContent")),
+      `${JSON.stringify(editPre)}; ${warned.slice(0, 120)}; ${dc.setups[0].operations.map((o) => o.type)}; ${JSON.stringify(dc.setups[0].stock)}; axis ${dc.models.find((m) => m.kind === "mesh").axis}; tabs ${vc.tabs}; part ${vc.part}; undo ${undoShown}; error ${(await js("document.getElementById('error').textContent")).slice(0, 80)}`);
+    await shot("15e_converted_to_vise");
+    await js("document.getElementById('undoSetup').click(); true");
+    await waitDone("regeneration after Undo", 240000);
+    const du = await doc();
+    check("Undo brings the rotary setup back, regenerated", du.setups[0].kind === "rotary" && du.setups[0].operations.map((o) => o.type).join() === "rotary_rough,rotary_finish" && (await allGcode()) === gcode2,
+      du.setups[0].operations.map((o) => o.type).join());
+
+    // + Setup: a second setup (indexed 3+1) for the same part, its own placement
+    await js("document.getElementById('treeAddSetup').click(); true");
+    await inDialog({ kind: "indexed", name: "Flats", shot: "15f_add_setup_dialog" });
+    await waitDone("generation of the added setup", 240000);
+    const da = await doc();
+    const va = await viewsOk();
+    check("+ Setup: an indexed 3+1 setup joins the project with its own part placement and starters, generated",
+      da.setups.length === 2 && da.setups[1].kind === "indexed" && da.setups[1].name === "Flats" && da.setups[1].part[0] !== da.setups[0].part[0] && da.setups[1].operations.length === 4 && (await js("document.getElementById('treeSetup').options.length")) === 2 && va.tabs.every((t) => t.endsWith("OK")),
+      `${da.setups.map((s) => s.id + ":" + s.kind + ":" + s.operations.length).join(", ")}; tabs ${va.tabs}`);
+    await shot("15g_two_setups");
+
     // ASCII STL dropped on the page, and an inch STL: the same part
     await js("document.getElementById('projectNew').click(); true");
-    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
+    await inDialog({ name: "untitled", kind: "rotary" });
+    await emptyReady();
     await drop("knob_ascii.stl", Buffer.from(ascii));
+    await inDialog({});
     await waitDone("generation after dropping an ASCII STL", 240000);
     const infoA = await js("document.getElementById('meshInfo').textContent");
     const gA = await allGcode();
     check("drag-and-drop an ASCII STL: imported and generated like the binary one", /ASCII STL, 10080 triangles/.test(infoA) && /21\.70 x 20\.00 x 20\.00 mm/.test(infoA) && gA.replace(/knob_ascii/g, "knob") === gcode1, infoA);
     await shot("14e_ascii_dropped");
     await js("document.getElementById('projectNew').click(); true");
-    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
-    await js("document.getElementById('importUnits').value = 'inch'; true");
+    await inDialog({ name: "untitled", kind: "rotary" });
+    await emptyReady();
     await setFile("importStlFile", "knob_inch.stl", inch);
+    await inDialog({ units: "inch" });
     await waitDone("generation after an inch STL", 240000);
     const infoI = await js("document.getElementById('meshInfo').textContent");
-    await js("document.getElementById('importUnits').value = 'mm'; true");
     check("an inch STL with units = inch comes in at the same size in mm", /inch/.test(infoI) && /21\.70 x 20\.00 x 20\.00 mm/.test(infoI), infoI);
 
-    // a second STL into a project with a part: replace or add
-    cdp.dialogAnswer = true;
+    // a second STL into a project with a part: the dialog (type pre-selected), then replace or add
     await setFile("importStlFile", "knob.stl", knobStl);
+    await dialogOpen();
+    const preI = await js("document.querySelector('input[name=\"sdKind\"]:checked').value");
+    await inDialog({});
     await waitDone("generation after replacing the part", 240000);
     const asked = dialogs().pop() || "";
-    check("importing into a project with a part asks: replace (OK) or add (Cancel)", /Replace the part with knob\.stl/.test(asked), asked);
-
-    // a vise import: Z up, block sized, 3-axis starter operations
-    await js("document.getElementById('projectNew').click(); true");
-    await waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
-    await js("const h = document.getElementById('importHolding'); h.value = 'vise'; h.dispatchEvent(new Event('change')); true");
-    await setFile("importStlFile", "dome.stl", readFileSync(join(root, "examples", "plate", "dome.stl")));
-    await waitDone("generation after a vise import", 240000);
-    const docV = JSON.parse(await js("document.getElementById('job').value"));
-    const vV = await viewsOk();
-    check("vise import: block sized round the part (Z0 its top), 3-axis roughing and finishing generated",
-      docV.setups[0].stock.shape === "box" && docV.setups[0].stock.max[2] === 0 && docV.setups[0].operations.map((o) => o.type).join() === "rough3d,raster3d" && vV.tabs.length === 2 && vV.tabs.every((t) => t.endsWith("OK")),
-      `${JSON.stringify(docV.setups[0].stock)}; ${vV.tabs}`);
-    await shot("14f_vise_import");
-    await js("const h = document.getElementById('importHolding'); h.value = 'rotary'; h.dispatchEvent(new Event('change')); true");
+    check("importing into a project with a part: the setup type pre-selected, then replace (OK) or add (Cancel)", preI === "rotary" && /Replace the part with knob\.stl/.test(asked), `${preI}; ${asked}`);
 
     // bad files: a clear error, nothing replaced
     const opsBefore = await js("document.querySelectorAll('#tree .tree-op').length");
@@ -896,7 +982,7 @@ try {
     await sleep(500);
     const badJson = await js("document.getElementById('error').textContent");
     check("bad files: a clear error and the project left as it was",
-      /notes\.stl: not an STL file/.test(badStl) && /broken\.4cam\.json: not a 4cam project/.test(badJson) && (await js("document.querySelectorAll('#tree .tree-op').length")) === opsBefore,
+      /notes\.stl: not an STL file/.test(badStl) && /broken\.4cam\.json: not a 4cam project/.test(badJson) && (await js("document.querySelectorAll('#tree .tree-op').length")) === opsBefore && !(await js("document.getElementById('setupDialog').open")),
       `${badStl} | ${badJson}`);
     await shot("14g_bad_file");
 

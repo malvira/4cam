@@ -1,12 +1,20 @@
-// Project workflow for the web app: New, Open (also drag-and-drop), Save / Save as (one
-// .4cam.json file with the part mesh embedded), Import STL (binary or ASCII, mm or inch, axis
-// and holding chosen), unsaved-changes tracking and warnings. Importing a mesh places it
-// (rotary: its axis along X, front at X0, centred; vise: Z up, on the block's corner), sizes
-// the stock round it, fills a starter roughing + finishing from the engine's defaults (or
-// recomputes the existing operations' defaults) and regenerates everything.
+// Project workflow for the web app: New (a setup dialog: name, machine, setup type, part,
+// stock), Open (also drag-and-drop), Save / Save as (one .4cam.json file with the part mesh
+// embedded), Import STL (binary or ASCII, mm or inch, through the same dialog), editing a
+// setup (its type, machine, stock, origin, holding: converting it when the type changes),
+// adding a setup, unsaved-changes tracking and warnings, and an undo for setup changes.
+
+import { setupDialog } from "./setupdialog.js";
 
 /** The file format Save writes: the project, and the mesh bytes it names, in one file. */
 export const FILE_FORMAT = "4cam-project";
+
+/** The setup types, as the dialog and the tree name them. */
+export const KINDS = {
+  rotary: "Rotary 4th axis",
+  indexed: "Indexed 3+1",
+  vise: "3-axis vise",
+};
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -57,7 +65,7 @@ export function encodeStl(tris, header = "4cam") {
 }
 
 /** The engine's axis mapping (MeshSource.axis): the mesh axis that becomes X. */
-function mapAxis(p, axis) {
+export function mapAxis(p, axis) {
   if (axis === "y") return [p[1], p[2], p[0]];
   if (axis === "z") return [p[2], p[0], p[1]];
   return [p[0], p[1], p[2]];
@@ -66,16 +74,24 @@ function mapAxis(p, axis) {
 const ceilHalf = (x) => Math.ceil(x * 2) / 2;
 const r3 = (x) => Math.round(x * 1000) / 1000;
 
+/** The engine's axis mapping that makes `up` (x, y or z) the vise's Z. */
+export const UP_AXIS = { z: "x", y: "z", x: "y" };
+
 /**
- * Where a part goes and the stock round it. `holding` "rotary": `axis` (x, y or z) is the
- * mesh axis turned onto X; the part is centred on it with its front (largest X) at X0; bar
- * stock of the largest radius + 0.5 mm (rounded up to 0.5 mm), the length + 15 mm to hold.
- * "vise": `up` (x, y or z) is the mesh axis that points up; the part sits 2 mm in from the
- * block's corner with its top 0.5 mm below the block's top (Z0), the block 2 mm below it.
+ * Where a part goes and the stock round it, for a setup `kind` (or the older `holding`).
+ * - Bar ("rotary", "indexed"): `axis` (x, y or z) is the mesh axis turned onto X; the part is
+ *   centred on it with its front (largest X) at X0 plus `origin`; bar stock of the largest
+ *   radius + `margin` (default 0.5 mm, rounded up to 0.5 mm), the length + 15 mm to hold.
+ * - Vise: `up` is the mesh axis that points up; the part sits `margin` (default 2 mm) in from
+ *   the block's corner, its top `origin` (default 0.5 mm) below the block's top (Z0), the
+ *   block 2 mm below it.
+ * - `explicit`: { dia, len } for a bar, { bx, by, bz } for a block (the part centred on it).
  * Returns { axis, translate, stock, size } (size: the part's X, Y, Z extent after placing).
  */
-export function placePart(tris, { holding = "rotary", axis = "x", up = "z" } = {}) {
-  const ax = holding === "vise" ? { z: "x", y: "z", x: "y" }[up] : axis;
+export function placePart(tris, opts = {}) {
+  const kind = opts.kind ?? (opts.holding === "vise" ? "vise" : "rotary");
+  const vise = kind === "vise";
+  const ax = vise ? UP_AXIS[opts.up ?? opts.axis ?? "z"] : opts.axis ?? "x";
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < tris.length; i += 3) {
     const q = mapAxis([tris[i], tris[i + 1], tris[i + 2]], ax);
@@ -85,10 +101,15 @@ export function placePart(tris, { holding = "rotary", axis = "x", up = "z" } = {
     }
   }
   const size = [0, 1, 2].map((k) => hi[k] - lo[k]);
-  if (holding === "vise") {
-    const m = 2;
-    const translate = [m - lo[0], m - lo[1], -0.5 - hi[2]];
-    const stock = { shape: "box", min: [0, 0, r3(-(size[2] + 0.5 + 2))], max: [r3(size[0] + 2 * m), r3(size[1] + 2 * m), 0] };
+  const ex = opts.explicit;
+  if (vise) {
+    const m = opts.margin ?? 2, top = opts.origin ?? 0.5;
+    if (ex) {
+      const translate = [(ex.bx - size[0]) / 2 - lo[0], (ex.by - size[1]) / 2 - lo[1], -top - hi[2]];
+      return { axis: ax, translate, stock: { shape: "box", min: [0, 0, -ex.bz], max: [ex.bx, ex.by, 0] }, size };
+    }
+    const translate = [m - lo[0], m - lo[1], -top - hi[2]];
+    const stock = { shape: "box", min: [0, 0, r3(-(size[2] + top + 2))], max: [r3(size[0] + 2 * m), r3(size[1] + 2 * m), 0] };
     return { axis: ax, translate, stock, size };
   }
   const cy = (lo[1] + hi[1]) / 2, cz = (lo[2] + hi[2]) / 2;
@@ -97,10 +118,39 @@ export function placePart(tris, { holding = "rotary", axis = "x", up = "z" } = {
     const q = mapAxis([tris[i], tris[i + 1], tris[i + 2]], ax);
     rmax = Math.max(rmax, Math.hypot(q[1] - cy, q[2] - cz));
   }
-  const translate = [-hi[0], -cy, -cz];
-  const stock = { shape: "cylinder", radius: ceilHalf(rmax + 0.5 - 1e-4), length: Math.ceil(size[0] + 15) };
+  const shift = opts.origin ?? 0;
+  const translate = [-hi[0] + shift, -cy, -cz];
+  const stock = ex
+    ? { shape: "cylinder", radius: ex.dia / 2, length: ex.len }
+    : { shape: "cylinder", radius: ceilHalf(rmax + (opts.margin ?? 0.5) - 1e-4), length: Math.ceil(size[0] + 15 + Math.max(0, shift)) };
   return { axis: ax, translate, stock, size };
 }
+
+/** The setup's kind: its own, else from its stock (a block: vise; a bar: rotary). */
+export function kindOf(setup) {
+  return setup?.kind ?? (setup?.stock?.shape === "box" ? "vise" : "rotary");
+}
+
+/**
+ * Whether an operation type (from opTypes) fits a setup kind, as the engine's
+ * ops::fits_setup: rotary takes what turns the part (and engrave/V-carve, wrapped), indexed the
+ * 3-axis types (at fixed A angles), vise everything that needs no rotary axis. A bar without a
+ * kind takes everything (older projects mix rotary and indexed operations).
+ */
+export function fitsKind(type, kind, explicit = true) {
+  if (!explicit && kind === "rotary") return true;
+  if (kind === "rotary") return !type.machine_needs.includes("xyz");
+  if (kind === "indexed") return type.machine_needs.includes("xyz");
+  if (kind === "vise") return !type.machine_needs.includes("rotary_a");
+  return true;
+}
+
+/** The operations a new setup of each kind starts with: [type, tool, A, output]. */
+export const STARTERS = {
+  rotary: [["rotary_rough", 1, null, "rough"], ["rotary_finish", 2, null, "finish"]],
+  indexed: [["rough3d", 1, 0, "rough"], ["rough3d", 1, 180, "rough"], ["raster3d", 2, 0, "finish"], ["raster3d", 2, 180, "finish"]],
+  vise: [["rough3d", 1, null, "rough"], ["raster3d", 2, null, "finish"]],
+};
 
 // ------------------------------------------------------------------ files
 
@@ -151,8 +201,9 @@ const slug = (s) => (String(s).toLowerCase().replace(/\.[a-z0-9]+$/, "").replace
 
 export function setupProject(ctx) {
   const { $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, machineArg, currentMachine } = ctx;
-  const p = { name: "untitled", dirty: false, fileName: null };
+  const p = { name: "untitled", dirty: false, fileName: null, pending: null, undo: null };
   state.project = p;
+  const dialog = setupDialog({ $, state, parseStl, placePart, kindOf, KINDS });
 
   function show() {
     $("projectName").textContent = p.name;
@@ -175,18 +226,49 @@ export function setupProject(ctx) {
   function mayDiscard(what) {
     return !p.dirty || window.confirm(`"${p.name}" has unsaved changes. ${what} anyway and lose them?`);
   }
+  const engineMachine = () => (typeof machineArg() === "string" && machineArg() !== "custom" ? machineArg() : null);
 
+  // ------------------------------------------------------------ undo (setup changes)
+  /** Offer to undo a setup change: `job` is the project text from before it. */
+  function keepUndo(label, job) {
+    p.undo = { label, job, mesh: state.mesh, meshName: state.meshName };
+    $("undoBar").innerHTML = `${label} <button type="button" id="undoSetup">Undo</button>`;
+    $("undoBar").classList.remove("hidden");
+  }
+  function dropUndo() {
+    p.undo = null;
+    $("undoBar").classList.add("hidden");
+  }
+  async function undo() {
+    const u = p.undo;
+    if (!u) return;
+    setStatus(`Undoing: ${u.label}`, "busy");
+    dropUndo();
+    writeJob(JSON.parse(u.job));
+    setMesh(u.mesh, u.meshName);
+    clearResults("");
+    await refreshAll();
+    await generate();
+  }
+
+  // ------------------------------------------------------------ new, open, save
   async function newProject() {
     if (!mayDiscard("Start a new project")) return false;
+    const cfg = await dialog.open("new", { name: "untitled", machine: currentMachine()?.id, kind: p.pending?.kind ?? "rotary" });
+    if (!cfg) return false;
     showError("");
     setStatus("New project", "ready");
-    const doc = { schema_version: "0.2", name: "untitled", models: [], tools: [], setups: [] };
+    dropUndo();
+    if (cfg.machine) ctx.selectMachine(cfg.machine);
+    const doc = { schema_version: "0.2", name: cfg.name || "untitled", models: [], tools: [], setups: [] };
     writeJob(doc, { load: true });
     setMesh(null, "");
     p.fileName = null;
-    clean("untitled");
+    p.pending = cfg;
+    clean(doc.name);
     clearResults("New project: import an STL (button or drop it here) or open a project to start.");
     await refreshAll();
+    if (cfg.file) await importParsed(cfg);
     return true;
   }
 
@@ -197,6 +279,8 @@ export function setupProject(ctx) {
     const wanted = meshFileOf(project);
     setMesh(mesh, mesh ? `${meshName} (in the project)` : "");
     p.fileName = fileName || null;
+    p.pending = null;
+    dropUndo();
     clean(name);
     const sm = project.machine ?? project.setups?.[0]?.machine;
     if (sm) ctx.selectMachine(sm);
@@ -252,133 +336,313 @@ export function setupProject(ctx) {
     setStatus(`Saved ${p.fileName}`, "ready");
   }
 
-  /** Operations for a new part: roughing then finishing, every field from the engine. */
-  async function starterOps(doc, setupId, holding) {
-    const plan = holding === "vise" ? [["rough3d", 1, "rough"], ["raster3d", 2, "finish"]] : [["rotary_rough", 1, "rough"], ["rotary_finish", 2, "finish"]];
-    const s = doc.setups.find((x) => x.id === setupId);
-    const base = slug(doc.name);
-    for (const [k, [type, tool, what]] of plan.entries()) {
-      const { result } = await engine("opDefaults", doc, { type, setup: setupId, tool, machine: typeof machineArg() === "string" ? machineArg() : null }, state.mesh);
-      const id = `op${k + 1}`;
-      s.operations.push({ id, ...result });
-      s.outputs.push({ name: `${base}_${k + 1}_${what}`, title: `${doc.name}: ${what}`, operations: [id] });
-    }
-  }
-
-  /** The tools a new part starts with: a flat and a ball end mill, long enough to reach. */
-  function starterTools(stock) {
+  // ------------------------------------------------------------ setups
+  /** The tools starter operations use: T1 flat and T2 ball, added when missing. */
+  function ensureTools(doc, stock) {
     const reach = stock.shape === "box" ? stock.max[2] - stock.min[2] : stock.radius;
     const flute = Math.max(12, Math.ceil(reach + 1));
-    return [
-      { number: 1, description: `3.175 mm flat end mill, ${flute} mm flute`, kind: "flat", diameter: 3.175, flute_length: flute },
-      { number: 2, description: `3.175 mm ball end mill, ${flute} mm flute`, kind: "ball", diameter: 3.175, flute_length: flute },
-    ];
+    doc.tools = doc.tools || [];
+    // the starter tools (4cam's own, by their description) follow the stock's depth, so the
+    // holder clears it; tools the user defined are left alone (the holder check reports them)
+    for (const t of doc.tools) {
+      const m = /^3\.175 mm (flat|ball) end mill, \d+ mm flute$/.exec(t.description ?? "");
+      if (m && t.kind === m[1] && t.flute_length !== flute) {
+        t.flute_length = flute;
+        t.description = `3.175 mm ${m[1]} end mill, ${flute} mm flute`;
+      }
+    }
+    if (!doc.tools.some((t) => t.number === 1))
+      doc.tools.push({ number: 1, description: `3.175 mm flat end mill, ${flute} mm flute`, kind: "flat", diameter: 3.175, flute_length: flute });
+    if (!doc.tools.some((t) => t.number === 2))
+      doc.tools.push({ number: 2, description: `3.175 mm ball end mill, ${flute} mm flute`, kind: "ball", diameter: 3.175, flute_length: flute });
+  }
+
+  const nextOpId = (doc) => {
+    const used = new Set(doc.setups.flatMap((s) => s.operations.map((o) => o.id)));
+    for (let k = 1; ; k++) if (!used.has(`op${k}`)) return `op${k}`;
+  };
+
+  /** A setup's starter operations (roughing, then finishing), every field from the engine. */
+  async function addStarters(doc, s) {
+    const base = `${slug(doc.name)}${doc.setups.length > 1 ? `_${slug(s.id)}` : ""}`;
+    const outs = {};
+    const added = [];
+    for (const [type, tool, a] of STARTERS[kindOf(s)].map((x) => x.slice(0, 3))) {
+      const what = STARTERS[kindOf(s)].find((x) => x[0] === type)[3];
+      const { result } = await engine("opDefaults", doc, { type, setup: s.id, tool, machine: engineMachine() }, state.mesh);
+      const op = { id: nextOpId(doc), ...result };
+      if (a !== null) {
+        op.index_a = a;
+        op.name = `${type === "rough3d" ? "Rough" : "Finish"} at A${a}`;
+      }
+      s.operations.push(op);
+      added.push(`${op.id} (${type}${a !== null ? ` at A${a}` : ""})`);
+      if (!outs[what]) {
+        outs[what] = { name: `${base}_${Object.keys(outs).length + 1}_${what}`, title: `${doc.name}: ${what}`, operations: [] };
+        s.outputs.push(outs[what]);
+      }
+      outs[what].operations.push(op.id);
+    }
+    return added;
+  }
+
+  /** The mesh model a setup uses, its own: one shared with another setup is copied first. */
+  function ownModel(doc, s) {
+    const id = s.part.find((m) => doc.models.find((x) => x.id === m)?.kind === "mesh");
+    if (!id) return null;
+    const shared = doc.setups.some((o) => o !== s && o.part.includes(id));
+    if (!shared) return doc.models.find((x) => x.id === id);
+    const copy = { ...doc.models.find((x) => x.id === id), id: `${s.id}_part` };
+    doc.models = doc.models.filter((x) => x.id !== copy.id).concat(copy);
+    s.part = s.part.map((m) => (m === id ? copy.id : m));
+    return copy;
   }
 
   /**
-   * Import a mesh file. Into a project without a part it makes one (setup, stock, tools and a
-   * starter roughing + finishing); into one with a mesh it asks: replace it (OK) or add the
-   * new triangles to it (Cancel). Either way the part is placed again, the stock re-sized,
-   * the operations' defaults recomputed, and everything regenerated.
+   * Apply a setup configuration from the dialog to setup `s`: kind, machine, holding, the
+   * part placed again and the stock sized (when there is a mesh), the operations that do not
+   * fit the kind removed and the rest given the engine's defaults for it again, starters added
+   * when none are left. Returns { removed, added, recomputed }.
    */
-  async function importMesh(file, opts = readImportOptions()) {
-    showError("");
-    setStatus(`Importing ${file.name}...`, "busy");
-    let tris, ascii;
-    try {
-      ({ tris, ascii } = parseStl(new Uint8Array(await file.arrayBuffer())));
-    } catch (e) {
-      showError(`${file.name}: ${e.message}`);
-      setStatus("Import failed", "error");
-      return false;
+  async function applySetup(doc, s, cfg, tris) {
+    const kind = cfg.kind;
+    s.kind = kind;
+    if (cfg.machine) s.machine = cfg.machine;
+    if (cfg.setupName) s.name = cfg.setupName;
+    s.holding = { kind: kind === "vise" ? "vise" : "rotary_chuck", tailstock: kind !== "vise" && !!cfg.tailstock };
+    const model = ownModel(doc, s);
+    if (model && tris) {
+      const place = placePart(tris, { kind, axis: cfg.axis, up: cfg.axis, margin: cfg.margin, explicit: cfg.explicit, origin: cfg.origin });
+      model.axis = place.axis;
+      model.translate = place.translate.map(r3);
+      s.stock = place.stock;
+      ensureTools(doc, place.stock);
+    } else if (cfg.explicit) {
+      s.stock = kind === "vise" ? { shape: "box", min: [0, 0, -cfg.explicit.bz], max: [cfg.explicit.bx, cfg.explicit.by, 0] } : { shape: "cylinder", radius: cfg.explicit.dia / 2, length: cfg.explicit.len };
     }
-    if (opts.units === "inch") tris = tris.map((v) => v * 25.4);
+    // operations: keep what fits, with its defaults for the new part and kind
+    const types = state.tree?.types?.length ? state.tree.types : (await engine("opTypes")).result;
+    const removed = [], recomputed = [];
+    const keep = [];
+    const hasProfile = s.part.some((id) => doc.models.find((x) => x.id === id)?.kind === "profile");
+    for (const op of s.operations) {
+      const ty = types.find((t) => t.kind === op.type);
+      if (!ty || !fitsKind(ty, kind)) {
+        removed.push(`${op.id} (${op.type})`);
+        continue;
+      }
+      // turning works from a revolved profile only
+      if (!hasProfile && ty.geometry.length === 1 && ty.geometry[0] === "profile") {
+        removed.push(`${op.id} (${op.type}: needs a revolved profile, and the part is a mesh)`);
+        continue;
+      }
+      keep.push(op);
+    }
+    s.operations = keep;
+    for (const [i, op] of [...s.operations.entries()]) {
+      try {
+        const { result } = await engine("opDefaults", doc, { type: op.type, setup: s.id, tool: op.tool, machine: engineMachine() }, state.mesh);
+        const a = kind === "vise" ? 0 : op.index_a;
+        s.operations[i] = { ...result, id: op.id, enabled: op.enabled, ...(op.name ? { name: op.name } : {}), ...(op.color ? { color: op.color } : {}), ...(a !== undefined && result.index_a !== undefined ? { index_a: a } : {}) };
+        recomputed.push(op.id);
+      } catch (e) {
+        removed.push(`${op.id} (${op.type}: ${e.message})`);
+        s.operations[i] = null;
+      }
+    }
+    s.operations = s.operations.filter(Boolean);
+    const ids = new Set(s.operations.map((o) => o.id));
+    for (const o of s.outputs) o.operations = o.operations.filter((id) => ids.has(id));
+    s.outputs = s.outputs.filter((o) => o.operations.length);
+    const added = s.operations.length ? [] : await addStarters(doc, s);
+    return { removed, added, recomputed };
+  }
+
+  /** The parsed STL of the dialog's file, in mm, or (no file) the project's mesh. */
+  function trisOf(cfg) {
+    if (cfg.tris) return cfg.units === "inch" ? cfg.tris.map((v) => v * 25.4) : cfg.tris;
+    return state.mesh ? parseStl(state.mesh).tris : null;
+  }
+
+  /** A new part from the dialog (its file already parsed): into a project without a setup,
+   *  one is made; otherwise the dialog's setup is converted round it. */
+  async function importParsed(cfg) {
+    setStatus(`Importing ${cfg.file.name}...`, "busy");
+    let tris = trisOf(cfg);
     let doc;
     try {
       doc = readJob();
     } catch {
       doc = { schema_version: "0.2", name: "untitled", models: [], tools: [], setups: [] };
     }
-    // a 0.1 job is upgraded first; the editor then holds the 0.2 project
     if (doc.schema_version !== "0.2") doc = (await engine("checkProject", doc)).result.project;
     const fresh = !doc.setups?.length || !doc.setups.some((s) => s.operations.length);
-    const hadMesh = !!state.mesh && !!meshFileOf(doc);
-    if (hadMesh && !fresh && !window.confirm(`Replace the part with ${file.name}? (OK: replace it; Cancel: add ${file.name} to the part)`)) {
+    if (state.mesh && meshFileOf(doc) && !fresh && !window.confirm(`Replace the part with ${cfg.file.name}? (OK: replace it; Cancel: add ${cfg.file.name} to the part)`)) {
       const old = parseStl(state.mesh).tris;
       const both = new Float32Array(old.length + tris.length);
       both.set(old);
       both.set(tris, old.length);
       tris = both;
     }
-    const meshFile = `${slug(file.name)}.stl`;
-    const bytes = encodeStl(tris, `4cam: ${file.name}`);
-    const holding = fresh ? opts.holding : doc.setups[0].stock?.shape === "box" ? "vise" : "rotary";
-    const place = placePart(tris, { holding, axis: opts.axis, up: opts.up });
-    const model = { id: "part", name: file.name, kind: "mesh", file: meshFile, axis: place.axis, translate: place.translate.map(r3) };
+    const meshFile = `${slug(cfg.file.name)}.stl`;
+    const bytes = encodeStl(tris, `4cam: ${cfg.file.name}`);
+    setMesh(bytes, `${cfg.file.name} (${cfg.ascii ? "ASCII" : "binary"} STL${cfg.units === "inch" ? ", inch" : ""}, ${tris.length / 9} triangles)`);
+    let report;
     if (fresh) {
-      const name = doc.name && doc.name !== "untitled" ? doc.name : slug(file.name);
-      const machine = currentMachine();
+      const name = doc.name && doc.name !== "untitled" ? doc.name : cfg.name && cfg.name !== "untitled" ? cfg.name : slug(cfg.file.name);
       doc = {
         schema_version: "0.2",
         name,
-        models: [model],
-        tools: starterTools(place.stock),
-        setups: [{
-          id: "setup1",
-          name: holding === "vise" ? "Vise, top side" : "Rotary setup",
-          ...(machine?.id ? { machine: machine.id } : {}),
-          stock: place.stock,
-          clearance: 3,
-          holding: { kind: holding === "vise" ? "vise" : "rotary_chuck", tailstock: false },
-          part: ["part"],
-          spindle_rpm: 12000,
-          operations: [],
-          outputs: [],
-        }],
+        models: [{ id: "part", name: cfg.file.name, kind: "mesh", file: meshFile, axis: "x", translate: [0, 0, 0] }],
+        tools: [],
+        setups: [{ id: "setup1", name: KINDS[cfg.kind], stock: { shape: "cylinder", radius: 1, length: 1 }, clearance: 3, part: ["part"], spindle_rpm: 12000, operations: [], outputs: [] }],
       };
       p.name = name;
+      report = await applySetup(doc, doc.setups[0], cfg, tris);
     } else {
-      // the new part replaces the setups' parts; profiles go (the mesh is the part now)
-      doc.models = [...doc.models.filter((m) => m.id !== "part" && m.kind !== "mesh" && m.kind !== "profile"), model];
-      for (const s of doc.setups) {
-        s.part = ["part"];
-        if ((s.stock?.shape === "box") === (holding === "vise")) s.stock = place.stock;
+      // the new part for every mesh model; the dialog's setup converted, the others re-placed
+      for (const m of doc.models) if (m.kind === "mesh") Object.assign(m, { name: cfg.file.name, file: meshFile });
+      if (!doc.models.some((m) => m.kind === "mesh")) {
+        doc.models = doc.models.filter((m) => m.kind !== "profile").concat({ id: "part", name: cfg.file.name, kind: "mesh", file: meshFile, axis: "x", translate: [0, 0, 0] });
+        for (const s of doc.setups) s.part = ["part"];
+      }
+      const active = doc.setups.find((s) => s.id === state.tree?.setup) ?? doc.setups[0];
+      report = await applySetup(doc, active, cfg, tris);
+      for (const s of doc.setups.filter((x) => x !== active)) {
+        await applySetup(doc, s, { kind: kindOf(s), machine: s.machine, axis: kindOf(s) === "vise" ? "z" : "x", tailstock: s.holding?.tailstock }, tris);
       }
     }
-    setMesh(bytes, `${file.name} (${ascii ? "ASCII" : "binary"} STL${opts.units === "inch" ? ", inch" : ""}, ${tris.length / 9} triangles): ` +
-      `${place.size.map((v) => v.toFixed(2)).join(" x ")} mm, ` +
-      (holding === "vise" ? `on the vise, block ${place.stock.max[0]} x ${place.stock.max[1]} x ${-place.stock.min[2]} mm` : `on the rotary axis (front at X0), bar R${place.stock.radius} x ${place.stock.length} mm`));
-    if (fresh) {
-      await starterOps(doc, "setup1", holding);
-    } else {
-      // every operation's defaults again, for the new part; picked faces no longer apply
-      const dropped = [];
-      for (const s of doc.setups) {
-        for (const [i, op] of [...s.operations.entries()]) {
-          try {
-            const { result } = await engine("opDefaults", doc, { type: op.type, setup: s.id, tool: op.tool, machine: typeof machineArg() === "string" ? machineArg() : null }, state.mesh);
-            s.operations[i] = { ...result, id: op.id, enabled: op.enabled, ...(op.name ? { name: op.name } : {}), ...(op.color ? { color: op.color } : {}) };
-          } catch (e) {
-            dropped.push(`${op.id} (${op.type}: ${e.message})`);
-            s.operations[i] = null;
-          }
-        }
-        s.operations = s.operations.filter(Boolean);
-        const ids = new Set(s.operations.map((o) => o.id));
-        for (const o of s.outputs) o.operations = o.operations.filter((id) => ids.has(id));
-      }
-      if (dropped.length) showError(`Removed what no longer fits the new part: ${dropped.join("; ")}`);
-    }
-    writeJob(doc);
-    changed();
-    clearResults("");
-    await refreshAll();
-    await generate();
+    await commitSetupChange(doc, report, null);
     return true;
   }
 
-  function readImportOptions() {
-    return { units: $("importUnits").value, axis: $("importAxis").value, up: $("importAxis").value, holding: $("importHolding").value };
+  /** Write a changed project and regenerate; say what the change removed or added. */
+  async function commitSetupChange(doc, report, undoOf) {
+    writeJob(doc);
+    changed();
+    if (undoOf) keepUndo(undoOf.label, undoOf.job);
+    const s0 = doc.setups.find((s) => s.id === state.tree?.setup) ?? doc.setups[0];
+    const place = state.mesh && s0 ? placeInfo(doc, s0) : "";
+    $("meshInfo").textContent = `${state.meshName}${place ? `: ${place}` : ""}`;
+    clearResults("");
+    await refreshAll();
+    const notes = [];
+    if (report?.removed?.length) notes.push(`removed (they do not fit this setup): ${report.removed.join(", ")}`);
+    if (report?.added?.length) notes.push(`added: ${report.added.join(", ")}`);
+    await generate();
+    if (notes.length) showError(`Setup changed: ${notes.join("; ")}`);
+  }
+
+  /** "21.70 x 20.00 x 20.00 mm, on the rotary axis ..." for a setup's placed part. */
+  function placeInfo(doc, s) {
+    const m = doc.models.find((x) => s.part.includes(x.id) && x.kind === "mesh");
+    if (!m || !state.mesh) return "";
+    const tris = parseStl(state.mesh).tris;
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < tris.length; i += 3) {
+      const q = mapAxis([tris[i], tris[i + 1], tris[i + 2]], m.axis ?? "x");
+      for (let k = 0; k < 3; k++) {
+        lo[k] = Math.min(lo[k], q[k]);
+        hi[k] = Math.max(hi[k], q[k]);
+      }
+    }
+    const size = [0, 1, 2].map((k) => (hi[k] - lo[k]).toFixed(2)).join(" x ");
+    const st = s.stock;
+    const kind = kindOf(s);
+    const where = kind === "vise" ? `in the vise (${KINDS.vise}), block ${r3(st.max[0] - st.min[0])} x ${r3(st.max[1] - st.min[1])} x ${r3(st.max[2] - st.min[2])} mm` : `on the rotary axis (${KINDS[kind]}, front at X0), bar R${st.radius} x ${st.length} mm`;
+    return `${size} mm, ${where}`;
+  }
+
+  /** Import STL: the setup dialog (its type pre-selected from the current setup), then in. */
+  async function importMesh(file) {
+    showError("");
+    let parsed;
+    try {
+      parsed = parseStl(new Uint8Array(await file.arrayBuffer()));
+    } catch (e) {
+      showError(`${file.name}: ${e.message}`);
+      setStatus("Import failed", "error");
+      return false;
+    }
+    let s = null;
+    try {
+      const doc = readJob();
+      s = doc.setups?.find((x) => x.id === state.tree?.setup) ?? doc.setups?.[0] ?? null;
+    } catch {}
+    const preset = s
+      ? { kind: kindOf(s), machine: s.machine ?? currentMachine()?.id, setupName: s.name, tailstock: s.holding?.tailstock }
+      : { kind: p.pending?.kind ?? "rotary", machine: p.pending?.machine ?? currentMachine()?.id, margin: p.pending?.margin, explicit: p.pending?.explicit, units: p.pending?.units };
+    const cfg = await dialog.open("import", { ...preset, file, parsed });
+    if (!cfg) {
+      setStatus("Import cancelled", "ready");
+      return false;
+    }
+    if (cfg.machine) ctx.selectMachine(cfg.machine);
+    await importParsed(cfg);
+    return true;
+  }
+
+  /** Edit a setup: type, machine, stock, origin, holding. A new type converts the setup. */
+  async function editSetup(id) {
+    let doc;
+    try {
+      doc = readJob();
+    } catch (e) {
+      return showError(e.message);
+    }
+    if (doc.schema_version !== "0.2") doc = (await engine("checkProject", doc)).result.project;
+    const s = doc.setups.find((x) => x.id === (id ?? state.tree?.setup)) ?? doc.setups[0];
+    if (!s) return showError("No setup yet: import an STL first.");
+    const m = doc.models.find((x) => s.part.includes(x.id) && x.kind === "mesh");
+    const kind = kindOf(s);
+    const axis = kind === "vise" ? Object.entries(UP_AXIS).find(([, v]) => v === (m?.axis ?? "x"))?.[0] ?? "z" : m?.axis ?? "x";
+    const cfg = await dialog.open("edit", {
+      kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock,
+      stock: s.stock, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null,
+    });
+    if (!cfg) return false;
+    setStatus(`Changing the setup to ${KINDS[cfg.kind]}...`, "busy");
+    const before = $("job").value;
+    const probe = structuredClone(doc);
+    const ps = probe.setups.find((x) => x.id === s.id);
+    const types = state.tree?.types?.length ? state.tree.types : (await engine("opTypes")).result;
+    const going = ps.operations.filter((op) => !fitsKind(types.find((t) => t.kind === op.type) ?? { machine_needs: [] }, cfg.kind)).map((op) => `${op.id} (${op.type})`);
+    if (going.length && !window.confirm(`Changing "${s.name || s.id}" to ${KINDS[cfg.kind]} removes ${going.join(", ")}: they do not fit that setup. Starter operations are added if none are left. Go on? (You can undo it.)`)) {
+      setStatus("Setup unchanged", "ready");
+      return false;
+    }
+    const report = await applySetup(doc, doc.setups.find((x) => x.id === s.id), cfg, m && state.mesh ? parseStl(state.mesh).tris : null);
+    await commitSetupChange(doc, report, { label: `Setup "${s.name || s.id}" changed to ${KINDS[cfg.kind]}.`, job: before });
+    if (cfg.machine) ctx.selectMachine(cfg.machine);
+    return report;
+  }
+
+  /** Add a setup: the dialog's type, the same part, its own placement and starters. */
+  async function addSetup() {
+    let doc;
+    try {
+      doc = readJob();
+    } catch (e) {
+      return showError(e.message);
+    }
+    if (doc.schema_version !== "0.2") doc = (await engine("checkProject", doc)).result.project;
+    const meshModel = doc.models.find((x) => x.kind === "mesh");
+    if (!meshModel || !state.mesh) return showError("Import an STL first: a new setup needs the part as a mesh.");
+    let n = doc.setups.length + 1;
+    while (doc.setups.some((s) => s.id === `setup${n}`)) n++;
+    const cfg = await dialog.open("add", { kind: "vise", machine: currentMachine()?.id, setupName: `Setup ${n}`, hasMesh: true, tris: parseStl(state.mesh).tris });
+    if (!cfg) return false;
+    setStatus(`Adding a ${KINDS[cfg.kind]} setup...`, "busy");
+    const before = $("job").value;
+    const model = { ...meshModel, id: `setup${n}_part` };
+    doc.models.push(model);
+    const s = { id: `setup${n}`, name: cfg.setupName || KINDS[cfg.kind], stock: { shape: "cylinder", radius: 1, length: 1 }, clearance: 3, part: [model.id], spindle_rpm: 12000, operations: [], outputs: [] };
+    doc.setups.push(s);
+    const report = await applySetup(doc, s, cfg, parseStl(state.mesh).tris);
+    if (state.tree) state.tree.setup = s.id;
+    await commitSetupChange(doc, report, { label: `Setup "${s.name}" added.`, job: before });
+    if (cfg.machine) ctx.selectMachine(cfg.machine);
+    return report;
   }
 
   // ------------------------------------------------------------ wiring
@@ -397,10 +661,8 @@ export function setupProject(ctx) {
     $("importStlFile").value = "";
     if (f) await importMesh(f);
   });
-  $("importHolding").addEventListener("change", () => {
-    const vise = $("importHolding").value === "vise";
-    $("importAxisLabel").textContent = vise ? "up" : "axis";
-    $("importAxis").value = vise ? "z" : "x";
+  $("undoBar").addEventListener("click", (ev) => {
+    if (ev.target.id === "undoSetup") undo();
   });
   // drop a mesh to import it, or a project to open it, anywhere on the page
   document.addEventListener("dragover", (ev) => {
@@ -429,5 +691,5 @@ export function setupProject(ctx) {
   });
   show();
 
-  return { changed, clean, mayDiscard, newProject, openText, openFile, save, importMesh, state: p };
+  return { changed, clean, mayDiscard, newProject, openText, openFile, save, importMesh, editSetup, addSetup, undo, dialog, state: p };
 }

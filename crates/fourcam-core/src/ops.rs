@@ -383,6 +383,18 @@ pub fn registry() -> Vec<OperationType> {
     ]
 }
 
+/// Whether an operation type fits a setup kind: "rotary" takes the operations that turn
+/// the part (and engrave/V-carve, wrapped), "indexed" the 3-axis ones (at a fixed A),
+/// "vise" everything that needs no rotary axis. Unknown kinds take everything.
+pub fn fits_setup(t: &OperationType, setup_kind: &str) -> bool {
+    match setup_kind {
+        "rotary" => !t.machine_needs.contains(&"xyz"),
+        "indexed" => t.machine_needs.contains(&"xyz"),
+        "vise" => !t.machine_needs.contains(&"rotary_a"),
+        _ => true,
+    }
+}
+
 pub fn find(kind: &str) -> Option<OperationType> {
     registry().into_iter().find(|t| t.kind == kind)
 }

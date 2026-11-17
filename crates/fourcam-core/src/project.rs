@@ -167,6 +167,11 @@ pub struct Setup {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// What kind of setup this is: "rotary" (4th axis, simultaneous: the rotary
+    /// operations), "indexed" (rotary 3+1: 3-axis operations at fixed A angles) or "vise"
+    /// (3-axis on a block). Absent: a bar takes any operation, a block the 3-axis ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     pub stock: StockDef,
     #[serde(default = "default_clearance")]
     pub clearance: f64,
@@ -253,6 +258,7 @@ impl Project {
                 id: "setup1".into(),
                 name: "Rotary setup".into(),
                 machine: job.machine.clone(),
+                kind: None,
                 stock: StockDef::Cylinder {
                     radius: job.stock.radius,
                     length: job.stock.length,
@@ -345,7 +351,30 @@ impl Project {
             .collect();
         let mut out = Vec::new();
         for s in &self.setups {
+            if let Some(k) = s.kind.as_deref() {
+                let block = matches!(s.stock, StockDef::Box { .. });
+                match k {
+                    "vise" if !block => out.push(format!("{}: a vise setup needs box stock", s.id)),
+                    "rotary" | "indexed" if block => {
+                        out.push(format!("{}: a {k} setup needs bar stock", s.id))
+                    }
+                    "vise" | "rotary" | "indexed" => {}
+                    _ => out.push(format!(
+                        "{}: kind {k:?}: use \"rotary\", \"indexed\" or \"vise\"",
+                        s.id
+                    )),
+                }
+            }
             for o in &s.operations {
+                let kind = crate::ops::kind_of(&o.op);
+                if let (Some(k), Some(t)) = (s.kind.as_deref(), crate::ops::find(kind)) {
+                    if !crate::ops::fits_setup(&t, k) {
+                        out.push(format!(
+                            "{} / {}: {kind} does not fit a {k} setup",
+                            s.id, o.id
+                        ));
+                    }
+                }
                 let v = serde_json::to_value(&o.op).unwrap_or(Value::Null);
                 let has_inline = inline.iter().any(|t| t.number == o.op.tool());
                 for e in crate::ops::check(&v, has_inline.then_some(inline.as_slice())) {

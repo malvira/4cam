@@ -51,7 +51,24 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // a vise setup (box stock) takes the 3-axis types; a rotary setup takes everything, the
   // 3-axis types indexed to a fixed A (3+1)
   const isBox = (s) => s?.stock?.shape === "box";
-  const fits = (ty, s) => !isBox(s) || !ty.machine_needs.includes("rotary_a");
+  // the setup's kind (rotary, indexed 3+1 or vise) decides which types fit; a bar without a
+  // kind (older projects) takes everything
+  const kindOfSetup = (s) => s?.kind ?? (isBox(s) ? "vise" : "rotary");
+  const fits = (ty, s) => {
+    const k = kindOfSetup(s);
+    if (k === "rotary") return !s?.kind || !ty.machine_needs.includes("xyz");
+    if (k === "indexed") return ty.machine_needs.includes("xyz");
+    return !ty.machine_needs.includes("rotary_a");
+  };
+  const KIND_NAMES = { rotary: "Rotary 4th axis", indexed: "Indexed 3+1", vise: "3-axis vise" };
+  function setupSummary(s) {
+    const st = s.stock || {};
+    const r = (v) => +(+v).toFixed(3);
+    const stock = st.shape === "box" ? `block ${r(st.max[0] - st.min[0])} x ${r(st.max[1] - st.min[1])} x ${r(st.max[2] - st.min[2])} mm`
+      : st.radius ? `bar R${st.radius} x ${st.length} mm` : "stock from the previous setup";
+    const hold = s.holding?.kind === "vise" ? "vise" : `chuck${s.holding?.tailstock ? " + tailstock" : ""}`;
+    return `${KIND_NAMES[kindOfSetup(s)]}${s.kind ? "" : " (any operation)"} · ${s.machine ?? "machine: the selected one"} · ${stock} · ${hold}`;
+  }
   const pointsText = (v) => v.map((q) => q.join(" ")).join("; ");
 
   function render() {
@@ -66,7 +83,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       .map((x) => `<option value="${esc(x.id)}" ${x.id === t.setup ? "selected" : ""}>${esc(x.name || x.id)}</option>`)
       .join("");
     let html = `<div class="row small"><label for="treeSetup">Setup</label><select id="treeSetup">${setupSel}</select>
-      <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>`;
+      <button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
+      <button type="button" id="treeAddSetup" title="Another setup for the same part (e.g. the other side, or a vise setup)">+ Setup</button>
+      <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>
+      <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>`;
     if (t.upgraded) html += `<div class="muted small">0.1 job shown as a 0.2 project; it is saved as 0.2 on the first edit.</div>`;
     let n = 0;
     // estimated times from the last Generate of this setup
@@ -306,6 +326,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         render();
         showError(`Cannot add ${ty.title}: ${e.message}`);
       }
+      return;
+    }
+    if (el.id === "treeEditSetup") {
+      await window.__4cam.project.editSetup(t.setup);
+      return;
+    }
+    if (el.id === "treeAddSetup") {
+      await window.__4cam.project.addSetup();
       return;
     }
     if (el.id === "cancelDraft") {

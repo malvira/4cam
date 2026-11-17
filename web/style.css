@@ -119,3 +119,27 @@ body.stale #gcode, body.stale #view3d, body.stale #side { opacity: 0.45; }
 .empty-state { padding: 18px; border: 2px dashed var(--line); border-radius: 8px; text-align: center; color: var(--muted, #6b7280); }
 .empty-state button { margin: 8px 4px 0; }
 .stale-banner button { background: #b45309; color: #fff; border: none; border-radius: 4px; padding: 3px 10px; margin-left: 6px; cursor: pointer; }
+
+/* the setup dialog: New project, Import STL, Edit / Add setup */
+#setupDialog { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); padding: 18px 20px; width: min(640px, 94vw); max-height: 92vh; }
+#setupDialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+#setupDialog h2 { margin: 0 0 10px; font-size: 18px; }
+#setupDialog fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; padding: 8px 10px; }
+#setupDialog legend { padding: 0 4px; font-weight: 600; }
+.sd-grid { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.sd-kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.sd-kind { display: flex; flex-direction: column; gap: 4px; border: 2px solid var(--line); border-radius: 8px; padding: 10px; cursor: pointer; }
+.sd-kind input { position: absolute; opacity: 0; pointer-events: none; }
+.sd-kind svg { width: 64px; height: 42px; color: #93c5fd; }
+.sd-kind b { font-size: 15px; }
+.sd-kind small { color: var(--muted, #9ca3af); line-height: 1.3; }
+.sd-kind:has(input:checked) { border-color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
+.sd-kind.disabled { opacity: 0.4; cursor: not-allowed; }
+#sdPreview { width: 100%; height: auto; background: rgba(0, 0, 0, 0.25); border-radius: 6px; margin-top: 8px; }
+#setupDialog input[type=number] { width: 70px; }
+.sd-buttons { justify-content: flex-end; margin-top: 10px; }
+@media (max-width: 600px) { .sd-kinds { grid-template-columns: 1fr; } }
+.setup-summary { margin: 2px 0 6px; }
+.undo-banner { background: #e0f2fe; border: 1px solid #38bdf8; color: #0c4a6e; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; }
+.undo-banner button { margin-left: 6px; }
+.undo-banner button { background: #0369a1; color: #fff; border: none; border-radius: 4px; padding: 3px 10px; cursor: pointer; }
