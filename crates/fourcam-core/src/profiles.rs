@@ -880,13 +880,15 @@ pub fn check_limits(job: &Job, tps: &[Toolpath], m: &MachineProfile) -> Vec<Limi
                             let dt = len / feed;
                             // what the controller is asked for, as the post writes it
                             let f = match m.post.feed_mode {
-                                FeedMode::DegreesAsLength => {
-                                    ((nx - x0).powi(2) + (nr - r0).powi(2) + (na - pa).powi(2))
-                                        .sqrt()
-                                        / dt
-                                }
-                                FeedMode::LinearOnly => (nx - x0).hypot(nr - r0) / dt,
                                 FeedMode::InverseTime => feed,
+                                mode => {
+                                    crate::machine::feed_length(
+                                        mode,
+                                        m.post.surface_radius_pad,
+                                        [nx - x0, 0.0, nr - r0, na - pa],
+                                        (r0 + nr) / 2.0,
+                                    ) / dt
+                                }
                             };
                             fmax = fmax.max(f);
                             amax_rate = amax_rate.max((na - pa).abs() / dt);
@@ -1488,6 +1490,7 @@ fn fusion_machine(v: &Value, stem: &str) -> Result<Import, String> {
         Machine {
             name: String::new(),
             feed_mode,
+            surface_radius_pad: 0.0,
             decimals: 3,
             origin_comment: None,
             preamble: vec!["G21 G90 G94".into(), "G17".into()],

@@ -1,0 +1,78 @@
+{
+  "schema_version": "0.2",
+  "name": "drilling",
+  "models": [],
+  "tools": [
+    {
+      "number": 1,
+      "description": "4 mm flat",
+      "kind": "flat",
+      "diameter": 4.0,
+      "flute_length": 15
+    }
+  ],
+  "setups": [
+    {
+      "id": "vise",
+      "machine": "makera-carvera-4axis",
+      "stock": {
+        "shape": "box",
+        "min": [
+          0,
+          0,
+          -10
+        ],
+        "max": [
+          40,
+          40,
+          0
+        ]
+      },
+      "clearance": 3.0,
+      "holding": {
+        "kind": "vise",
+        "tailstock": false
+      },
+      "part": [],
+      "spindle_rpm": 12000,
+      "operations": [
+        {
+          "id": "op1",
+          "type": "drill",
+          "tool": 1,
+          "points": [
+            [
+              10,
+              10
+            ],
+            [
+              30,
+              10
+            ],
+            [
+              30,
+              30
+            ],
+            [
+              10,
+              30
+            ]
+          ],
+          "depth": 3.0,
+          "peck": 1.0,
+          "retract": 1.0,
+          "feed": 60.0
+        }
+      ],
+      "outputs": [
+        {
+          "name": "drilling",
+          "title": "drilling",
+          "operations": [
+            "op1"
+          ]
+        }
+      ]
+    }
+  ]
+}

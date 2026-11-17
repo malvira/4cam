@@ -1,8 +1,10 @@
 //! Machining time from G-code text and a machine profile, for files 4cam made or any other.
 //!
 //! Each motion line becomes a block. Its nominal time comes from F as the controller reads
-//! it: G94 feeds as degrees-as-length (A degrees count like mm) or linear-only (A degrees do
-//! not count unless the move is pure rotation), G93 as inverse time. That time is capped by
+//! it: G94 feeds as degrees-as-length (A degrees count like mm), linear-only (A degrees do
+//! not count unless the move is pure rotation) or surface speed (the rotation counted as its
+//! arc at the tool's distance from the axis plus the profile's pad), G93 as inverse time.
+//! That time is capped by
 //! each axis's top feed (and the controller's feed cap). Rapids run at the slowest axis's
 //! rapid rate. A look-ahead planner then gives each block an entry and exit speed:
 //! - junction speeds come from the junction-deviation rule (as in Grbl);
@@ -31,6 +33,8 @@ pub struct Dynamics {
     /// Controller feed cap (mm/min).
     pub feed_cap: f64,
     pub feed_mode: FeedMode,
+    /// `surface_speed` radius pad (mm).
+    pub surface_radius_pad: f64,
     /// Junction deviation (mm).
     pub junction_deviation: f64,
     pub tool_change_s: f64,
@@ -51,6 +55,7 @@ impl Dynamics {
             accel: [500.0, 500.0, 500.0, 3600.0],
             feed_cap: p.max_feed.unwrap_or(f64::INFINITY),
             feed_mode: p.post.feed_mode,
+            surface_radius_pad: p.post.surface_radius_pad,
             junction_deviation: 0.02,
             tool_change_s: match p.tool_changer.as_ref().map(|t| t.kind.as_str()) {
                 Some("atc") => 20.0,
@@ -260,6 +265,9 @@ pub fn estimate_gcode(text: &str, dy: &Dynamics) -> Estimate {
                 );
             }
         }
+        // the tool's mean distance from the rotary axis (surface-speed feeds)
+        let yz = |p: &[Option<f64>; 4]| p[1].unwrap_or(0.0).hypot(p[2].unwrap_or(0.0));
+        let radius = (yz(&pos) + yz(&end)) / 2.0;
         pos = end;
         let lin = (xy_len * xy_len + d[2] * d[2]).sqrt();
         let len = (lin * lin + d[3] * d[3]).sqrt();
@@ -285,6 +293,10 @@ pub fn estimate_gcode(text: &str, dy: &Dynamics) -> Estimate {
                     let f = f.min(dy.feed_cap);
                     match dy.feed_mode {
                         FeedMode::LinearOnly if lin > 1e-9 => 60.0 * lin / f,
+                        FeedMode::SurfaceSpeed => {
+                            let arc = (radius + dy.surface_radius_pad) * d[3].to_radians().abs();
+                            60.0 * (lin * lin + arc * arc).sqrt() / f
+                        }
                         _ => 60.0 * len / f,
                     }
                 }
@@ -439,6 +451,7 @@ mod tests {
             accel: [accel; 4],
             feed_cap: f64::INFINITY,
             feed_mode: FeedMode::DegreesAsLength,
+            surface_radius_pad: 0.0,
             junction_deviation: 0.02,
             tool_change_s: 30.0,
             spindle_start_s: 2.0,

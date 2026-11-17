@@ -578,6 +578,7 @@ fn cmd_verify(o: &Opts) -> Result<ExitCode, String> {
         } else {
             FeedMode::DegreesAsLength
         },
+        surface_radius_pad: 0.0,
     };
     let issues = verify_gcode(&text, &limits);
     println!(

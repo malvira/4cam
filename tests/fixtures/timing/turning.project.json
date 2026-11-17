@@ -1,0 +1,74 @@
+{
+  "schema_version": "0.2",
+  "name": "turning",
+  "models": [
+    {
+      "id": "bar",
+      "name": "bar",
+      "kind": "profile",
+      "points": [
+        [
+          -40.0,
+          8.0
+        ],
+        [
+          10.0,
+          8.0
+        ]
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "number": 1,
+      "description": "4 mm flat",
+      "kind": "flat",
+      "diameter": 4.0,
+      "flute_length": 15
+    }
+  ],
+  "setups": [
+    {
+      "id": "rotary",
+      "machine": "makera-z1-4axis",
+      "stock": {
+        "shape": "cylinder",
+        "radius": 10.0,
+        "length": 30.0
+      },
+      "clearance": 3.0,
+      "holding": {
+        "kind": "rotary_chuck",
+        "tailstock": false
+      },
+      "part": [
+        "bar"
+      ],
+      "spindle_rpm": 12000,
+      "operations": [
+        {
+          "id": "op1",
+          "type": "rotary_turning",
+          "tool": 1,
+          "rough_depth": 1.0,
+          "rough_step": 2.0,
+          "rough_feed": 240.0,
+          "finish_allowance": 0.0,
+          "finish_step": 2.0,
+          "finish_feed": 240.0,
+          "plunge_feed": 60.0,
+          "segment_deg": 6.0
+        }
+      ],
+      "outputs": [
+        {
+          "name": "turning",
+          "title": "turning",
+          "operations": [
+            "op1"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -66,7 +66,9 @@ assert.equal(imp.kind, "tools");
 assert.equal(imp.profile.tools.length, 3);
 const lim = cam.planAndPost(job, "carvera-air");
 assert.equal(lim.machine_id, "makera-carvera-air-4axis");
-assert.ok(lim.limits.some((i) => i.message.includes("F5209")), JSON.stringify(lim.limits));
+// the Carvera reads F on A moves as surface mm/min (no feed above the cap now), but its stock
+// firmware turns A at most 5 RPM: the knob's 5209 deg/min is flagged
+assert.ok(lim.limits.some((i) => i.message.includes("5209 deg/min") && i.message.includes("1800 deg/min")), JSON.stringify(lim.limits));
 console.log(`profiles: ${reg.machines.length} machines, ${reg.libraries[0].tools.length} starter tools, limits ${lim.limits.length}`);
 // operation registry and 0.2 projects
 const types = cam.opTypes();

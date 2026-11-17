@@ -71,7 +71,8 @@ if a machine has none.
 
 | Field | Meaning |
 | --- | --- |
-| `feed_mode` | How the controller reads F on moves that include A: `degrees_as_length` (GRBL/Smoothieware/Makera, F along the X-Z-A vector with degrees counted as mm), `linear_only`, or `inverse_time` (G93). |
+| `feed_mode` | How the controller reads F on moves that include A: `degrees_as_length` (GRBL/Smoothieware/Makera Z1, F along the X-Z-A vector with degrees counted as mm), `linear_only` (F for the linear axes; a pure rotation in deg/min), `inverse_time` (G93), or `surface_speed` (Makera Carvera: mm/min of surface, the rotation counted as its arc at the tool's distance from the axis, from the work Y and Z, plus `surface_radius_pad`). |
+| `surface_radius_pad` | `surface_speed` only: mm the controller adds to that distance (stock Carvera firmware: 15, i.e. 30 mm on the diameter; community firmware 2.1.0c: 0). |
 | `decimals` | Number of decimals in axis words. |
 | `origin_comment`, `preamble`, `reset_rotary`, `tool_change`, `spindle_on`, `dwell`, `postamble` | Lines of G-code. They may contain `{tool}`, `{rpm}` and `{safe}`. |
 
@@ -234,7 +235,17 @@ repository:
 - **Carvera and Carvera Air 4-axis:** A about +X, 4000 mm/min, 6-tool changer, no travel or
   spindle limits. Ours come from published specs and are marked as such in `notes`.
 - **Feed mode:** the post uses `FEED_DPM` with `DPM_COMBINATION`, which is what 4cam calls
-  `degrees_as_length`. It matches the Z1 profile that produced the cut knob G-code.
+  `degrees_as_length`. It matches the Z1 profile that produced the cut knob G-code (cut on
+  Mar's Z1, 2026-11-03: the Z1 counts degrees as distance).
+- **Carvera and Carvera Air feeds:** the Carvera firmware documents its own rule, which these
+  profiles follow (`surface_speed`): on G1/G2/G3 with A, F is mm/min of surface at a radius it
+  estimates from the work Y and Z, and a pure rotation turns F into a rate through that
+  circumference; G0 is not limited this way. The stock firmware adds 30 mm to the diameter
+  (`surface_radius_pad` 15) and caps the rotary at 5 RPM (A `max_feed` 1800 deg/min). The
+  community firmware 2.1.0c drops the padding and uses the configured rate, about 6.6 RPM
+  (pad 0, 2376 deg/min). Sources:
+  [rotary feed rate](https://carvera-community.gitbook.io/docs/firmware/features/rotary-a-feed-rate),
+  [firmware 2.1.0c](https://carvera-community.gitbook.io/docs/updates/firmware-controller-2.1.0c).
 - **Where `Carvera.cps` differs from the 4cam Z1 templates** (none of these change feeds or
   motion):
   - the tool change is `T1M6`, where ours is `M6 T1`;

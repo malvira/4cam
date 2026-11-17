@@ -18,6 +18,13 @@ fn fill(template: &str, tool: u32, rpm: u32, safe: &str) -> String {
 }
 
 /// Convert one program's toolpath to G-code. Lines end with `\n`.
+/// F for linear-only controllers: a helix's linear part can be a few hundredths of a mm per
+/// move, so F is small; enough decimals to keep it within 0.1 %.
+fn fine_feed(f: f64) -> String {
+    let digits = (3 - f.abs().max(1e-9).log10().floor() as i32).clamp(0, 4) as usize;
+    format!("{f:.digits$}")
+}
+
 pub fn post(tp: &Toolpath, machine: &Machine) -> String {
     post_marked(tp, machine).0
 }
@@ -133,7 +140,17 @@ pub fn post_lines(
                                 format!("{:.0}", (lin * lin + da * da).sqrt() / time)
                             }
                             FeedMode::LinearOnly => {
-                                format!("{:.0}", if lin > 1e-9 { lin } else { da.abs() } / time)
+                                fine_feed(if lin > 1e-9 { lin } else { da.abs() } / time)
+                            }
+                            FeedMode::SurfaceSpeed => {
+                                let radius = (prev[1].hypot(prev[2]) + m[1].hypot(m[2])) / 2.0;
+                                let len = crate::machine::feed_length(
+                                    FeedMode::SurfaceSpeed,
+                                    machine.surface_radius_pad,
+                                    [dx, dy, dz, da],
+                                    radius,
+                                );
+                                format!("{:.0}", len / time)
                             }
                         };
                         let aw = if changed(Some(s.a), a) {
@@ -249,19 +266,28 @@ pub fn post_lines(
                 let f = match machine.feed_mode {
                     FeedMode::DegreesAsLength => (dx * dx + dz * dz + da * da).sqrt() / dt,
                     FeedMode::LinearOnly => {
+                        // a pure rotation: the controller reads F as deg/min
                         let lin = dx.hypot(dz);
                         if lin > 1e-6 {
                             lin / dt
                         } else {
-                            *feed
+                            da.abs() / dt
                         }
                     }
                     FeedMode::InverseTime => 1.0 / dt,
+                    FeedMode::SurfaceSpeed => {
+                        crate::machine::feed_length(
+                            FeedMode::SurfaceSpeed,
+                            machine.surface_radius_pad,
+                            [dx, 0.0, dz, da],
+                            (q(z0) + q(*r)) / 2.0,
+                        ) / dt
+                    }
                 };
-                let mut fw = if machine.feed_mode == FeedMode::InverseTime {
-                    format!("{f:.3}")
-                } else {
-                    format!("{f:.0}")
+                let mut fw = match machine.feed_mode {
+                    FeedMode::InverseTime => format!("{f:.3}"),
+                    FeedMode::LinearOnly => fine_feed(f),
+                    _ => format!("{f:.0}"),
                 };
                 // on very short moves the printed (rounded) coordinates can descend faster than
                 // the exact ones: slow such a move so the program as written stays within the
@@ -273,6 +299,12 @@ pub fn post_lines(
                         FeedMode::DegreesAsLength => (px * px + pz * pz + pa * pa).sqrt(),
                         FeedMode::LinearOnly => px.hypot(pz),
                         FeedMode::InverseTime => 1.0,
+                        FeedMode::SurfaceSpeed => crate::machine::feed_length(
+                            FeedMode::SurfaceSpeed,
+                            machine.surface_radius_pad,
+                            [px, 0.0, pz, pa],
+                            (p(z0) + p(*r)) / 2.0,
+                        ),
                     };
                     let fv: f64 = fw.parse().unwrap_or(f);
                     if fv > 0.0 && -pz * fv / span > plunge_cap * 1.02 {

@@ -672,6 +672,7 @@ pub fn limits_for(tp: &Toolpath, machine: &Machine) -> Limits {
         plunge_feed: if plunge.is_finite() { plunge } else { 60.0 },
         safe_r: tp.safe_r,
         feed_mode: machine.feed_mode,
+        surface_radius_pad: machine.surface_radius_pad,
     }
 }
 

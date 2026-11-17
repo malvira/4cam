@@ -15,6 +15,8 @@ pub struct Limits {
     /// Radius above which X/A rapids are allowed.
     pub safe_r: f64,
     pub feed_mode: FeedMode,
+    /// `surface_speed` radius pad (mm), see [`crate::machine::Machine::surface_radius_pad`].
+    pub surface_radius_pad: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -158,14 +160,15 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                     let dz = z1 - z0;
                     if dz < 0.0 && f > 0.0 {
                         let dx = tx.zip(x).map_or(0.0, |(p, q)| p - q);
-                        let dy = ny.zip(y).map_or(0.0, |(p, q)| p - q);
-                        let dx = dx.hypot(dy);
-                        let da = ta - a;
-                        let time = match limits.feed_mode {
-                            FeedMode::DegreesAsLength => (dx * dx + dz * dz + da * da).sqrt() / f,
-                            FeedMode::LinearOnly => dx.hypot(dz) / f,
-                            FeedMode::InverseTime => 1.0 / f,
-                        };
+                        let (y0, y1) = (y.unwrap_or(0.0), ny.or(y).unwrap_or(0.0));
+                        let radius = (y0.hypot(z0) + y1.hypot(z1)) / 2.0;
+                        let len = crate::machine::feed_length(
+                            limits.feed_mode,
+                            limits.surface_radius_pad,
+                            [dx, y1 - y0, dz, ta - a],
+                            radius,
+                        );
+                        let time = len / f;
                         let rate = if time > 0.0 {
                             -dz / time
                         } else {
@@ -199,6 +202,7 @@ mod tests {
             plunge_feed: 60.0,
             safe_r: 15.5,
             feed_mode: FeedMode::DegreesAsLength,
+            surface_radius_pad: 0.0,
         }
     }
 

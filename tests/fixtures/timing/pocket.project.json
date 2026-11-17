@@ -1,0 +1,67 @@
+{
+  "schema_version": "0.2",
+  "name": "pocket",
+  "models": [],
+  "tools": [
+    {
+      "number": 1,
+      "description": "4 mm flat",
+      "kind": "flat",
+      "diameter": 4.0,
+      "flute_length": 15
+    }
+  ],
+  "setups": [
+    {
+      "id": "vise",
+      "machine": "makera-carvera-4axis",
+      "stock": {
+        "shape": "box",
+        "min": [
+          0,
+          0,
+          -10
+        ],
+        "max": [
+          40,
+          40,
+          0
+        ]
+      },
+      "clearance": 3.0,
+      "holding": {
+        "kind": "vise",
+        "tailstock": false
+      },
+      "part": [],
+      "spindle_rpm": 12000,
+      "operations": [
+        {
+          "id": "op1",
+          "type": "pocket",
+          "tool": 1,
+          "rect": [
+            5,
+            5,
+            35,
+            25
+          ],
+          "depth": 2.0,
+          "step_down": 1.0,
+          "stepover": 0.5,
+          "feed": 600.0,
+          "plunge_feed": 60.0
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pocket",
+          "title": "pocket",
+          "operations": [
+            "op1"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,37 @@ pub enum FeedMode {
     LinearOnly,
     /// G93 inverse time: F = 1 / move time in minutes.
     InverseTime,
+    /// F is mm/min along the move, the rotation counted as its arc at the tool's radius as
+    /// the controller estimates it: the distance of the work Y, Z position from the axis plus
+    /// [`Machine::surface_radius_pad`]. Pure linear moves are plain mm/min. This is how
+    /// Makera's Carvera firmware reads F on moves with A (see docs/profiles.md).
+    SurfaceSpeed,
+}
+
+/// The distance the controller divides by F (mm/min) for a move of `d` = (X, Y, Z mm, A deg)
+/// with the tool `radius` mm from the rotary axis (mean over the move); `pad` is the
+/// surface-speed radius pad. Inverse time has no such distance (1).
+pub fn feed_length(mode: FeedMode, pad: f64, d: [f64; 4], radius: f64) -> f64 {
+    let lin = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    match mode {
+        FeedMode::DegreesAsLength => (lin * lin + d[3] * d[3]).sqrt(),
+        FeedMode::LinearOnly => {
+            if lin > 1e-9 {
+                lin
+            } else {
+                d[3].abs()
+            }
+        }
+        FeedMode::InverseTime => 1.0,
+        FeedMode::SurfaceSpeed => {
+            let arc = (radius.abs() + pad) * d[3].to_radians().abs();
+            (lin * lin + arc * arc).sqrt()
+        }
+    }
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 /// A machine/controller profile, normally loaded from `machines/*.json`.
@@ -21,6 +52,10 @@ pub enum FeedMode {
 pub struct Machine {
     pub name: String,
     pub feed_mode: FeedMode,
+    /// `surface_speed` only: mm the controller adds to the tool's distance from the axis when
+    /// it turns F into a rotation rate (stock Carvera firmware: 15, i.e. 30 mm on the diameter).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub surface_radius_pad: f64,
     /// Decimals for axis words.
     #[serde(default = "default_decimals")]
     pub decimals: usize,

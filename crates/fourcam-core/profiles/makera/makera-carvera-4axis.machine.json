@@ -13,6 +13,14 @@
     {
       "url": "https://www.creativebloq.com/buying-guides/the-best-cnc-machines-the-crafting-revolution-starts-here",
       "note": "work area 360 x 240 x 140 mm, 200 W spindle up to 15000 rpm, 6-slot ATC (review, not a Makera spec sheet)"
+    },
+    {
+      "url": "https://carvera-community.gitbook.io/docs/firmware/features/rotary-a-feed-rate",
+      "note": "Carvera firmware: on G1/G2/G3 with A, F is mm/min of surface at a radius estimated from the work Y and Z; pure-A moves convert F through that circumference; G0 is not limited this way. Stock firmware adds 30 mm to the diameter and caps the rotary at 5 RPM."
+    },
+    {
+      "url": "https://carvera-community.gitbook.io/docs/updates/firmware-controller-2.1.0c",
+      "note": "Community firmware 2.1.0c drops the 5 RPM cap for the configured rate (about 6.6 RPM on the harmonic-drive 4th axis) and the +30 mm padding"
     }
   ],
   "kinematics": {
@@ -65,7 +73,7 @@
         "carries": "workpiece",
         "handedness": "right",
         "continuous": true,
-        "max_feed": 4000
+        "max_feed": 1800
       }
     ],
     "spindle_axis": [
@@ -87,7 +95,8 @@
   },
   "post": {
     "name": "Makera Carvera (C1) with 4th axis",
-    "feed_mode": "degrees_as_length",
+    "feed_mode": "surface_speed",
+    "surface_radius_pad": 15,
     "decimals": 3,
     "origin_comment": "Zero: X0 front face, Y0/Z0 rotation axis, A rotates about X",
     "preamble": [
@@ -106,6 +115,7 @@
   },
   "notes": [
     "Travel limits are the published work area placed at 0..size; the Fusion file does not define them.",
-    "Spindle range and 4th-axis envelope are not confirmed by a Makera spec sheet."
+    "Spindle range and 4th-axis envelope are not confirmed by a Makera spec sheet.",
+    "Feeds with A follow the stock Makera firmware (surface speed, radius + 15 mm, A at most 5 RPM = 1800 deg/min). For the community firmware 2.1.0c set surface_radius_pad to 0 and the A max_feed to 2376 (6.6 RPM)."
   ]
 }

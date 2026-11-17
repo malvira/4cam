@@ -294,7 +294,7 @@ try {
   const info = await js("document.getElementById('machineInfo').textContent");
   check("Carvera profile shows its limits", /X 360 mm/.test(info) && /ATC 6 slots/.test(info), info);
   const lim = await js("document.getElementById('limits').innerText");
-  check("limit check flags the feed cap (F5209 > 4000 mm/min)", /Carvera/.test(lim) && /F5209/.test(lim), lim.split("\n")[1] || lim);
+  check("limit check flags the Carvera's 5 RPM rotary cap (5209 > 1800 deg/min)", /Carvera/.test(lim) && /5209 deg\/min/.test(lim) && /1800 deg\/min/.test(lim), lim.split("\n")[1] || lim);
 
   // 5c. tool library: import a Fusion 360 library by URL, edit a tool, use it as T1
   await js("document.getElementById('libraryPanel').open = true; document.getElementById('importUrl').value = new URL('../tests/fixtures/fusion-tool-library.json', location).href; document.getElementById('importUrlBtn').click(); true");

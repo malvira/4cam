@@ -1,0 +1,80 @@
+{
+  "schema_version": "0.2",
+  "name": "raster_plate",
+  "models": [
+    {
+      "id": "plate",
+      "name": "plate",
+      "kind": "mesh",
+      "file": "plate.stl"
+    }
+  ],
+  "tools": [
+    {
+      "number": 1,
+      "description": "4 mm flat",
+      "kind": "flat",
+      "diameter": 4.0,
+      "flute_length": 15
+    }
+  ],
+  "setups": [
+    {
+      "id": "vise",
+      "machine": "makera-carvera-4axis",
+      "stock": {
+        "shape": "box",
+        "min": [
+          0,
+          0,
+          -5
+        ],
+        "max": [
+          30,
+          20,
+          0
+        ]
+      },
+      "clearance": 3.0,
+      "holding": {
+        "kind": "vise",
+        "tailstock": false
+      },
+      "part": [
+        "plate"
+      ],
+      "spindle_rpm": 12000,
+      "operations": [
+        {
+          "id": "op1",
+          "type": "raster3d",
+          "tool": 1,
+          "x_range": [
+            0,
+            30
+          ],
+          "y_range": [
+            0,
+            20
+          ],
+          "stepover": 2.0,
+          "sample": 1.0,
+          "step_down": 10.0,
+          "floor": -5.0,
+          "scallop": 0.0,
+          "feed": 600.0,
+          "plunge_feed": 60.0
+        }
+      ],
+      "outputs": [
+        {
+          "name": "raster_plate",
+          "title": "raster_plate",
+          "operations": [
+            "op1"
+          ]
+        }
+      ]
+    }
+  ]
+}
