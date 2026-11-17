@@ -898,13 +898,9 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                         _ => zb.max(sb.max[2] - hz / 2.0),
                     };
                     v.insert("floor".into(), json!(nice(floor, 0.01)));
-                    // after a 3D roughing the finish takes the whole depth in one level
-                    let roughed = job
-                        .programs
-                        .iter()
-                        .flat_map(|p| &p.operations)
-                        .any(|o| matches!(o, Operation::Rough3d(_)));
-                    if kind == "raster3d" && roughed {
+                    // the finish takes the whole depth in one level: deeper levels only repeat
+                    // the surface pass (a part that needs clearing first gets a rough3d)
+                    if kind == "raster3d" {
                         v.insert(
                             "step_down".into(),
                             json!(nice((sb.max[2] - floor).max(0.01), 0.01)),

@@ -541,7 +541,16 @@ pub fn raster3d_on(
     let feeds = [op.feed, op.plunge_feed];
     b.comment("--- 3D raster ---");
     for level in levels(top, floor + op.leave, op.step_down.max(d * 0.05)) {
-        let z_of = |x: f64, y: f64| surf(x, y).max(level);
+        // a level that holds the tool up nowhere is the surface pass itself: every deeper
+        // level would cut exactly the same path again, so it is the last
+        let held = std::cell::Cell::new(false);
+        let z_of = |x: f64, y: f64| {
+            let s = surf(x, y);
+            if level > s {
+                held.set(true);
+            }
+            s.max(level)
+        };
         let mut first = true;
         // face selection: at the safe height until the first run on the faces
         let mut lifted = true;
@@ -604,6 +613,9 @@ pub fn raster3d_on(
             }
         }
         leave(b, safe);
+        if !held.get() {
+            break;
+        }
     }
     Ok(())
 }
