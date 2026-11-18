@@ -10,7 +10,10 @@
 //!   at X46 Y20, for the 3-axis plate example
 //! - tests/fixtures/picking/bracket.stl: a prismatic bracket with through and blind holes, a
 //!   pocket with an island and a step, for the picking tests (see `prism::bracket`)
+//! - tests/fixtures/picking/oval_grip.stl: a block with two recessed oval flats (holes in
+//!   them) and a textured grip between, for bounded facing and pockets (see `grip`)
 
+mod grip;
 mod prism;
 
 use marcam::job::Profile;
@@ -97,6 +100,10 @@ fn files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
         (
             root.join("tests/fixtures/picking/bracket.stl"),
             prism::bracket().to_stl(),
+        ),
+        (
+            root.join("tests/fixtures/picking/oval_grip.stl"),
+            grip::mesh().to_stl(),
         ),
     ]
 }

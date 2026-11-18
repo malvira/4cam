@@ -553,6 +553,10 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
     }
     let hole_set: std::collections::HashSet<usize> = hole_regions.iter().map(|h| h.0).collect();
 
+    // the part's bottom (the largest down face at the lowest Z): its outline is the part's
+    // outline to cut it out along, whatever its top is like
+    let mut bottom: Option<(f64, Vec<[f64; 2]>, Vec<Key>, usize)> = None;
+    let zmax = mesh.bounds().map_or(0.0, |(_, hi)| hi[2]);
     // flat faces, their edge loops, and pockets
     for (k, r) in regions.iter().enumerate() {
         let up = is_up(r);
@@ -567,6 +571,9 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
         let mut wall_regions: Vec<usize> = Vec::new();
         // the top of the wall across each boundary edge, by the edge's start vertex
         let mut wall_top: HashMap<Key, f64> = HashMap::new();
+        // ... and, whatever its kind (a wall, a slope, a textured surface), whether the
+        // material across rises above the face, and its region
+        let mut rises: HashMap<Key, (bool, Option<usize>)> = HashMap::new();
         for &i in &r.tris {
             let t = &tris[i];
             for e in 0..3 {
@@ -583,6 +590,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                             .iter()
                             .map(|p| p[2])
                             .fold(f64::NEG_INFINITY, f64::max);
+                        rises.insert(a, (tz > z + 1e-3, Some(wr)));
                         if !(is_wall(&regions[wr]) && tz > z + 1e-3) {
                             walls_up = false;
                         } else {
@@ -592,7 +600,10 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                             }
                         }
                     }
-                    None => walls_up = false,
+                    None => {
+                        rises.insert(a, (false, None));
+                        walls_up = false;
+                    }
                 }
             }
         }
@@ -618,7 +629,37 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                 .filter_map(|k| wall_top.get(k).copied())
                 .fold(f64::INFINITY, f64::min)
         });
+        // a recessed flat: material rises all round its outline, whether walls, slopes or a
+        // textured surface; the openings inside (holes, bosses) are its islands
+        let mut outer_regions: Vec<usize> = Vec::new();
+        let recessed = order.first().is_some_and(|&o| {
+            key_loops[o].iter().all(|k| match rises.get(k) {
+                Some(&(true, Some(wr))) => {
+                    if !outer_regions.contains(&wr) {
+                        outer_regions.push(wr);
+                    }
+                    true
+                }
+                _ => false,
+            })
+        });
+        // round a recessed flat: the highest material about it (what is above is cut as air)
+        let rim = if walls_up {
+            rim
+        } else {
+            outer_regions
+                .iter()
+                .map(|&w| regions[w].z[1])
+                .fold(f64::NEG_INFINITY, f64::max)
+        };
         let mut lps: Vec<Vec<[f64; 2]>> = order.iter().map(|&o| xy(&key_loops[o])).collect();
+        // for each outline point: whether the edge from it is open (no higher material across)
+        let open: Vec<bool> = order.first().map_or(Vec::new(), |&o| {
+            key_loops[o]
+                .iter()
+                .map(|k| !matches!(rises.get(k), Some(&(true, _))))
+                .collect()
+        });
         // outer loop first (largest area); for an up face, outer loops run counter-clockwise
         if !up {
             for l in &mut lps {
@@ -626,6 +667,9 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
             }
         }
         let id = &r.info.id;
+        if !up && (z - zmin).abs() < 1e-3 && !lps.is_empty() && bottom.as_ref().is_none_or(|b| r.area > b.0) {
+            bottom = Some((r.area, lps[0].clone(), key_loops[order[0]].clone(), k));
+        }
         if up && !floor_of_hole.contains_key(&k) {
             out.push(Pickable {
                 id: format!("flat_face:{id}"),
@@ -635,11 +679,18 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                 similar: format!("flat_face:{}", r2(z)),
                 data: json!({
                     "z": z, "area": r.area, "loops": lps.len(),
+                    "outline": lps.first().map(|l| close(l)), "islands": lps.iter().skip(1).map(|l| close(l)).collect::<Vec<_>>(),
+                    "open": open,
                     "cx": round_um(lps.first().map_or(0.0, |l| { let (lo, hi) = bbox(l); (lo[0] + hi[0]) / 2.0 })),
                     "cy": round_um(lps.first().map_or(0.0, |l| { let (lo, hi) = bbox(l); (lo[1] + hi[1]) / 2.0 }))
                 }),
             });
-            if walls_up && !lps.is_empty() && !wall_regions.iter().any(|w| hole_set.contains(w)) {
+            let pocket_like = (walls_up && !wall_regions.iter().any(|w| hole_set.contains(w)))
+                || (recessed && !outer_regions.iter().any(|w| hole_set.contains(w)));
+            if pocket_like && !lps.is_empty() && rim.is_finite() {
+                if !walls_up {
+                    wall_regions = outer_regions.clone();
+                }
                 let outline = lps[0].clone();
                 let islands: Vec<Vec<[f64; 2]>> = lps[1..].to_vec();
                 let depth = rim - z;
@@ -713,12 +764,53 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
             data: json!({"z": r.z, "area": r.area}),
         });
     }
+    // the part's outline: picked on its bottom or on any outer side face (however many facets,
+    // drafted or not), the faces that stand on the bottom's outline
+    if let Some((_, lp, keys, k)) = bottom {
+        let on: std::collections::HashSet<Key> = keys.into_iter().collect();
+        let mut faces = vec![regions[k].info.id.clone()];
+        for (w, r) in regions.iter().enumerate() {
+            if w == k || is_up(r) || is_down(r) || hole_set.contains(&w) {
+                continue;
+            }
+            if r.tris.iter().any(|&i| tris[i].iter().any(|p| on.contains(&key(p)))) {
+                faces.push(r.info.id.clone());
+            }
+        }
+        let path = drop_collinear(&lp);
+        let (lo, hi) = bbox(&path);
+        out.push(Pickable {
+            id: format!("outline:{}", regions[k].info.id),
+            kind: "outline".into(),
+            label: format!("Part outline {:.2} x {:.2} (cut it out)", hi[0] - lo[0], hi[1] - lo[1]),
+            faces,
+            similar: "outline".into(),
+            data: json!({"path": close(&path), "bottom": zmin, "top": zmax}),
+        });
+    }
     out.sort_by(|a, b| (kind_order(&a.kind), &a.id).cmp(&(kind_order(&b.kind), &b.id)));
     out
 }
 
+/// A loop without its points in a straight line (a faceted outline's many collinear points).
+fn drop_collinear(l: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let n = l.len();
+    if n < 4 {
+        return l.to_vec();
+    }
+    (0..n)
+        .filter(|&i| {
+            let (a, b, c) = (l[(i + n - 1) % n], l[i], l[(i + 1) % n]);
+            let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+            let len = (c[0] - a[0]).hypot(c[1] - a[1]).max(1e-9);
+            cross.abs() / len > 1e-6
+        })
+        .map(|i| l[i])
+        .collect()
+}
+
 fn kind_order(k: &str) -> usize {
-    ["hole", "pocket", "flat_face", "edge_loop", "surface"]
+    ["hole", "pocket", "flat_face", "edge_loop", "outline", "surface"]
         .iter()
         .position(|x| *x == k)
         .unwrap_or(9)
@@ -828,8 +920,8 @@ pub fn stock_top(p: &crate::project::Project, setup: &str) -> Option<f64> {
 pub fn accepts(op_type: &str) -> &'static [&'static str] {
     match op_type {
         "drill" | "bore" => &["hole"],
-        "pocket" => &["pocket"],
-        "contour" => &["edge_loop"],
+        "pocket" => &["pocket", "flat_face"],
+        "contour" => &["edge_loop", "outline"],
         "face" => &["flat_face", "side_face"],
         "raster3d" | "rough3d" => &["surface", "flat_face", "pocket", "hole", "side_face"],
         "rotary_finish" => &["cylindrical_band", "revolved_band", "surface"],
@@ -840,6 +932,58 @@ pub fn accepts(op_type: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
+
+/// The outline (and islands) a picked flat face bounds a facing or a pocket by, for a tool of
+/// radius `r`: where higher material borders the face the tool stays a radius inside (the
+/// offsets do that); where the face is open (the part's edge, a step down) the outline is moved
+/// out by the radius and a little, so the tool runs past the edge and leaves no ridge.
+fn face_paths(p: &Pickable, r: Option<f64>) -> Vec<Value> {
+    let pts: Vec<[f64; 2]> = serde_json::from_value(p.data["outline"].clone()).unwrap_or_default();
+    let open: Vec<bool> = serde_json::from_value(p.data["open"].clone()).unwrap_or_default();
+    let mut out = pts.clone();
+    // `close` repeats the first point at the end
+    let n = if pts.len() > 1 && pts.first() == pts.last() { pts.len() - 1 } else { pts.len() };
+    if let Some(r) = r.filter(|_| open.len() == n && n >= 3 && open.iter().any(|&o| o)) {
+        let push = r + 0.1;
+        // an up face's outline runs counter-clockwise: outward is to the right of each edge
+        let normal = |i: usize| {
+            let (a, b) = (pts[i], pts[(i + 1) % n]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let l = dx.hypot(dy).max(1e-12);
+            [dy / l, -dx / l]
+        };
+        for i in 0..n {
+            let prev = (i + n - 1) % n;
+            // only between two open edges: a corner where a wall starts stays, so the wall
+            // keeps the tool a radius off
+            if !(open[prev] && open[i]) {
+                continue;
+            }
+            let mut m = [0.0, 0.0];
+            for e in [prev, i] {
+                if open[e] {
+                    let nn = normal(e);
+                    m = [m[0] + nn[0], m[1] + nn[1]];
+                }
+            }
+            let l = m[0].hypot(m[1]);
+            if l > 1e-9 {
+                out[i] = [pts[i][0] + push * m[0] / l, pts[i][1] + push * m[1] / l];
+            }
+        }
+        if pts.len() > n {
+            out[n] = out[0];
+        }
+    }
+    let mut paths = vec![json!(out)];
+    if let Some(is) = p.data["islands"].as_array() {
+        paths.extend(is.iter().cloned());
+    }
+    paths
+}
+
+/// How far below the part's bottom a cut-out goes (mm).
+pub const BREAKTHROUGH: f64 = 0.2;
 
 /// What a pick needs to know about the setup.
 #[derive(Debug, Clone)]
@@ -958,13 +1102,41 @@ pub fn apply(
             if picks.len() > 1 {
                 notes.push("a pocket operation clears one pocket: the first one picked".into());
             }
-            let mut paths = vec![p.data["outline"].clone()];
-            if let Some(is) = p.data["islands"].as_array() {
-                paths.extend(is.iter().cloned());
-            }
+            let paths = if p.kind == "flat_face" {
+                face_paths(p, cx.tool_diameter.map(|d| d / 2.0))
+            } else {
+                let mut paths = vec![p.data["outline"].clone()];
+                if let Some(is) = p.data["islands"].as_array() {
+                    paths.extend(is.iter().cloned());
+                }
+                paths
+            };
             v.insert("paths".into(), Value::Array(paths));
-            v.insert("top".into(), json!(round_um(f(p, "top"))));
-            v.insert("depth".into(), json!(round_um(f(p, "depth"))));
+            if p.kind == "flat_face" {
+                // a flat face as the floor: from the stock top (or the face) down to it
+                let top = cx.stock_top.unwrap_or(f(p, "z"));
+                v.insert("top".into(), json!(round_um(top)));
+                v.insert("depth".into(), json!(round_um((top - f(p, "z")).max(0.01))));
+                if f(p, "loops") > 1.0 {
+                    notes.push("the openings in the face (holes, bosses) are left as islands: drill the holes with their own operation".into());
+                }
+            } else {
+                v.insert("top".into(), json!(round_um(f(p, "top"))));
+                v.insert("depth".into(), json!(round_um(f(p, "depth"))));
+            }
+        }
+        "contour" if picks[0].kind == "outline" => {
+            // cut the part out: outside its outline, from the stock top to just below the part
+            let p = picks[0];
+            let top = cx.stock_top.unwrap_or(f(p, "top"));
+            v.insert("path".into(), p.data["path"].clone());
+            v.insert("side".into(), json!("outside"));
+            v.insert("top".into(), json!(round_um(top)));
+            v.insert(
+                "depth".into(),
+                json!(round_um(top - f(p, "bottom") + BREAKTHROUGH)),
+            );
+            notes.push(format!("cut out {BREAKTHROUGH} mm below the part's bottom to break through: hold the part (tabs, or the stock below it) so it does not come loose"));
         }
         "contour" => {
             let p = picks[0];
@@ -989,6 +1161,18 @@ pub fn apply(
                 );
             } else {
                 v.insert("depth".into(), json!(round_um((top - f(p, "z")).max(0.01))));
+                // bounded by the face: never outside its outline (the tool stays a radius in
+                // from it), its openings left as islands
+                v.insert(
+                    "paths".into(),
+                    Value::Array(face_paths(p, cx.tool_diameter.map(|d| d / 2.0))),
+                );
+                if f(p, "loops") > 1.0 {
+                    notes.push("the openings in the face (holes, bosses) are left as islands: drill the holes with their own operation".into());
+                }
+                if picks.len() > 1 {
+                    notes.push("facing is bounded by one face: the first one picked".into());
+                }
             }
         }
         "rotary_turning" => {

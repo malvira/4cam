@@ -682,6 +682,7 @@ name = "marcam-fixtures"
 version = "0.1.0"
 dependencies = [
  "marcam-core",
+ "serde_json",
 ]
 
 [[package]]

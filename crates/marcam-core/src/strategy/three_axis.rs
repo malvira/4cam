@@ -46,7 +46,25 @@ fn zigzag(b: &mut Builder, area: [f64; 4], z: f64, stepover: f64, feed: f64) {
     }
 }
 
-pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) {
+pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> Result<(), String> {
+    if !op.paths.is_empty() {
+        // bounded by a face: cleared like a shaped pocket from the stock top down
+        let p = Pocket {
+            tool: op.tool,
+            index_a: op.index_a,
+            rect: [0.0; 4],
+            paths: op.paths.clone(),
+            depth: op.depth,
+            top: None,
+            step_down: op.step_down,
+            stepover: op.stepover,
+            feed: op.feed,
+            plunge_feed: op.plunge_feed,
+            smoothing: None,
+        };
+        b.comment("--- facing (bounded by a face) ---");
+        return path_pocket(b, d, stock, safe, &p);
+    }
     let r = d / 2.0;
     let top = stock.max[2];
     let bottom = top - op.depth;
@@ -60,6 +78,7 @@ pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) {
         zigzag(b, [x0, x1, y0, y1], z, op.stepover * d, op.feed);
         leave(b, safe);
     }
+    Ok(())
 }
 
 pub fn pocket(
@@ -321,10 +340,19 @@ pub fn contour(
         return Err("contour needs a closed path of at least 3 points".into());
     }
     let r = d / 2.0;
+    // a closed path may repeat its first point at the end (picked loops do): offset without
+    // it, or the zero-length edge there sends the tool back onto the outline
+    let mut src = op.path.clone();
+    while src.len() > 3 && {
+        let (a, b) = (src[0], src[src.len() - 1]);
+        (a[0] - b[0]).hypot(a[1] - b[1]) < 1e-9
+    } {
+        src.pop();
+    }
     let path = match op.side.as_str() {
-        "outside" => offset_polygon(&op.path, r),
-        "inside" => offset_polygon(&op.path, -r),
-        _ => op.path.clone(),
+        "outside" => offset_polygon(&src, r),
+        "inside" => offset_polygon(&src, -r),
+        _ => src,
     };
     let top = op.top.unwrap_or(stock.max[2]);
     b.comment("--- contour ---");

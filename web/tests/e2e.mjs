@@ -131,6 +131,15 @@ async function shot(name) {
   writeFileSync(join(shots, `${name}.png`), Buffer.from(data, "base64"));
 }
 const state = () => js("document.body.dataset.state");
+// console.error from the page (an error swallowed into the console is still a failure), less
+// the browser's own resource noise (a favicon) and what a test causes on purpose
+const EXPECTED_CONSOLE = [/favicon/i, /net::ERR_/, /Failed to load resource/];
+function consoleErrors() {
+  return cdp.events
+    .filter((e) => e.method === "Runtime.consoleAPICalled" && e.params.type === "error")
+    .map((e) => e.params.args.map((a) => a.value ?? a.description ?? "").join(" "))
+    .filter((t) => !EXPECTED_CONSOLE.some((r) => r.test(t)));
+}
 async function waitDone(what, timeoutMs) {
   return waitFor(async () => { const s = await state(); if (s === "error") throw new Error(await js("document.getElementById('error').textContent")); return s === "done"; }, what, timeoutMs);
 }
@@ -163,6 +172,40 @@ async function closedViews(tag) {
   }
   await js(`window.__marcam.setView("iso", { path: true, axes: true, part: true, stock: true, sim: true })`);
   return out;
+}
+
+// The time estimates as shown: the status line, the summary, each file and each operation in
+// the tree; with whether each is visible on screen and its value in seconds (0: none).
+const SHOWN_TIMES = `(() => {
+  const secs = (t) => { if (!t) return 0; let s = 0; for (const [, n, u] of String(t).matchAll(/(\\d+(?:\\.\\d+)?)\\s*(h|min|s)\\b/g)) s += Number(n) * (u === "h" ? 3600 : u === "min" ? 60 : 1); return s; };
+  const vis = (e) => !!e && e.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && e.getClientRects().length > 0;
+  const st = document.getElementById("status").textContent;
+  const m = /estimated machining time (.+)$/.exec(st);
+  const sum = document.getElementById("timeEst");
+  const res = window.__marcam.state.result;
+  return {
+    status: m ? secs(m[1]) : 0,
+    summary: vis(sum) ? secs(sum.querySelector("strong")?.textContent) : 0,
+    files: [...document.querySelectorAll("#tree .tree-out")].map((o) => { const e = o.querySelector(".tree-outname .tree-time"); return { name: o.dataset.out, s: vis(e) ? secs(e.textContent) : 0 }; }),
+    ops: [...document.querySelectorAll("#tree .tree-op")].map((r) => { const e = r.querySelector(".tree-time"); return { id: r.dataset.op, on: !r.classList.contains("off"), s: vis(e) ? secs(e.textContent) : 0, stale: !!e && getComputedStyle(e).opacity < 1 }; }),
+    total: res ? res.time_total_s : 0,
+    fileTotals: res ? res.programs.map((p) => p.time?.total_s || 0) : [],
+    stale: document.body.classList.contains("stale"),
+  };
+})()`;
+/** Every enabled operation, every file and the total show a non-zero time; they add up. */
+function timesOk(t) {
+  const ops = t.ops.filter((o) => o.on);
+  const bad = [];
+  if (!(t.status > 0)) bad.push("status");
+  if (!(t.summary > 0)) bad.push("summary");
+  if (!t.files.length || t.files.some((f) => !(f.s > 0))) bad.push(`files ${JSON.stringify(t.files)}`);
+  if (!ops.length || ops.some((o) => !(o.s > 0))) bad.push(`ops ${JSON.stringify(ops)}`);
+  // shown rounded: the files add up to the total within a minute each
+  const fsum = t.fileTotals.reduce((a, b) => a + b, 0);
+  if (Math.abs(fsum - t.total) > 1) bad.push(`files ${fsum} vs total ${t.total}`);
+  if (Math.abs(t.status - t.total) > 60 + t.total * 0.01) bad.push(`status ${t.status} vs ${t.total}`);
+  return bad;
 }
 
 // longer than the auto-regenerate delay (800 ms)
@@ -533,15 +576,61 @@ try {
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await settle();
 
-  // 8f. machining time: in the summary, per file and per operation in the tree
+  // 8f. machining time (Mar: "I don't see the machine time estimate anymore"): after
+  // Generate, the status line, the summary, every file and every enabled operation show a
+  // non-zero time, on screen, for a rotary job, the vise plate (arcs), the indexed knob and an
+  // imported STL; out of date they stay; hidden toolpaths do not hide them
+  for (const ex of ["knob", "plate", "knob_indexed"]) {
+    await js(`document.getElementById('example').value = '${ex}'; document.getElementById('loadExample').click(); true`);
+    await settle();
+    await js("document.getElementById('generate').click(); true");
+    await waitDone(`${ex} generation for times`, 240000);
+    await settle();
+    const t = await js(SHOWN_TIMES);
+    const bad = timesOk(t);
+    check(`time estimates shown after Generate (${ex}): status, summary, each file and each operation, non-zero`, bad.length === 0, bad.join("; ") || `${t.files.length} files, ${t.ops.length} operations, total ${Math.round(t.total)} s`);
+    if (ex === "plate") {
+      // hidden toolpaths: view only, the times stay
+      await js("document.getElementById('eyeNone').click(); true");
+      await sleep(400);
+      const h = await js(SHOWN_TIMES);
+      check("time estimates stay with every toolpath hidden", timesOk(h).length === 0, timesOk(h).join("; "));
+      await js("document.getElementById('eyeAll').click(); true");
+      // an edit: out of date, the times stay but dimmed; Generate again: fresh
+      const op = t.ops[0].id;
+      await js(`(() => { const j = JSON.parse(document.getElementById('job').value); const o = j.setups[0].operations.find((x) => x.id === '${op}'); o.feed = (o.feed || 500) * 0.5; document.getElementById('job').value = JSON.stringify(j, null, 2); document.getElementById('job').dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+      await waitFor(() => js("document.body.classList.contains('stale')"), "the plate out of date", 15000);
+      await settle();
+      const s1 = await js(SHOWN_TIMES);
+      check("out of date: the old times stay", s1.stale && s1.ops.filter((o) => o.on).every((o) => o.s > 0), JSON.stringify(s1.ops));
+      await js("document.getElementById('generate').click(); true");
+      await waitDone("the plate again", 240000);
+      await settle();
+      const s2 = await js(SHOWN_TIMES);
+      const o1 = s2.ops.find((o) => o.id === op), o0 = t.ops.find((o) => o.id === op);
+      check("generated again: fresh times, the slower operation longer", !s2.stale && timesOk(s2).length === 0 && o1.s > o0.s, `${o0.s} -> ${o1.s} s; ${timesOk(s2).join("; ")}`);
+    }
+  }
+  {
+    // an imported STL on a vise (its starter operations), generated by the import
+    const knobStl = readFileSync(join(root, "examples", "knob", "knob.stl")).toString("base64");
+    await js(`window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "times", models: [], tools: [], setups: [] } }))}, "times.marcam.json").then(() => true)`);
+    await settle();
+    await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${knobStl}"), (c) => c.charCodeAt(0))], "knob.stl")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await waitFor(() => js("document.getElementById('setupDialog').open"), "the import dialog", 15000);
+    await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
+    await waitDone("the knob STL imported on a vise", 240000);
+    await settle();
+    if (!(await js("!!window.__marcam.state.result"))) {
+      await js("document.getElementById('generate').click(); true");
+      await waitDone("the imported STL", 240000);
+      await settle();
+    }
+    const t = await js(SHOWN_TIMES);
+    check("time estimates shown for an imported STL (vise): status, summary, each file and operation", timesOk(t).length === 0, timesOk(t).join("; ") || `total ${Math.round(t.total)} s`);
+  }
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await settle();
-  await js("document.getElementById('generate').click()");
-  await waitDone("knob generation for times", 240000);
-  await settle();
-  const tSum = await js("document.getElementById('timeEst')?.innerText || ''");
-  const tTree = await js("[...document.querySelectorAll('#tree .tree-time')].map(e => e.textContent).join(' | ')");
-  check("time estimates: summary, files and operations in the tree", /^Estimated time: \d/.test(tSum) && String(tTree).split(" | ").length === 5, `${tSum} || ${tTree}`);
 
   // 8g. simulation resolution: the setting changes the grid (shown before running), the
   // machining view at that grid stays watertight, and Ultra shows a decimated display
@@ -1467,6 +1556,82 @@ try {
     await js("document.getElementById('eyeAll').click(); true");
   }
 
+  // 8o. (Mar's oval part) a block with two recessed oval flats and a textured grip between:
+  // facing picked on one oval stays on it, a pocket picked on the other stays on it, a 2D
+  // contour picked on an outer wall cuts the part out; simulated, the grip is untouched
+  {
+    const fx = join(root, "tests", "fixtures", "picking");
+    const proj = JSON.parse(readFileSync(join(fx, "oval_grip.project.json"), "utf8"));
+    const s0 = proj.setups[0];
+    s0.operations = [
+      { id: "op1", type: "face", tool: 2, depth: 0.1, step_down: 0.5, stepover: 0.6, feed: 800, plunge_feed: 200 },
+      { id: "op2", type: "pocket", tool: 2, rect: [1, 1, 5, 5], depth: 0.1, step_down: 0.5, stepover: 0.5, feed: 800, plunge_feed: 200 },
+      { id: "op3", type: "contour", tool: 2, path: [[1, 1], [5, 1], [5, 5]], side: "outside", depth: 0.1, step_down: 1.5, feed: 800, plunge_feed: 200 },
+    ];
+    s0.outputs = ["face", "pocket", "cutout"].map((n, k) => ({ name: `grip_${n}`, title: n, operations: [`op${k + 1}`] }));
+    const file = JSON.stringify({ format: "marcam-project", version: 1, project: proj, meshes: { "oval_grip.stl": readFileSync(join(fx, "oval_grip.stl")).toString("base64") } });
+    await js(`window.__marcam.project.openText(${JSON.stringify(file)}, "oval_grip.marcam.json").then(() => true)`);
+    await settle();
+    const screenOf = (pred) => js(`(() => { const v = window.__marcam.state.three, t = window.__marcam.state.tree; const pk = t.pick; const target = pk.list.find(${pred}); if (!target) return null;
+      const want = new Set(target.faces); const el = v.renderer.domElement; const tri = t.regions.tri; const ray = new v.THREE.Raycaster();
+      for (let k = 0; k < t.regions.of.length; k++) { if (!want.has(t.regions.list[t.regions.of[k]].id)) continue;
+        const c = new v.THREE.Vector3(...[0, 1, 2].map((d) => (tri[9*k+d] + tri[9*k+3+d] + tri[9*k+6+d]) / 3)).project(v.camera);
+        if (Math.abs(c.x) > 0.95 || Math.abs(c.y) > 0.95) continue;
+        ray.setFromCamera(new v.THREE.Vector2(c.x, c.y), v.camera); const hit = ray.intersectObject(t.pickMesh)[0];
+        if (hit && want.has(t.regions.list[t.regions.of[hit.faceIndex]].id)) return [(c.x + 1) / 2 * el.clientWidth, (1 - c.y) / 2 * el.clientHeight]; }
+      return null; })()`);
+    const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
+    async function pickFor(id, pred, what) {
+      await js(`document.querySelector('#tree .tree-op[data-op="${id}"] [data-act="select"]').click(); true`);
+      await waitFor(() => js(`window.__marcam.state.tree.selected === '${id}' && !!document.getElementById('pickFaces')`), `${what}: its editor`, 15000);
+      await js("document.getElementById('pickFaces').click(); true");
+      await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), `${what}: picking`, 30000);
+      await sleep(300);
+      const at = await screenOf(pred);
+      if (!at) throw new Error(`${what}: the feature is not visible`);
+      const got = await js(`const pr = await window.__marcam.tree.pickAt(${at[0]}, ${at[1]}); pr && pr.pickable ? pr.pickable.kind : null`);
+      await shot(`19_grip_pick_${what}`);
+      await js("document.getElementById('pickFaces').click(); true");
+      await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), `${what}: done`, 15000);
+      await sleep(300);
+      return { op: (await doc()).setups[0].operations.find((o) => o.id === id), got };
+    }
+    const face = await pickFor("op1", "(x) => x.kind === 'flat_face' && x.data.z < -1.4 && x.data.cx < 30", "facing");
+    const pocket = await pickFor("op2", "(x) => x.kind === 'pocket' && x.data.outline[0][0] > 30", "pocket");
+    const cut = await pickFor("op3", "(x) => x.kind === 'outline'", "cutout");
+    check("the grip block: facing takes an oval flat (bounded by it, to its depth), the pocket the other oval, the contour the part's outline (outside, to just below the part)",
+      face.got === "flat_face" && face.op.paths?.length >= 1 && Math.abs(face.op.depth - 2) < 1e-6 &&
+      pocket.got === "pocket" && pocket.op.paths?.length >= 1 && !pocket.op.rect &&
+      cut.got === "outline" && cut.op.side === "outside" && Math.abs(cut.op.depth - 8.7) < 1e-6 && cut.op.path.length >= 4,
+      JSON.stringify({ face: [face.got, face.op.depth], pocket: [pocket.got, pocket.op.depth], cut: [cut.got, cut.op.depth] }));
+    await js("document.getElementById('generate').click(); true");
+    await waitDone("the grip block's three programs", 240000);
+    await js("document.getElementById('simulate').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.sim && document.body.dataset.state === 'done'"), "the grip block simulated", 240000);
+    await shot("19_grip_simulated");
+    // the simulated stock after each program: where it was cut
+    const sim = await js(`(() => { const s = window.__marcam.state.sim, g = s.grid, top = s.stock_box.max[2];
+      const R = 3.175 / 2, ovals = [[16, 15], [44, 15]], ax = 10 + R, ay = 7 + R;
+      const inOval = (x, y, k) => Math.abs(x - ovals[k][0]) <= ax && Math.abs(y - ovals[k][1]) <= ay;
+      return s.stocks.map((st, p) => { let stray = 0, cut = 0, grip = 0, ring = 0, ringCells = 0;
+        for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) {
+          const x = g.x0 + (i + 0.5) * g.cell, y = g.y0 + (j + 0.5) * g.cell, z = st.z[j * g.nx + i];
+          const inside = x > 0 && x < 60 && y > 0 && y < 30;
+          if (z < top - 0.01) { cut++; if (inside && !inOval(x, y, 0) && !(p >= 1 && inOval(x, y, 1))) stray++; }
+          // the grip between the ovals
+          if (x > 28 && x < 32 && y > 5 && y < 25 && z < top - 0.01) grip++;
+          // a ring just outside the part
+          const ox = Math.max(-x, x - 60, 0), oy = Math.max(-y, y - 30, 0), d = Math.hypot(ox, oy);
+          if (!inside && d > 0.4 && d < 1.2) { ringCells++; if (z <= -8.19) ring++; }
+        }
+        return { cut, stray, grip, ring, ringCells, gouge: st.max_gouge }; }); })()`);
+    check("simulated: facing cuts only inside its oval, the pocket only inside the other, the grip between them untouched, no gouges",
+      sim[0].cut > 100 && sim[0].stray === 0 && sim[1].cut > sim[0].cut && sim[1].stray === 0 && sim.every((s) => s.grip === 0 && s.gouge < 0.05),
+      JSON.stringify(sim));
+    check("simulated: the cut-out goes all round the part, to just below its bottom (the part separated)",
+      sim[2].ringCells > 100 && sim[2].ring >= sim[2].ringCells * 0.98, `${sim[2].ring}/${sim[2].ringCells}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);
@@ -1474,7 +1639,8 @@ try {
   check("phone width: no horizontal scroll", overflow <= 0, `${overflow}px`);
   await shot("06_phone");
 
-  const errors = cdp.events.filter((e) => e.method === "Runtime.exceptionThrown").map((e) => e.params.exceptionDetails.exception?.description || e.params.exceptionDetails.text);
+  const errors = cdp.events.filter((e) => e.method === "Runtime.exceptionThrown").map((e) => e.params.exceptionDetails.exception?.description || e.params.exceptionDetails.text)
+    .concat(consoleErrors());
   if (errors.length) console.log(`uncaught page errors:\n${errors.join("\n---\n")}`);
   check("no uncaught page errors", errors.length === 0, errors.join(" | ").slice(0, 300));
 } catch (e) {

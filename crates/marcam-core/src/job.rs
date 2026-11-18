@@ -232,6 +232,10 @@ pub struct Face {
     pub stepover: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Where to face (even-odd outlines: a picked face's outline and its openings); the tool
+    /// stays inside, a radius in from the outline. Empty: the whole stock top.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<Vec<[f64; 2]>>,
 }
 
 /// 3-axis: rectangular pocket `[x0, y0, x1, y1]`, `depth` below `top` (default: stock top).

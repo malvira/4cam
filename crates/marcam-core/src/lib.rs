@@ -537,7 +537,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let err = |e: String| Error::Invalid(format!("program {}: {e}", prog.name));
                 use strategy::three_axis as t3;
                 match op3 {
-                    Operation::Face(o) => t3::face(&mut b, d, sb, safe_r, o),
+                    Operation::Face(o) => t3::face(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Pocket(o) => t3::pocket(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Drill(o) => t3::drill(&mut b, sb, safe_r, o),
                     Operation::Bore(o) => {

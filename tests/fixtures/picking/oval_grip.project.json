@@ -1,0 +1,72 @@
+{
+  "schema_version": "0.2",
+  "name": "grip",
+  "models": [
+    {
+      "id": "part",
+      "name": "grip",
+      "kind": "mesh",
+      "file": "oval_grip.stl",
+      "translate": [
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "number": 1,
+      "description": "5 mm flat",
+      "kind": "flat",
+      "diameter": 5.0,
+      "flute_length": 15
+    },
+    {
+      "number": 2,
+      "description": "3.175 mm flat",
+      "kind": "flat",
+      "diameter": 3.175,
+      "flute_length": 12
+    },
+    {
+      "number": 3,
+      "description": "3 mm ball",
+      "kind": "ball",
+      "diameter": 3.0,
+      "flute_length": 12
+    }
+  ],
+  "setups": [
+    {
+      "id": "vise",
+      "name": "Vise, top",
+      "machine": "makera-carvera-4axis",
+      "kind": "vise",
+      "stock": {
+        "shape": "box",
+        "min": [
+          -5.0,
+          -5.0,
+          -8.5
+        ],
+        "max": [
+          65.0,
+          35.0,
+          0.5
+        ]
+      },
+      "clearance": 3.0,
+      "holding": {
+        "kind": "vise",
+        "tailstock": false
+      },
+      "part": [
+        "part"
+      ],
+      "spindle_rpm": 12000,
+      "operations": [],
+      "outputs": []
+    }
+  ]
+}
