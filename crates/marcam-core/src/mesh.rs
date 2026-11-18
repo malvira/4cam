@@ -50,13 +50,15 @@ pub enum Axis {
     Z,
 }
 
+/// A STEP file's bytes to a mesh with its B-rep faces.
+pub type StepReader = fn(&[u8]) -> Result<Mesh, String>;
+
 /// Reads a STEP file into a mesh with its B-rep faces: set by a program built with STEP
 /// support (the `marcam-step` crate's `register`), none otherwise.
-static STEP_READER: std::sync::OnceLock<fn(&[u8]) -> Result<Mesh, String>> =
-    std::sync::OnceLock::new();
+static STEP_READER: std::sync::OnceLock<StepReader> = std::sync::OnceLock::new();
 
 /// Install the STEP reader (see `marcam_step::register`). The first one stays.
-pub fn set_step_reader(f: fn(&[u8]) -> Result<Mesh, String>) {
+pub fn set_step_reader(f: StepReader) {
     let _ = STEP_READER.set(f);
 }
 
