@@ -82,14 +82,28 @@ function writeJob(job, opts = {}) {
 }
 
 /** The Generate button asks for attention when the results are out of date or missing. */
+/** Whether the project has an operation to plan (one that is enabled). */
+function hasEnabledOps(j) {
+  return j.schema_version === "0.2" ? !!j.setups?.some((s) => s.operations?.some((o) => o.enabled !== false)) : !!j.programs?.some((p) => p.operations?.length);
+}
+
+/** Whether the project has a part (a model, a mesh or a profile). */
+function hasPart(j) {
+  return j.schema_version === "0.2" ? !!j.models?.length : !!(j.part?.profile || j.part?.mesh);
+}
+
 function updateGenerateButton() {
   let ops = false;
+  let reason = "";
   try {
     const j = readJob();
-    ops = j.schema_version === "0.2" ? j.setups?.some((s) => s.operations?.length) : !!j.programs?.length;
+    ops = hasEnabledOps(j);
+    if (!ops) reason = hasPart(j) ? "No operation to generate: add one in the project tree (or enable one)" : "Import an STL first";
   } catch {}
   $("generate").classList.toggle("attention", ops && (state.stale || !state.result));
-  $("generate").title = state.stale ? "The project changed: generate the toolpaths again" : "";
+  $("generate").title = !ops ? reason : state.stale ? "The project changed: generate the toolpaths again" : "";
+  // nothing to plan: disabled (unless a generate or simulation holds it)
+  if (document.body.dataset.state !== "busy") $("generate").disabled = !ops && !!state.registry;
 }
 
 // ---------------------------------------------------------------- auto-regenerate
@@ -128,6 +142,19 @@ window.addEventListener("pointercancel", released, true);
 
 /** The results no longer match the project: say so on them until the next Generate. */
 function markStale() {
+  let none = false;
+  try {
+    const j = readJob();
+    none = !hasEnabledOps(j) && hasPart(j);
+  } catch {}
+  if (none) {
+    // nothing left to plan: the toolpaths of what was there go; the part and stock stay
+    if (state.result || !$("emptyState")) clearResults(NO_OPS, []);
+    drawModel();
+    updateGenerateButton();
+    return;
+  }
+  drawModel();
   if (state.result && !state.stale) {
     state.stale = true;
     document.body.classList.add("stale");
@@ -138,6 +165,52 @@ function markStale() {
 }
 
 const RESULT_GROUPS = ["part", "stock", "path", "sim", "tool"];
+
+// ---------------------------------------------------------------- toolpath visibility
+// View only: hidden operations' moves are left out of the 3D and side views. Nothing is
+// planned or marked out of date, and the G-code is the same. Keys are "setup/operation";
+// kept in the project file (its view) and in this browser.
+state.hidden = new Set();
+function hiddenStoreKey() {
+  return `marcam.hidden:${window.__marcam?.project?.state?.name || "untitled"}`;
+}
+function setHidden(keys, opts = {}) {
+  state.hidden = new Set(keys);
+  if (opts.persist !== false) {
+    try {
+      localStorage.setItem(hiddenStoreKey(), JSON.stringify([...state.hidden]));
+    } catch {
+      // storage blocked: this session only
+    }
+  }
+  const v = state.three;
+  if (v && !v.failed) v.key = null;
+  if (state.result) {
+    updateView();
+    drawSide();
+  }
+  window.__marcam.tree?.renderEyes?.();
+}
+/** Each preview point of program `p`: whether its operation is hidden (null: none is). */
+function hiddenMask(p) {
+  const ops = p.toolpath.ops || [];
+  if (!state.hidden.size || !ops.length) return null;
+  const setupId = state.tree?.setup;
+  // a 0.1 job shown as a project: operations by planning order
+  const s = state.tree?.doc?.setups?.find((x) => x.id === setupId);
+  const planned = s ? s.outputs.flatMap((o) => o.operations).filter((id) => s.operations.find((op) => op.id === id)?.enabled !== false) : [];
+  const n = p.toolpath.points.length / 4;
+  const mask = new Uint8Array(n);
+  ops.forEach((o, k) => {
+    const id = o.id ?? planned[o.index];
+    if (!state.hidden.has(`${setupId}/${id}`)) return;
+    const end = k + 1 < ops.length ? ops[k + 1].start : n;
+    // the move into the operation's first point belongs to it too
+    mask.fill(1, o.start, end);
+  });
+  return mask;
+}
+const NO_OPS = "No operations: add one in the project tree (or use a detected feature in the setup), then Generate.";
 
 /**
  * The one reset that New, Open and the examples go through: nothing of the previous project
@@ -162,6 +235,7 @@ async function resetProject(msg, actions) {
     // an engine without sessions (not loaded yet): nothing to free
   }
   state.simGrid = null;
+  state.hidden = new Set();
   setMesh(null, "");
   showError("");
   clearResults(msg, actions);
@@ -188,6 +262,7 @@ function clearResults(msg, actions = ["import", "open"]) {
   if (v && !v.failed) {
     for (const k of RESULT_GROUPS) clear(v.groups[k]);
     v.key = null;
+    v.modelKey = null;
     v.simKey = null;
     v.fitted = null;
     v.renderer.render(v.scene, v.camera);
@@ -195,6 +270,7 @@ function clearResults(msg, actions = ["import", "open"]) {
   const ctx = $("side").getContext("2d");
   ctx.clearRect(0, 0, $("side").width, $("side").height);
   updateGenerateButton();
+  drawModel();
 }
 
 /** Everything that shows the project, again: quick settings, tools, the tree, the grid. */
@@ -203,6 +279,8 @@ async function refreshAll() {
   renderTools();
   await window.__marcam.tree?.refresh();
   updateSimResInfo();
+  updateGenerateButton();
+  await drawModel();
 }
 
 /** Quick fields for the common parameters; they write straight into the JSON. */
@@ -361,8 +439,12 @@ async function generate() {
     showError(e.message);
     return;
   }
-  if (job.schema_version === "0.2" && !job.setups?.some((s) => s.operations?.some((o) => o.enabled !== false))) {
-    showError("Nothing to generate yet: import an STL (it adds a starter roughing and finishing) or add an operation in the project tree.");
+  if (!hasEnabledOps(job)) {
+    showError(
+      hasPart(job)
+        ? "Nothing to generate: the project has no enabled operation. Add one in the project tree (or use a detected feature), or enable one."
+        : "Nothing to generate yet: import an STL (it adds a starter roughing and finishing) or add an operation in the project tree.",
+    );
     return;
   }
   if (job.part?.mesh && !state.mesh) {
@@ -635,7 +717,8 @@ function drawSide() {
   const pts = p.toolpath.points;
   const n = +$("scrub").value;
   const sb = res.stock_box;
-  if (sb) return drawSideXYZ(ctx, w, h, p, pts, n, sb);
+  const hide = hiddenMask(p);
+  if (sb) return drawSideXYZ(ctx, w, h, p, pts, n, sb, hide);
   let x0 = Infinity, x1 = -Infinity;
   for (let i = 0; i < pts.length; i += 4) if (pts[i + 3] % 2) { x0 = Math.min(x0, pts[i]); x1 = Math.max(x1, pts[i]); }
   const prof = res.profile?.points || [];
@@ -663,6 +746,7 @@ function drawSide() {
   ctx.lineWidth = 1;
   for (let i = 1; i < Math.min(n, pts.length / 4); i++) {
     const cut = pts[4 * i + 3];
+    if (hide && hide[i]) continue;
     if (!cut && !$("showRapids").checked) continue;
     ctx.strokeStyle = cut ? "rgba(37,99,235,0.35)" : "rgba(220,38,38,0.35)";
     ctx.beginPath();
@@ -673,7 +757,7 @@ function drawSide() {
 }
 
 /** Side view of a 3-axis program: X vs Z, with the stock block. */
-function drawSideXYZ(ctx, w, h, p, pts, n, sb) {
+function drawSideXYZ(ctx, w, h, p, pts, n, sb, hide) {
   const x0 = sb.min[0] - 3, x1 = sb.max[0] + 3;
   const z0 = sb.min[2] - 1, z1 = Math.max(p.safe_r, sb.max[2]) + 1;
   const pad = 30, sx = (x) => pad + ((x - x0) / (x1 - x0)) * (w - 2 * pad), sz = (z) => h - 18 - ((z - z0) / (z1 - z0)) * (h - 30);
@@ -685,6 +769,7 @@ function drawSideXYZ(ctx, w, h, p, pts, n, sb) {
   ctx.lineWidth = 1;
   for (let i = 1; i < Math.min(n, pts.length / 4); i++) {
     const cut = pts[4 * i + 3] % 2;
+    if (hide && hide[i]) continue;
     if (!cut && !$("showRapids").checked) continue;
     ctx.strokeStyle = cut ? "rgba(37,99,235,0.35)" : "rgba(220,38,38,0.35)";
     ctx.beginPath();
@@ -758,13 +843,103 @@ function toXYZ(x, r, aDeg) {
   return [x, r * Math.cos(phi), r * Math.sin(phi)];
 }
 
+/**
+ * The current setup's part and stock, from the project itself: shown with or without
+ * results (a project with no operation, one just opened, one whose results were cleared).
+ */
+async function drawModel() {
+  const v = await getThree();
+  if (!v || v.failed) return;
+  let doc;
+  try {
+    doc = readJob();
+  } catch {
+    return;
+  }
+  const { THREE, groups } = v;
+  const v2 = doc.schema_version === "0.2";
+  const setup = v2 ? doc.setups?.find((s) => s.id === state.tree?.setup) || doc.setups?.[0] : null;
+  const ids = v2 ? (setup?.part?.length ? setup.part : doc.models?.map((m) => m.id) || []) : [];
+  const models = v2 ? (doc.models || []).filter((m) => ids.includes(m.id)) : [];
+  const key = JSON.stringify([setup?.id, setup?.stock, models, v2 ? null : [doc.stock, doc.part], state.mesh?.length || 0]);
+  if (v.modelKey === key) return;
+  v.modelKey = key;
+  clear(groups.stock);
+  clear(groups.part);
+  // the part: a mesh model (as the engine places it) or a revolved profile
+  const partMat = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.3, roughness: 0.5 });
+  const mesh = v2 ? models.find((m) => m.kind === "mesh") : doc.part?.mesh;
+  const prof = v2 ? models.find((m) => m.kind === "profile")?.points : doc.part?.profile?.points;
+  let bounds = null;
+  if (mesh && state.mesh) {
+    try {
+      const { result } = await engine("meshTriangles", doc, { max_triangles: 150000, setup: setup?.id }, state.mesh);
+      if (v.modelKey !== key) return; // superseded meanwhile
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(result.triangles, 3));
+      g.computeVertexNormals();
+      const meshMat = partMat.clone();
+      meshMat.side = THREE.DoubleSide; // a user's mesh may have inconsistent winding
+      groups.part.add(new THREE.Mesh(g, meshMat));
+      bounds = result.bounds;
+    } catch {
+      // a mesh the engine cannot read: the stock alone
+    }
+  } else if (prof && prof.length > 1) {
+    groups.part.add(new THREE.Mesh(toGeometry(THREE, revolveProfile(prof, 120)), partMat));
+    bounds = [[Math.min(...prof.map((q) => q[0])), 0, 0], [Math.max(...prof.map((q) => q[0])), 0, 0]];
+  }
+  // the stock: the setup's block or bar (a 0.1 job's bar)
+  const stockMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.15, depthWrite: false });
+  const st = v2 ? setup?.stock : doc.stock ? { shape: "cylinder", ...doc.stock } : null;
+  const sb = st?.shape === "box" ? st : null;
+  let fitKey = null;
+  if (sb) {
+    const size = [0, 1, 2].map((k) => sb.max[k] - sb.min[k]);
+    const box = new THREE.Mesh(new THREE.BoxGeometry(...size), stockMat);
+    box.position.set(...[0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2));
+    groups.stock.add(box);
+    fitKey = JSON.stringify(sb);
+    v.bounds = { xmin: sb.min[0], xmax: sb.max[0], R: Math.max(sb.max[1] - sb.min[1], sb.max[2] - sb.min[2]) / 2 };
+  } else if (st?.radius) {
+    // the bar: from the part's front face back by its length
+    const front = Math.max(0, bounds ? bounds[1][0] : 0);
+    const xmin = front - (st.length || 30) - 1, xmax = front + 1;
+    groups.stock.add(new THREE.Mesh(toGeometry(THREE, cylinder(st.radius, xmin, xmax, 96)), stockMat));
+    v.bounds = { xmin, xmax, R: st.radius };
+    fitKey = JSON.stringify([st.radius, Math.round(xmin), Math.round(xmax)]);
+  }
+  // frame the view when the stock changes; keep the person's orbit otherwise
+  if (fitKey && v.fitted !== fitKey && v.fitted !== "picking") {
+    if (sb) {
+      const c = [0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2), span = Math.max(sb.max[0] - sb.min[0], sb.max[1] - sb.min[1]);
+      v.camera.position.set(c[0] - span * 0.3, c[1] - span * 1.2, c[2] + span * 0.9);
+      v.controls.target.set(...c);
+    } else {
+      const { xmin, xmax, R } = v.bounds;
+      const span = xmax - xmin;
+      v.camera.position.set((xmin + xmax) / 2 - span * 0.2, -span * 1.3, R * 2.2);
+      v.controls.target.set((xmin + xmax) / 2, 0, 0);
+    }
+    v.controls.update();
+    v.fitted = fitKey;
+  }
+  $("viewNote").textContent = sb
+    ? "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. Vise setup: the block stays put and the tool moves in X, Y and Z (Z0 = top of the stock)."
+    : "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. The part turns, so the path is drawn around it (A rotates about X).";
+  groups.part.visible = $("showPart").checked && !(groups.sim.children.length && groups.sim.visible);
+  groups.stock.visible = $("showStock").checked && !(groups.sim.children.length && groups.sim.visible);
+  v.renderer.render(v.scene, v.camera);
+}
+
 async function updateView() {
   const v = await getThree();
   if (!v || v.failed || !state.result) return;
   const { THREE, groups } = v;
   const res = state.result;
   const p = res.programs[state.tab];
-  const key = `${state.tab}:${res.programs.length}:${p.lines}`;
+  const key = `${state.tab}:${res.programs.length}:${p.lines}:${[...state.hidden].join(",")}`;
+  const hide = hiddenMask(p);
 
   if (v.key !== key) {
     v.key = key;
@@ -775,6 +950,11 @@ async function updateView() {
     const cut = [], rap = [];
     const cutUpTo = new Uint32Array(n + 1), rapUpTo = new Uint32Array(n + 1);
     for (let i = 1; i < n; i++) {
+      if (hide && hide[i]) {
+        cutUpTo[i + 1] = cut.length / 6;
+        rapUpTo[i + 1] = rap.length / 6;
+        continue;
+      }
       const a = pointXYZ(pts, i - 1);
       const b = pointXYZ(pts, i);
       (pts[4 * i + 3] % 2 ? cut : rap).push(...a, ...b);
@@ -792,60 +972,9 @@ async function updateView() {
     v.rapUpTo = rapUpTo;
     groups.path.add(v.cutLines, v.rapLines);
 
-    // stock cylinder and part
-    clear(groups.stock);
-    clear(groups.part);
-    const prof = res.profile?.points;
-    let xs = [];
-    for (let i = 0; i < pts.length; i += 4) if (pts[i + 3] % 2) xs.push(pts[i]);
-    if (prof) xs.push(...prof.map((q) => q[0]));
-    if (res.mesh_bounds) xs.push(res.mesh_bounds[0][0], res.mesh_bounds[1][0]);
-    const xmin = Math.min(...xs) - 3, xmax = Math.max(...xs) + 1;
-    const R = res.stock.radius;
-    v.bounds = { xmin, xmax, R };
-    // closed solids (web/meshes.js): caps and shoulder faces, outward winding, front faces only
-    const stockMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.15, depthWrite: false });
-    const sb = res.stock_box;
-    $("viewNote").textContent = sb
-      ? "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. Vise setup: the block stays put and the tool moves in X, Y and Z (Z0 = top of the stock)."
-      : "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. The part turns, so the path is drawn around it (A rotates about X).";
-    if (sb) {
-      // vise setup: the block in work coordinates (Z up)
-      const size = [0, 1, 2].map((k) => sb.max[k] - sb.min[k]);
-      const box = new THREE.Mesh(new THREE.BoxGeometry(...size), stockMat);
-      box.position.set(...[0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2));
-      groups.stock.add(box);
-    } else groups.stock.add(new THREE.Mesh(toGeometry(THREE, cylinder(R, xmin, xmax, 96)), stockMat));
-    const partMat = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.3, roughness: 0.5 });
-    if (state.mesh && res.mesh_bounds) {
-      const { result } = await engine("meshTriangles", state.job, { max_triangles: 150000 }, state.mesh);
-      const g = new THREE.BufferGeometry();
-      g.setAttribute("position", new THREE.Float32BufferAttribute(result.triangles, 3));
-      g.computeVertexNormals();
-      // a user's mesh may have inconsistent winding: show both sides
-      const meshMat = partMat.clone();
-      meshMat.side = THREE.DoubleSide;
-      groups.part.add(new THREE.Mesh(g, meshMat));
-    } else if (prof && prof.length > 1) {
-      groups.part.add(new THREE.Mesh(toGeometry(THREE, revolveProfile(prof, 120)), partMat));
-    }
-    // frame the view again when the stock changes (another example or setup); keep the
-    // user's orbit otherwise
-    const fitKey = JSON.stringify(sb || [res.stock.radius, Math.round(xmin), Math.round(xmax)]);
-    if (v.fitted !== fitKey) v.fitted = null;
-    if (!v.fitted && sb) {
-      const c = [0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2), span = Math.max(sb.max[0] - sb.min[0], sb.max[1] - sb.min[1]);
-      v.camera.position.set(c[0] - span * 0.3, c[1] - span * 1.2, c[2] + span * 0.9);
-      v.controls.target.set(...c);
-      v.fitted = fitKey;
-    }
-    if (!v.fitted) {
-      const span = xmax - xmin;
-      v.camera.position.set((xmin + xmax) / 2 - span * 0.2, -span * 1.3, R * 2.2);
-      v.controls.target.set((xmin + xmax) / 2, 0, 0);
-      v.fitted = fitKey;
-    }
+    // the part and the stock come from the project (drawModel), results or not
     v.simKey = null;
+    await drawModel();
   }
 
   // simulated stock surface for this program
@@ -1300,6 +1429,8 @@ $("autoGen").addEventListener("change", () => {
   if ($("autoGen").checked && state.stale) scheduleAuto();
 });
 window.__marcam.autoDelay = AUTO_DELAY;
+window.__marcam.setHidden = setHidden;
+window.__marcam.hiddenStoreKey = hiddenStoreKey;
 
 // ---------------------------------------------------------------- project workflow
 window.__marcam.project = setupProject({

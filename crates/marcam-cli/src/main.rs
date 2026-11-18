@@ -395,6 +395,9 @@ fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
         if jobs.len() > 1 {
             println!("== setup {setup}");
         }
+        if job.programs.iter().all(|p| p.operations.is_empty()) {
+            println!("warning: setup {setup} has no enabled operation: nothing to plan");
+        }
         let (b, t) = run_setup(o, job_path, job, &reg)?;
         bad += b;
         total += t;
