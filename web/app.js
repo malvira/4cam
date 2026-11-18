@@ -321,7 +321,10 @@ function renderQuick() {
       if (!Number.isFinite(v)) return;
       const j = readJob();
       let o = j;
-      for (const k of path.slice(0, -1)) o = o[k];
+      for (const k of path.slice(0, -1)) o = o?.[k];
+      // the project changed shape since this was drawn (a 0.1 job saved as 0.2 on its first
+      // edit): the field is not there any more, so the panel is drawn again
+      if (o == null || typeof o[key] !== "number") return renderQuick();
       o[key] = v;
       writeJob(j);
     });

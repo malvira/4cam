@@ -1233,7 +1233,9 @@ try {
     await sleep(600);
     check("changing an operation's colour plans nothing and leaves the results current (only unsaved)",
       (await plans()) === p0 && !(await isStale()) && (await js("!document.getElementById('projectDirty').classList.contains('hidden')")), `${(await plans()) - p0} plans; stale ${await isStale()}`);
-    // a real edit: out of date, Generate highlighted, nothing planned until Generate
+    // a real edit: out of date, Generate highlighted, nothing planned until Generate (once
+    // the colour's save has redrawn the panels: a slow machine is still at it)
+    await settle();
     await js("const f = document.querySelector('#quick input'); f.value = String(+f.value + 0.01); f.dispatchEvent(new Event('change')); true");
     await sleep(AUTO_WAIT);
     const edited = await js("({ stale: document.body.classList.contains('stale'), banner: !!document.getElementById('staleBanner'), attention: document.getElementById('generate').classList.contains('attention') })");
