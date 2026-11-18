@@ -12,3 +12,4 @@ __pycache__/
 tests/local/
 # failure screenshots of the stress tests (local only)
 web/tests/screenshots/stress_fail_*
+web/tests/screenshots/step_failure.png
