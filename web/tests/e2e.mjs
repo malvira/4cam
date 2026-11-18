@@ -1236,7 +1236,11 @@ try {
     // a real edit: out of date, Generate highlighted, nothing planned until Generate (once
     // the colour's save has redrawn the panels: a slow machine is still at it)
     await settle();
-    await js("const f = document.querySelector('#quick input'); f.value = String(+f.value + 0.01); f.dispatchEvent(new Event('change')); true");
+    // (an operation's feed, in the project text: the quick panel's fields depend on whether
+    // the job is still 0.1 or already saved as 0.2)
+    await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value);
+      const op = j.schema_version === '0.2' ? j.setups[0].operations[0] : j.programs[0].operations[0];
+      op.feed = Math.round((op.feed || 500) * 1.1); t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
     await sleep(AUTO_WAIT);
     const edited = await js("({ stale: document.body.classList.contains('stale'), banner: !!document.getElementById('staleBanner'), attention: document.getElementById('generate').classList.contains('attention') })");
     check("editing a parameter marks the results out of date and highlights Generate, and plans nothing",

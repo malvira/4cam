@@ -301,21 +301,25 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.target = n;
     if (m.busy) return;
     m.busy = true;
+    const session = m.session;
     try {
       while (m.target !== m.pos) {
         const want = m.target;
         let result;
         if (m.gpu) {
           // on the GPU: run the segments, read back only the rows they touched
-          const rows = m.gpu.seek(want);
-          result = { pos: m.gpu.pos, rows: null };
+          const gpu = m.gpu;
+          const rows = gpu.seek(want);
+          result = { pos: gpu.pos, rows: null };
           if (rows) {
-            const { h, op } = m.gpu.decode(await m.gpu.readRows(rows[0], rows[1]));
-            result = { pos: m.gpu.pos, rows, [m.xyz ? "z" : "r"]: h, op };
+            const { h, op } = gpu.decode(await gpu.readRows(rows[0], rows[1]));
+            result = { pos: gpu.pos, rows, [m.xyz ? "z" : "r"]: h, op };
           }
         } else {
           result = (await engine("simSeek", want)).result;
         }
+        // closed (or another opened) while the engine worked: nothing to show
+        if (m.session !== session || !result) break;
         applyRows(result);
         if (result.pos === want || m.target === want) break;
       }
