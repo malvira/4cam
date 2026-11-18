@@ -555,7 +555,9 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
 
     // the part's bottom (the largest down face at the lowest Z): its outline is the part's
     // outline to cut it out along, whatever its top is like
-    let mut bottom: Option<(f64, Vec<[f64; 2]>, Vec<Key>, usize)> = None;
+    // (its area, outline, the outline's vertices, its region)
+    type Bottom = (f64, Vec<[f64; 2]>, Vec<Key>, usize);
+    let mut bottom: Option<Bottom> = None;
     let zmax = mesh.bounds().map_or(0.0, |(_, hi)| hi[2]);
     // flat faces, their edge loops, and pockets
     for (k, r) in regions.iter().enumerate() {
@@ -667,7 +669,11 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
             }
         }
         let id = &r.info.id;
-        if !up && (z - zmin).abs() < 1e-3 && !lps.is_empty() && bottom.as_ref().is_none_or(|b| r.area > b.0) {
+        if !up
+            && (z - zmin).abs() < 1e-3
+            && !lps.is_empty()
+            && bottom.as_ref().is_none_or(|b| r.area > b.0)
+        {
             bottom = Some((r.area, lps[0].clone(), key_loops[order[0]].clone(), k));
         }
         if up && !floor_of_hole.contains_key(&k) {
@@ -773,7 +779,10 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
             if w == k || is_up(r) || is_down(r) || hole_set.contains(&w) {
                 continue;
             }
-            if r.tris.iter().any(|&i| tris[i].iter().any(|p| on.contains(&key(p)))) {
+            if r.tris
+                .iter()
+                .any(|&i| tris[i].iter().any(|p| on.contains(&key(p))))
+            {
                 faces.push(r.info.id.clone());
             }
         }
@@ -782,7 +791,11 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
         out.push(Pickable {
             id: format!("outline:{}", regions[k].info.id),
             kind: "outline".into(),
-            label: format!("Part outline {:.2} x {:.2} (cut it out)", hi[0] - lo[0], hi[1] - lo[1]),
+            label: format!(
+                "Part outline {:.2} x {:.2} (cut it out)",
+                hi[0] - lo[0],
+                hi[1] - lo[1]
+            ),
             faces,
             similar: "outline".into(),
             data: json!({"path": close(&path), "bottom": zmin, "top": zmax}),
@@ -810,10 +823,17 @@ fn drop_collinear(l: &[[f64; 2]]) -> Vec<[f64; 2]> {
 }
 
 fn kind_order(k: &str) -> usize {
-    ["hole", "pocket", "flat_face", "edge_loop", "outline", "surface"]
-        .iter()
-        .position(|x| *x == k)
-        .unwrap_or(9)
+    [
+        "hole",
+        "pocket",
+        "flat_face",
+        "edge_loop",
+        "outline",
+        "surface",
+    ]
+    .iter()
+    .position(|x| *x == k)
+    .unwrap_or(9)
 }
 
 fn bbox(p: &[[f64; 2]]) -> ([f64; 2], [f64; 2]) {
@@ -942,7 +962,11 @@ fn face_paths(p: &Pickable, r: Option<f64>) -> Vec<Value> {
     let open: Vec<bool> = serde_json::from_value(p.data["open"].clone()).unwrap_or_default();
     let mut out = pts.clone();
     // `close` repeats the first point at the end
-    let n = if pts.len() > 1 && pts.first() == pts.last() { pts.len() - 1 } else { pts.len() };
+    let n = if pts.len() > 1 && pts.first() == pts.last() {
+        pts.len() - 1
+    } else {
+        pts.len()
+    };
     if let Some(r) = r.filter(|_| open.len() == n && n >= 3 && open.iter().any(|&o| o)) {
         let push = r + 0.1;
         // an up face's outline runs counter-clockwise: outward is to the right of each edge
