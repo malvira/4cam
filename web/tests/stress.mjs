@@ -554,6 +554,12 @@ const SCENARIOS = {
     },
     () => A.generate(),
   ],
+  // monkey seed 1: the plaque (a relief from an image) replaced by an STL was not drawn
+  "the plaque's relief replaced by an STL is drawn and plans": () => [
+    () => A.loadExample({ pick: () => "plaque" }),
+    () => A.replaceModel(r0, "oval_grip_one_oval.stl"),
+    () => A.generate(),
+  ],
   "an applied operation's type changed, then cancelled: the old one stays": () => [
     () => A.importStl(r0, "bracket.stl", "vise"),
     () => A.select({ pick: (xs) => xs[0] }),

@@ -294,3 +294,26 @@ fn ambiguous_and_missing_matches_say_so() {
         .contains("not on the new model"));
     assert_eq!(marcam::replace::find(&h.signature, &fs).unwrap().id, h.id);
 }
+
+#[test]
+fn a_relief_from_an_image_replaced_by_a_mesh_drops_its_image_settings() {
+    // (the stress test's monkey: the plaque replaced by an STL was not drawn)
+    let dir = tmp("relief");
+    std::fs::write(dir.join("b.stl"), prism::bracket().to_stl()).unwrap();
+    let mut p = project(
+        "plaque.png",
+        json!({"shape": "box", "min": [0.0, 0.0, -12.0], "max": [60.0, 40.0, 0.0]}),
+        serde_json::from_str(TOOLS).unwrap(),
+    );
+    p["models"][0]["image"] = json!({"width": 80.0, "height": 60.0, "depth": 3.0, "base": -4.0});
+    let (q, rep) = replace(&p, &dir, "b.stl");
+    assert!(rep.is_empty());
+    assert_eq!(q["models"][0]["file"], "b.stl");
+    assert!(q["models"][0].get("image").is_none(), "{}", q["models"][0]);
+    // and it reads as the mesh it is
+    let libs = marcam::profiles::builtin_libraries();
+    let jobs =
+        marcam::project::jobs_from_any_with(&q.to_string(), &libs, &|src| src.load(&dir).ok())
+            .unwrap();
+    assert!(marcam::load_mesh(&jobs[0].1, &dir).unwrap().is_some());
+}

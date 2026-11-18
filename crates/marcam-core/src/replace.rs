@@ -310,6 +310,16 @@ pub fn replace_model(
         ));
     }
     m["file"] = json!(file);
+    // a relief built from an image, replaced by a mesh: no image settings any more (another
+    // image keeps them)
+    let image = [".png", ".pgm"]
+        .iter()
+        .any(|e| file.to_ascii_lowercase().ends_with(e));
+    if !image {
+        if let Some(o) = m.as_object_mut() {
+            o.remove("image");
+        }
+    }
     resolve(&p, mesh_of, tool_diameter)
 }
 
