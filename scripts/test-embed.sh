@@ -13,7 +13,8 @@ echo "$OUT"
 want "$OUT" "setup1/knob_1_profile: 21787 lines"
 
 WHL=$($PY scripts/build_wheel.py | tail -1)
-$PY -m venv target/embed-venv
+# --clear: CI restores target/ from a cache, which can leave a venv half there (no pip)
+$PY -m venv --clear target/embed-venv
 if [ -x target/embed-venv/Scripts/python.exe ]; then VPY=target/embed-venv/Scripts/python.exe; else VPY=target/embed-venv/bin/python; fi
 $VPY -m pip install --no-index --force-reinstall --quiet "$WHL"
 OUT=$($VPY -I examples/embed/python/plan.py $KNOB)

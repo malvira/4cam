@@ -9,7 +9,7 @@ cargo build -q --release -p marcam-cli
 # (Git Bash's -x finds marcam.exe for "marcam"; Python needs the real name)
 if [ -f target/release/marcam.exe ]; then CLI=target/release/marcam.exe; else CLI=target/release/marcam; fi
 WHL=$($PY scripts/build_wheel.py | tail -1)
-$PY -m venv target/freecad-venv
+$PY -m venv --clear target/freecad-venv
 if [ -x target/freecad-venv/Scripts/python.exe ]; then VPY=target/freecad-venv/Scripts/python.exe; else VPY=target/freecad-venv/bin/python; fi
 $VPY -m pip install --no-index --force-reinstall --quiet "$WHL"
 $VPY -I adapters/freecad/tests/test_freecad.py "$CLI"
