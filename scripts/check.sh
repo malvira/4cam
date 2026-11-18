@@ -29,4 +29,6 @@ sh scripts/test-python.sh
 node web/tests/meshes.test.mjs
 node web/tests/project.test.mjs
 node web/tests/e2e.mjs
+# stateful UI tests: scripted scenarios and the seeded monkey (fixed seeds)
+node web/tests/stress.mjs
 echo "ALL CHECKS PASSED"

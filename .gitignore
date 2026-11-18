@@ -10,3 +10,5 @@ __pycache__/
 
 # local-only test parts (not ours to publish); tests using them skip when absent
 tests/local/
+# failure screenshots of the stress tests (local only)
+web/tests/screenshots/stress_fail_*

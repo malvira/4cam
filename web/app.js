@@ -1431,6 +1431,8 @@ $("autoGen").addEventListener("change", () => {
 window.__marcam.autoDelay = AUTO_DELAY;
 window.__marcam.setHidden = setHidden;
 window.__marcam.hiddenStoreKey = hiddenStoreKey;
+// what Generate plans with (the tests plan the saved project again with it)
+window.__marcam.planArgs = () => ({ machine: machineArg(), libraries: libraries() });
 
 // ---------------------------------------------------------------- project workflow
 window.__marcam.project = setupProject({

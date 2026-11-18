@@ -7,7 +7,9 @@ const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 export function setupTree({ engine, $, state, readJob, writeJob, showError, onChange, getThree, machineArg }) {
-  const t = { doc: null, problems: [], types: [], setup: null, selected: null, picking: false, regions: null };
+  // gen: bumped when the project is replaced, so editor work still awaiting the engine then
+  // is dropped instead of landing in the new project
+  const t = { doc: null, problems: [], types: [], setup: null, selected: null, picking: false, regions: null, gen: 0 };
   state.tree = t;
 
   async function loadTypes() {
@@ -34,6 +36,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     if (!t.doc.setups.some((s) => s.id === t.setup)) t.setup = t.doc.setups[0]?.id ?? null;
+    const s = setup();
+    const exists = (id) => !!s?.operations.some((o) => o.id === id);
+    // an applied operation's pending type change: gone with it
+    if (t.retype && !exists(t.retype.op.id)) t.retype = null;
+    // a draft whose id has since been taken (an undo brought one back): dropped
+    if (t.draft && exists(t.draft.op.id)) t.draft = null;
+    if (t.selected && !exists(t.selected) && !(t.draft && t.draft.op.id === t.selected)) {
+      if (t.picking) endPicking(false);
+      t.selected = null;
+    }
     render();
   }
 
@@ -45,7 +57,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   }
 
   const setup = () => t.doc.setups.find((s) => s.id === t.setup);
-  const opById = (id) => (t.draft && t.draft.op.id === id ? t.draft.op : setup().operations.find((o) => o.id === id));
+  // the operation being edited: a new one (draft), an applied one whose type is being changed
+  // (retype, written on Apply), else the project's
+  const opById = (id) =>
+    t.draft && t.draft.op.id === id ? t.draft.op : t.retype && t.retype.op.id === id ? t.retype.op : setup()?.operations.find((o) => o.id === id);
   const typeOf = (kind) => t.types.find((x) => x.kind === kind);
   const colorOf = (op, i) => op.color || PALETTE[i % PALETTE.length];
   // a vise setup (box stock) takes the 3-axis types; a rotary setup takes everything, the
@@ -166,7 +181,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     const ty = typeOf(op.type);
     const tools = (t.doc.tools || []).map((x) => x.number);
+    const typeOpts = t.types
+      .filter((x) => fits(x, setup()) || x.kind === op.type)
+      .map((x) => `<option value="${x.kind}" ${x.kind === op.type ? "selected" : ""}>${esc(x.title)}</option>`)
+      .join("");
     let html = `<form class="opform" id="opForm"><div class="tree-outname">${esc(ty?.title || op.type)} <span class="muted">${esc(op.id)}</span></div>
+      <label>Type <select name="__type" aria-label="Operation type of ${esc(op.id)}">${typeOpts}</select></label>
+      ${t.typeNote && t.typeNote.id === op.id ? `<div class="muted small" id="typeNote">${esc(t.typeNote.text)}</div>` : ""}
+      ${t.retype && t.retype.op.id === op.id ? `<div class="muted small">Type changed from ${esc(typeOf(t.retype.from)?.title || t.retype.from)}: not saved until Apply</div>` : ""}
       <label>Name <input name="__name" value="${esc(op.name || "")}"></label>`;
     for (const p of ty.params) {
       const v = op[p.name];
@@ -219,7 +241,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     // face and axial selections bound rotary operations (X/A) and the 3D raster
     if (mode?.legacy) html += `<label>axial range (mm)<input name="__axial" value="${ax ? ax.x.join(", ") : ""}" placeholder="all"></label>`;
-    html += `<div id="opErrors" class="error small hidden"></div><div class="row"><button type="submit" class="primary">Apply</button>${t.draft ? ' <button type="button" id="cancelDraft">Cancel</button>' : ""}</div></form>`;
+    const pending = (t.draft && t.draft.op.id === op.id) || (t.retype && t.retype.op.id === op.id);
+    html += `<div id="opErrors" class="error small hidden"></div><div class="row"><button type="submit" class="primary">Apply</button>${pending ? ' <button type="button" id="cancelDraft">Cancel</button>' : ""}</div></form>`;
     ed.innerHTML = html;
   }
 
@@ -378,11 +401,15 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   }
 
   function stopPicking() {
+    endPicking(true);
+    renderEditor();
+  }
+
+  /** Leave picking: the highlight goes; `write`: an applied operation's picks are saved. */
+  function endPicking(write) {
     // the selection is applied now: one edit
-    if (t.pickedChanged) {
-      t.pickedChanged = false;
-      writeJob(t.doc);
-    }
+    if (t.pickedChanged && write) writeJob(t.doc);
+    t.pickedChanged = false;
     const v = state.three;
     if (t.pickMesh) {
       v.scene.remove(t.pickMesh);
@@ -393,7 +420,6 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (v && !v.failed) v.groups.part.visible = $("showPart").checked;
     t.picking = false;
     t.pick = null;
-    renderEditor();
   }
 
   // colours: picked, under the pointer, can be picked, cannot
@@ -618,10 +644,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       // a draft with every field filled by the engine's defaults (from the setup's tools,
       // spindle, machine limits and part faces); it joins the project on Apply
       const out = $("treeAddOut").value;
+      // a draft already open is replaced; picking for it ends without writing anything
+      if (t.picking) endPicking(false);
+      t.retype = null;
+      t.typeNote = null;
       t.selected = id;
       t.edited = new Set();
+      const gen = t.gen, doc = t.doc;
       try {
         const { result } = await engine("opDefaults", t.doc, { type: kind, setup: s.id, machine: machineArg?.() ?? null }, state.mesh);
+        // the project was replaced meanwhile, or another operation selected
+        if (gen !== t.gen || doc !== t.doc || t.selected !== id) return;
         t.draft = { op: { id, ...result }, out, title: ty.title };
         render();
       } catch (e) {
@@ -641,8 +674,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     if (el.id === "cancelDraft") {
-      t.draft = null;
-      t.selected = null;
+      if (t.picking) endPicking(false);
+      // a new operation goes; an applied one keeps its type and stays selected
+      if (t.draft && t.draft.op.id === t.selected) {
+        t.draft = null;
+        t.selected = null;
+      }
+      t.retype = null;
+      t.typeNote = null;
       render();
       return;
     }
@@ -696,8 +735,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const out = s.outputs.find((o) => o.operations.includes(id));
     const act = el.dataset.act;
     if (act === "select") {
-      t.selected = t.selected === id ? null : id;
       if (t.picking) stopPicking();
+      // another operation: an unsaved new one or a pending type change is dropped
+      t.draft = null;
+      t.retype = null;
+      t.typeNote = null;
+      t.selected = t.selected === id ? null : id;
       render();
     } else if (act === "up" || act === "down") {
       const k = out.operations.indexOf(id);
@@ -705,6 +748,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       [out.operations[k], out.operations[j]] = [out.operations[j], out.operations[k]];
       await commit();
     } else if (act === "delete") {
+      if (t.selected === id && t.picking) endPicking(false);
+      if (t.retype?.op.id === id) t.retype = null;
       s.operations = s.operations.filter((o) => o.id !== id);
       for (const o of s.outputs) o.operations = o.operations.filter((x) => x !== id);
       s.outputs = s.outputs.filter((o) => o.operations.length);
@@ -718,10 +763,76 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (f && ev.target.name && t.edited) t.edited.add(ev.target.name);
   });
 
+  // what a type takes from picks: cleared (with a note) when the new type has no such field
+  const PICKED = ["points", "paths", "path", "rect", "x_range", "edge", "body_back", "body_front", "diameter", "index_a"];
+  /**
+   * The operation being edited becomes a `kind`: the form, the defaults and the picker follow
+   * the new type's registry entry. Values the two types share (same name, kind and unit) are
+   * kept when the person set them (an applied operation's are all theirs); the tool if it fits;
+   * picked faces if the new type takes faces. What it cannot take is cleared, with a note.
+   */
+  async function changeType(kind) {
+    const cur = readForm();
+    const from = cur.type;
+    if (kind === from) return;
+    const was = typeOf(from), ty = typeOf(kind);
+    if (!ty) return;
+    if (t.picking) endPicking(false);
+    const isDraft = !!(t.draft && t.draft.op.id === cur.id);
+    const notes = [];
+    // the tool: kept if its shape suits the new type
+    const tool = (t.doc.tools || []).find((x) => x.number === cur.tool);
+    const shapeOk = !tool?.kind || !ty.tool_shapes?.length || ty.tool_shapes.includes(tool.kind);
+    // picked faces: kept if the new type bounds itself by faces
+    const facesMode = pickModeOf(ty)?.faces;
+    const geometry = (cur.geometry || []).filter((g) => (g.kind === "faces" ? facesMode : g.kind === "axial_range" ? !!pickModeOf(ty)?.legacy : true));
+    if ((cur.geometry || []).some((g) => g.kind === "faces") && !facesMode) notes.push(`the picked faces were cleared (${ty.title} does not take faces)`);
+    let result;
+    const gen = t.gen;
+    try {
+      ({ result } = await engine("opDefaults", t.doc, { type: kind, setup: t.setup, tool: shapeOk ? cur.tool : undefined, geometry, machine: machineArg?.() ?? null }, state.mesh));
+      // the project replaced, or another operation selected, meanwhile: nothing to change
+      if (gen !== t.gen || t.selected !== cur.id) return;
+    } catch (e) {
+      t.typeNote = { id: cur.id, text: `Cannot change to ${ty.title}: ${e.message}` };
+      return renderEditor();
+    }
+    if (!shapeOk) notes.push(`tool ${cur.tool} (${tool.kind}) does not suit ${ty.title}: T${result.tool} instead`);
+    const next = { id: cur.id, ...result, type: kind };
+    for (const k of ["name", "color", "enabled"]) if (cur[k] !== undefined) next[k] = cur[k];
+    if (geometry.length) next.geometry = geometry;
+    else delete next.geometry;
+    const kept = new Set();
+    for (const p of ty.params) {
+      if (p.name === "tool" || cur[p.name] === undefined) continue;
+      const q = was?.params.find((x) => x.name === p.name);
+      if (!q || q.kind !== p.kind || (q.unit || "") !== (p.unit || "")) continue;
+      // a draft's untouched fields were the old type's defaults: the new type's are better
+      if (isDraft && !t.edited?.has(p.name)) continue;
+      next[p.name] = cur[p.name];
+      kept.add(p.name);
+    }
+    const lost = PICKED.filter((k) => cur[k] !== undefined && !ty.params.some((p) => p.name === k) && k !== "index_a");
+    if (lost.length) notes.push(`cleared what ${ty.title} cannot take: ${lost.join(", ")}`);
+    t.typeNote = { id: cur.id, text: `Now ${ty.title}.${kept.size ? ` Kept: ${[...kept].join(", ")}.` : ""}${notes.length ? ` ${notes.join("; ")}.` : ""}` };
+    if (isDraft) {
+      t.draft.op = next;
+      t.draft.title = ty.title;
+      t.edited = new Set([...(t.edited || [])].filter((k) => kept.has(k)));
+    } else {
+      const applied = setup().operations.find((o) => o.id === cur.id);
+      // back to the type it has: no pending change
+      t.retype = applied?.type === kind ? null : { op: next, from: t.retype?.from || from };
+      t.edited = t.retype ? new Set(kept) : null;
+    }
+    renderEditor();
+  }
+
   /** Re-derive the draft's defaults (tool or geometry changed), keeping edited fields. */
   async function refreshDefaults() {
     if (!t.draft) return;
     const cur = readForm();
+    const gen = t.gen, draft = t.draft;
     try {
       const { result } = await engine(
         "opDefaults",
@@ -729,6 +840,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         { type: cur.type, setup: t.setup, tool: cur.tool, geometry: cur.geometry || [], machine: machineArg?.() ?? null },
         state.mesh,
       );
+      if (gen !== t.gen || draft !== t.draft) return;
       const next = { ...cur };
       for (const [k, v] of Object.entries(result)) if (!t.edited.has(k) && k !== "tool") next[k] = v;
       t.draft.op = next;
@@ -765,23 +877,36 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       }
       return;
     }
+    if (el.closest("#opForm") && el.name === "__type") return changeType(el.value);
     if (el.closest("#opForm") && el.name === "tool" && t.draft) {
       t.edited.delete("tool");
       return refreshDefaults();
     }
     if (el.closest("#opForm") && el.name === "__axial" && t.draft) return refreshDefaults();
     if (el.id === "treeSetup") {
+      // another setup: what was being edited here is dropped
+      if (t.picking) endPicking(false);
       t.setup = el.value;
       t.selected = null;
+      t.draft = null;
+      t.retype = null;
+      t.typeNote = null;
       return render();
     }
     const row = el.closest(".tree-op");
     if (!row) return;
-    const op = opById(row.dataset.op);
-    if (el.dataset.act === "enable") op.enabled = el.checked;
+    // the project's operation, not a pending edit of it (whose copy follows)
+    const op = setup().operations.find((o) => o.id === row.dataset.op);
+    if (!op) return;
+    const pend = t.retype?.op.id === op.id ? t.retype.op : null;
+    if (el.dataset.act === "enable") {
+      op.enabled = el.checked;
+      if (pend) pend.enabled = el.checked;
+    }
     if (el.dataset.act === "color") {
       // a colour is for the eye only: saved, but the toolpaths stay as they are
       op.color = el.value;
+      if (pend) pend.color = el.value;
       return commit({ display: true });
     }
     await commit();
@@ -791,14 +916,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const op = readForm();
     const doc = structuredClone(t.doc);
     const s = doc.setups.find((x) => x.id === t.setup);
-    if (t.draft) {
+    if (t.draft && t.draft.op.id === op.id) {
       s.operations.push(op);
       let outName = t.draft.out;
       if (outName === "__new") {
         outName = `${s.id}_${op.id}`;
         s.outputs.push({ name: outName, title: t.draft.title, operations: [] });
       }
-      s.outputs.find((o) => o.name === outName).operations.push(op.id);
+      let file = s.outputs.find((o) => o.name === outName);
+      if (!file) s.outputs.push((file = { name: `${s.id}_${op.id}`, title: t.draft.title, operations: [] }));
+      file.operations.push(op.id);
     } else {
       const i = s.operations.findIndex((o) => o.id === op.id);
       const strip = (o) => JSON.stringify({ ...o, name: undefined, color: undefined });
@@ -811,6 +938,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (result.problems.length) throw new Error(result.problems.join("; "));
       t.doc = result.project;
       t.draft = null;
+      t.retype = null;
+      t.typeNote = null;
+      if (t.picking) endPicking(false);
       const display = !!t.displayOnly;
       t.displayOnly = false;
       await commit({ display });
@@ -849,10 +979,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.pickMesh = null;
     }
     if (v && !v.failed) v.groups.part.visible = $("showPart").checked;
-    Object.assign(t, { doc: null, problems: [], setup: null, selected: null, picking: false, pickedChanged: false, regions: null, pick: null, draft: null, upgraded: false });
+    Object.assign(t, { doc: null, problems: [], setup: null, selected: null, picking: false, pickedChanged: false, regions: null, pick: null, draft: null, retype: null, typeNote: null, edited: null, upgraded: false, gen: t.gen + 1 });
     detected = { key: null, list: [] };
     $("tree").innerHTML = "";
   }
 
-  return { refresh, pickAt, pickSimilar, reset, renderEyes, state: t };
+  return { refresh, pickAt, pickSimilar, reset, renderEyes, changeType, state: t };
 }
