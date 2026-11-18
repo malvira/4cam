@@ -40,13 +40,15 @@ function findBrowser() {
 // what the browser logs on its own (a favicon), not the app
 const EXPECTED_CONSOLE = [/favicon/i, /net::ERR_/, /Failed to load resource/];
 
-/** Start the server and the browser, open the app; resolves when its engine is ready. */
-export async function startApp() {
+/** Start the server and the browser, open the app; resolves when its engine is ready.
+ *  `opts.root`: serve another checkout (default this one). */
+export async function startApp(opts = {}) {
+  const serveRoot = opts.root || root;
   const children = [];
   const cleanup = () => children.forEach((c) => { try { c.kill(); } catch {} });
   process.on("exit", cleanup);
   const port = await freePort();
-  children.push(spawn(process.platform === "win32" ? "python" : "python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", root], { stdio: "ignore" }));
+  children.push(spawn(process.platform === "win32" ? "python" : "python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", serveRoot], { stdio: "ignore" }));
   const url = `http://127.0.0.1:${port}/web/`;
   await waitFor(() => fetch(url).then((r) => r.ok), "the web server", 15000);
   const profile = mkdtempSync(join(tmpdir(), "marcam-web-"));

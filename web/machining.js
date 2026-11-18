@@ -5,11 +5,12 @@
 // (rows = X cells, A turns the work); 3-axis (vise) setups on a block (rows = Y cells, the
 // tool moves in XYZ).
 
-import { blockSolid, heightmapSolid } from "./meshes.js";
+import { blockSolid, heightmapSolid, stockObject, STOCK_LEFT } from "./meshes.js";
 import { GpuStock } from "./gpu/gpusim.js";
 
 const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"];
-const UNCUT = [0.62, 0.64, 0.68];
+// stock not cut yet: the stock's tint (distinct from cuts and from the part)
+const UNCUT = STOCK_LEFT;
 
 const b64ToBytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const f32 = (s) => new Float32Array(b64ToBytes(s).buffer);
@@ -35,6 +36,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     target: 0,
     last: 0,
     colors: {}, // tag -> [r, g, b]
+    hiddenTags: new Set(), // operations hidden in the tree (view only): cuts in grey, no tool
   };
   state.machining = m;
   // bumped by reset(): an open() still waiting on the engine then drops its result
@@ -68,7 +70,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.colors[o.tag] = hexToRgb(hex);
       const row = document.createElement("label");
       row.className = "oprow";
-      row.innerHTML = `<input type="color" value="${hex}" data-tag="${o.tag}" aria-label="Colour for ${o.program} ${o.kind}"> <span>${o.program}: ${o.kind.replace(/_/g, " ")}${o.project_id ? ` (${o.project_id})` : ""}</span>`;
+      const hid = m.hiddenTags.has(o.tag);
+      row.classList.toggle("op-hidden", hid);
+      row.innerHTML = `<input type="color" value="${hex}" data-tag="${o.tag}" aria-label="Colour for ${o.program} ${o.kind}"> <span>${o.program}: ${o.kind.replace(/_/g, " ")}${o.project_id ? ` (${o.project_id})` : ""}${hid ? " (hidden)" : ""}</span>`;
       box.appendChild(row);
     });
     const un = document.createElement("div");
@@ -77,7 +81,34 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     box.appendChild(un);
   }
 
-  const colorOf = (tag) => (tag ? m.colors[tag] || [1, 0, 1] : UNCUT);
+  // a hidden operation's cuts: grey (the material is still gone; it is just not highlighted)
+  const HIDDEN_CUT = [0.5, 0.52, 0.56];
+  const colorOf = (tag) => (tag ? (m.hiddenTags.has(tag) ? HIDDEN_CUT : m.colors[tag] || [1, 0, 1]) : UNCUT);
+
+  /** Which playback operations the tree's eyes hide (by project id, or a 0.1 job's planning
+   *  order). */
+  function refreshHidden() {
+    m.hiddenTags = new Set();
+    if (!m.session || !state.hidden?.size) return;
+    const setupId = state.tree?.setup;
+    const s = state.tree?.doc?.setups?.find((x) => x.id === setupId);
+    const planned = s ? s.outputs.flatMap((o) => o.operations).filter((id) => s.operations.find((op) => op.id === id)?.enabled !== false) : [];
+    m.session.ops.forEach((o, i) => {
+      const id = o.project_id ?? planned[i];
+      if (id && state.hidden.has(`${setupId}/${id}`)) m.hiddenTags.add(o.tag);
+    });
+  }
+
+  /** The tree's eyes changed: recolour the stock and the legend (view only). */
+  async function applyHidden() {
+    if (!m.session) return;
+    refreshHidden();
+    renderLegend();
+    if (m.open) {
+      await buildScene();
+      placeTool();
+    }
+  }
 
   // the engine grid as rows x cols (rotary: X rows of na cells; 3-axis: Y rows of nx cells)
   const dims = () => {
@@ -138,8 +169,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const work = v.groups.work;
     for (const c of [...work.children]) {
       work.remove(c);
-      c.geometry?.dispose();
-      c.material?.dispose();
+      disposeTree(c);
     }
     const s = m.session;
     const { R, C } = dims();
@@ -156,15 +186,14 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.stockMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.15 }));
     work.add(m.stockMesh);
     // ghost of the original bar or block: shows how much has been removed
-    const ghostMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.12, depthWrite: false });
     let ghost;
     if (m.xyz) {
       const { min, max } = s.stock_box;
-      ghost = new THREE.Mesh(new THREE.BoxGeometry(max[0] - min[0], max[1] - min[1], max[2] - min[2]), ghostMat);
+      ghost = stockObject(THREE, new THREE.BoxGeometry(max[0] - min[0], max[1] - min[1], max[2] - min[2]), 0.1);
       ghost.position.set((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
     } else {
       const { x0, dx, nx } = s.grid;
-      ghost = new THREE.Mesh(new THREE.CylinderGeometry(s.stock_radius, s.stock_radius, nx * dx, 64, 1, false).rotateZ(-Math.PI / 2).translate(x0 + (nx * dx) / 2, 0, 0), ghostMat);
+      ghost = stockObject(THREE, new THREE.CylinderGeometry(s.stock_radius, s.stock_radius, nx * dx, 64, 1, false).rotateZ(-Math.PI / 2).translate(x0 + (nx * dx) / 2, 0, 0), 0.1);
     }
     ghost.visible = $("simGhost").checked;
     m.ghost = ghost;
@@ -238,6 +267,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // the work turns by A (right-handed about +X; 0 on a vise); the tool stands at its tip
     v.groups.work.rotation.x = (a * Math.PI) / 180;
     v.groups.toolModel.position.set(x, y, z);
+    v.groups.toolModel.visible = !m.hiddenTags.has(opTag);
     $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.gpu ? "GPU" : "CPU"}`;
   }
 
@@ -382,6 +412,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.backend = backend;
       showBackend?.(backend);
       await engine("simSeek", 0);
+      refreshHidden();
       renderLegend();
       await buildScene();
       $("simScrub").max = String(result.segments);
@@ -498,5 +529,5 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
   });
 
-  return { open, close, seek, reset, state: m };
+  return { open, close, seek, reset, applyHidden, colorOf, state: m };
 }

@@ -1,6 +1,6 @@
 // marcam web UI: job editor -> engine (WebAssembly, in a worker) -> G-code, checks, previews.
 
-import { blockSolid, cylinder, heightmapSolid, revolveProfile } from "./meshes.js";
+import { blockSolid, cylinder, heightmapSolid, revolveProfile, stockObject, STOCK_LEFT } from "./meshes.js";
 import { gpuDevice, simulateOnGpu } from "./gpu/gpusim.js";
 import { setupMachining } from "./machining.js";
 import { splitter } from "./splitters.js";
@@ -191,6 +191,8 @@ function setHidden(keys, opts = {}) {
     drawSide();
   }
   window.__marcam.tree?.renderEyes?.();
+  // the machining playback too: hidden operations' cuts in grey, no tool while they run
+  window.__marcam.machining?.applyHidden?.();
 }
 /** Each preview point of program `p`: whether its operation is hidden (null: none is). */
 function hiddenMask(p) {
@@ -834,8 +836,11 @@ async function getThree() {
 function clear(group) {
   for (const c of [...group.children]) {
     group.remove(c);
-    c.geometry?.dispose();
-    c.material?.dispose();
+    // (an object may be a group: the stock is its solid and its outline)
+    c.traverse((o) => {
+      o.geometry?.dispose();
+      for (const mat of [].concat(o.material || [])) mat.dispose();
+    });
   }
 }
 
@@ -897,13 +902,13 @@ async function drawModel() {
     bounds = [[Math.min(...prof.map((q) => q[0])), 0, 0], [Math.max(...prof.map((q) => q[0])), 0, 0]];
   }
   // the stock: the setup's block or bar (a 0.1 job's bar)
-  const stockMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.15, depthWrite: false });
+  // (a light tint with its edges drawn: see meshes.js stockObject)
   const st = v2 ? setup?.stock : doc.stock ? { shape: "cylinder", ...doc.stock } : null;
   const sb = st?.shape === "box" ? st : null;
   let fitKey = null;
   if (sb) {
     const size = [0, 1, 2].map((k) => sb.max[k] - sb.min[k]);
-    const box = new THREE.Mesh(new THREE.BoxGeometry(...size), stockMat);
+    const box = stockObject(THREE, new THREE.BoxGeometry(...size));
     box.position.set(...[0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2));
     groups.stock.add(box);
     fitKey = JSON.stringify(sb);
@@ -912,7 +917,7 @@ async function drawModel() {
     // the bar: from the part's front face back by its length
     const front = Math.max(0, bounds ? bounds[1][0] : 0);
     const xmin = front - (st.length || 30) - 1, xmax = front + 1;
-    groups.stock.add(new THREE.Mesh(toGeometry(THREE, cylinder(st.radius, xmin, xmax, 96)), stockMat));
+    groups.stock.add(stockObject(THREE, toGeometry(THREE, cylinder(st.radius, xmin, xmax, 96))));
     v.bounds = { xmin, xmax, R: st.radius };
     fitKey = JSON.stringify([st.radius, Math.round(xmin), Math.round(xmax)]);
   }
@@ -1034,7 +1039,8 @@ function toGeometry(THREE, m) {
 function simMesh(THREE, sim, s) {
   const r = sim.kind === "xyz" ? s.z : s.r;
   const has = (k) => (sim.kind === "xyz" ? sim.part[k] != null : sim.part[k] > 0);
-  const color = (k) => (has(k) ? ramp((r[k] - sim.part[k]) / 0.5) : [0.75, 0.75, 0.75]);
+  // where there is no part: remaining stock, tinted (not the part's grey)
+  const color = (k) => (has(k) ? ramp((r[k] - sim.part[k]) / 0.5) : STOCK_LEFT);
   const m = sim.kind === "xyz" ? blockSolid(sim.grid, r, sim.stock_box.min[2], color) : heightmapSolid(sim.grid, r, color);
   return new THREE.Mesh(toGeometry(THREE, m), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }));
 }

@@ -163,3 +163,6 @@ body.stale #gcode, body.stale #view3d, body.stale #side { opacity: 0.45; }
 
 /* an operation whose picked features are gone (after a model was replaced) */
 .op-error { color: var(--bad); font-weight: 700; }
+
+/* the playback legend: an operation hidden in the tree */
+.oprow.op-hidden span { opacity: 0.55; text-decoration: line-through; }

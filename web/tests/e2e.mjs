@@ -1565,7 +1565,30 @@ try {
     await settle();
     const restored = await js("[...window.__marcam.state.hidden].sort().join(',')");
     check("which toolpaths are hidden is saved with the project and comes back on open", restored === hiddenNow.slice().sort().join(","), restored);
+    // (Mar) the machining playback too: hidden operations' cuts in grey, no tool while they
+    // run, marked in its legend; showing them again recolours it (view only)
+    await clickGenerate();
+    await waitDone("the plate for the playback", 240000);
+    await js("document.getElementById('simOpen').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the machining playback", 120000);
+    const pb = async () => js(`(() => { const m = window.__marcam.state.machining, mc = window.__marcam.machining;
+      const tags = [...m.hiddenTags]; const grey = tags.length ? mc.colorOf(tags[0]).join(",") : "";
+      const shown = m.session.ops.filter((o) => !m.hiddenTags.has(o.tag)).map((o) => mc.colorOf(o.tag).join(","));
+      return { hidden: tags.length, ops: m.session.ops.length, grey, greyShown: shown.includes(grey), legend: document.querySelectorAll('#opLegend .op-hidden').length }; })()`);
+    const pb1 = await pb();
+    // the tool, at a move of a hidden operation: not drawn
+    const toolHidden = await js(`await (async () => { const m = window.__marcam.state.machining; const p = m.session.path; const n = m.session.segments;
+      let k = -1; for (let i = 0; i < n; i++) if (m.hiddenTags.has(p[7 * i + 6])) { k = i; break; }
+      if (k < 0) return "none"; await window.__marcam.machining.seek(k + 1); await new Promise((r) => setTimeout(r, 300)); return window.__marcam.state.three.groups.toolModel.visible; })()`);
     await js("document.getElementById('eyeAll').click(); true");
+    await sleep(800);
+    const pb2 = await pb();
+    check("the machining playback follows the eyes: hidden operations' cuts in grey (not their colour), no tool while they run, marked in its legend; shown again, all coloured",
+      pb1.hidden === hiddenNow.length && pb1.hidden > 0 && pb1.hidden < pb1.ops && !pb1.greyShown && pb1.legend === pb1.hidden && toolHidden === false && pb2.hidden === 0 && pb2.legend === 0,
+      `${JSON.stringify(pb1)}; tool at a hidden move: ${toolHidden}; then ${JSON.stringify(pb2)}`);
+    await shot("18c_playback_hidden");
+    await js("document.getElementById('simClose').click(); true");
+    await sleep(500);
   }
 
   // 8o. (Mar's oval part) a block with two recessed oval flats and a textured grip between:
