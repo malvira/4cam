@@ -169,9 +169,11 @@ function unb64(s) {
 }
 
 /** The saved file: the project and the mesh it names, embedded. */
-export function projectFile(project, mesh, meshName) {
+export function projectFile(project, mesh, meshName, view) {
   const file = { format: FILE_FORMAT, version: 1, project };
   if (mesh) file.meshes = { [meshName]: b64(mesh) };
+  // how it was shown (view only: which toolpaths were hidden)
+  if (view?.hidden?.length) file.view = { hidden: view.hidden };
   return file;
 }
 
@@ -185,7 +187,7 @@ export function readProjectFile(text) {
   }
   if (obj && (obj.format === FILE_FORMAT || LEGACY_FILE_FORMATS.includes(obj.format))) {
     const [name, data] = Object.entries(obj.meshes || {})[0] || [];
-    return { project: obj.project, mesh: data ? unb64(data) : null, meshName: name || "" };
+    return { project: obj.project, mesh: data ? unb64(data) : null, meshName: name || "", view: obj.view || null };
   }
   if (obj && (obj.schema_version || obj.setups || obj.programs)) return { project: obj, mesh: null, meshName: "" };
   throw new Error("not a marcam project: no project, setups or programs in the file");
@@ -272,7 +274,7 @@ export function setupProject(ctx) {
   }
 
   async function openText(text, fileName) {
-    const { project, mesh, meshName } = readProjectFile(text);
+    const { project, mesh, meshName, view } = readProjectFile(text);
     const name = project.name || slug(fileName || "project");
     await resetProject("");
     writeJob(project, { load: true });
@@ -290,6 +292,16 @@ export function setupProject(ctx) {
       showError(`This project uses the mesh "${wanted}", which is not in the file: import it (Import STL) to plan.`);
       return;
     }
+    // what was hidden: the file's view, else this browser's memory of the project
+    let hidden = view?.hidden;
+    if (!hidden) {
+      try {
+        hidden = JSON.parse(localStorage.getItem(window.__marcam.hiddenStoreKey()) || "null");
+      } catch {
+        hidden = null;
+      }
+    }
+    window.__marcam.setHidden(hidden || [], { persist: !!view });
     // opened, not planned: Generate when ready (it can take a while)
     clearResults(`Opened ${name}. Generate to plan its toolpaths.`, ["generate"]);
     await refreshAll();
@@ -325,7 +337,7 @@ export function setupProject(ctx) {
       if (project.schema_version === "0.2") project.name = name;
       writeJob(project, { load: true });
     }
-    const file = projectFile(project, state.mesh, meshFileOf(project) || state.meshName.split(" ")[0] || "part.stl");
+    const file = projectFile(project, state.mesh, meshFileOf(project) || state.meshName.split(" ")[0] || "part.stl", { hidden: [...state.hidden] });
     const blob = new Blob([JSON.stringify(file, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);

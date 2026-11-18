@@ -87,7 +87,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       <button type="button" id="treeAddSetup" title="Another setup for the same part (e.g. the other side, or a vise setup)">+ Setup</button>
       <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>
       <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
-      <div class="row small detected" id="detected"></div>`;
+      <div class="row small detected" id="detected"></div>
+      <div class="row small eyes"><span class="muted">Toolpaths shown:</span>
+        <button type="button" id="eyeAll" title="Show every toolpath of this setup">Show all</button>
+        <button type="button" id="eyeNone" title="Hide every toolpath of this setup (view only)">Hide all</button></div>`;
     if (t.upgraded) html += `<div class="muted small">0.1 job shown as a 0.2 project; it is saved as 0.2 on the first edit.</div>`;
     let n = 0;
     // estimated times from the last Generate of this setup
@@ -101,7 +104,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       res?.programs?.flatMap((p) => p.time?.ops || []).find((o) => (o.id ?? planned[o.index]) === id)?.seconds;
     for (const out of s.outputs) {
       const ft = fileTime(out.name);
-      html += `<div class="tree-out" data-out="${esc(out.name)}"><div class="tree-outname">${esc(out.name)}.nc <span class="muted">${esc(out.title)}</span>${ft != null ? ` <span class="tree-time" title="estimated machining time">${fmt(ft)}</span>` : ""}</div>`;
+      const allHidden = out.operations.length && out.operations.every((id) => isHidden(id));
+      html += `<div class="tree-out" data-out="${esc(out.name)}"><div class="tree-outname"><button type="button" class="eye ${allHidden ? "off" : ""}" data-out-eye="${esc(out.name)}" aria-label="Show the toolpaths of ${esc(out.name)}" title="Show or hide every toolpath of this file (view only)">${allHidden ? "◌" : "◉"}</button> ${esc(out.name)}.nc <span class="muted">${esc(out.title)}</span>${ft != null ? ` <span class="tree-time" title="estimated machining time">${fmt(ft)}</span>` : ""}</div>`;
       out.operations.forEach((id, k) => {
         const op = opById(id);
         if (!op) return;
@@ -111,6 +115,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         html += `<div class="tree-op ${t.selected === id ? "sel" : ""} ${op.enabled === false ? "off" : ""}" data-op="${esc(id)}">
           <input type="checkbox" data-act="enable" ${op.enabled === false ? "" : "checked"} aria-label="Enable ${esc(id)}">
           <input type="color" data-act="color" value="${colorOf(op, i)}" aria-label="Colour of ${esc(id)}">
+          <button type="button" data-act="eye" class="eye ${isHidden(id) ? "off" : ""}" aria-pressed="${!isHidden(id)}" aria-label="Show the toolpath of ${esc(id)}" title="Show or hide this toolpath (view only; Alt-click: show only this)">${isHidden(id) ? "◌" : "◉"}</button>
           <span class="tree-label" data-act="select">${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}${ot != null ? ` · <span class="tree-time">${fmt(ot)}</span>` : ""}</span></span>
           <button type="button" data-act="up" ${k === 0 ? "disabled" : ""} aria-label="Move ${esc(id)} up">▲</button>
           <button type="button" data-act="down" ${k === out.operations.length - 1 ? "disabled" : ""} aria-label="Move ${esc(id)} down">▼</button>
@@ -131,6 +136,24 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     box.dataset.ops = String(n);
     renderEditor();
     detectFeatures();
+  }
+
+  // ------------------------------------------------------------ visibility (view only)
+  const eyeKey = (id) => `${t.setup}/${id}`;
+  function isHidden(id) {
+    return !!state.hidden?.has(eyeKey(id));
+  }
+  function setupOps() {
+    return setup()?.operations.map((o) => o.id) || [];
+  }
+  function setEyes(fn) {
+    const next = new Set(state.hidden);
+    fn(next);
+    window.__marcam.setHidden(next);
+  }
+  /** Repaint the eye buttons (after the view changed them). */
+  function renderEyes() {
+    if (t.doc) render();
   }
 
   /** Form for the selected operation, built from the registry's parameter specs. */
@@ -654,9 +677,21 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       paintPicked();
       return commit();
     }
+    if (el.id === "eyeAll") return setEyes((h) => setupOps().forEach((id) => h.delete(eyeKey(id))));
+    if (el.id === "eyeNone") return setEyes((h) => setupOps().forEach((id) => h.add(eyeKey(id))));
+    if (el.dataset?.outEye) {
+      const out = setup().outputs.find((o) => o.name === el.dataset.outEye);
+      const all = out.operations.every((id) => isHidden(id));
+      return setEyes((h) => out.operations.forEach((id) => (all ? h.delete(eyeKey(id)) : h.add(eyeKey(id)))));
+    }
     const row = el.closest(".tree-op");
     if (!row) return;
     const id = row.dataset.op;
+    if (el.dataset?.act === "eye") {
+      // Alt-click: this one only
+      if (ev.altKey) return setEyes((h) => setupOps().forEach((o) => (o === id ? h.delete(eyeKey(o)) : h.add(eyeKey(o)))));
+      return setEyes((h) => (h.has(eyeKey(id)) ? h.delete(eyeKey(id)) : h.add(eyeKey(id))));
+    }
     const s = setup();
     const out = s.outputs.find((o) => o.operations.includes(id));
     const act = el.dataset.act;
@@ -819,5 +854,5 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     $("tree").innerHTML = "";
   }
 
-  return { refresh, pickAt, pickSimilar, reset, state: t };
+  return { refresh, pickAt, pickSimilar, reset, renderEyes, state: t };
 }

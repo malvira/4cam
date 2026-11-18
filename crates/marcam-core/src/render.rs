@@ -270,10 +270,24 @@ fn fmt_tick(v: f64) -> String {
 /// Indexed 3+1 moves (machine X/Y/Z with A held) come out as the part point they reach, in
 /// the same form: its radius and the A that would put it under a centred tool.
 pub fn polyline(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
+    polyline_marked(tp).0
+}
+
+/// A polyline (x, radius or y, angle or z, cut) and where each operation starts in it:
+/// (operation id, index of its first point).
+pub type Marked = (Vec<(f64, f64, f64, bool)>, Vec<(u32, usize)>);
+
+/// [`polyline`], and where each operation starts in it.
+pub fn polyline_marked(tp: &Toolpath) -> Marked {
     let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0f64);
     let mut y = 0.0f64;
     let mut pts = Vec::new();
+    let mut marks = Vec::new();
     for m in &tp.moves {
+        if let Move::Operation { id, .. } = m {
+            marks.push((*id, pts.len()));
+            continue;
+        }
         if let Move::Pose { tip, axis, feed } = *m {
             if let Ok(na) = crate::kinematics::solve_a(axis, a) {
                 a = na;
@@ -346,7 +360,7 @@ pub fn polyline(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
             pts.push((x, r, a, cut));
         }
     }
-    pts
+    (pts, marks)
 }
 
 /// True when the toolpath moves in work XYZ (3-axis) rather than X/radius/A.
@@ -361,9 +375,19 @@ pub fn is_xyz(tp: &Toolpath) -> bool {
 
 /// Tool-tip polyline of a 3-axis toolpath: `(x, y, z, is_cut)` per move once XYZ is known.
 pub fn polyline3(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
+    polyline3_marked(tp).0
+}
+
+/// [`polyline3`], and where each operation starts in it (see [`polyline_marked`]).
+pub fn polyline3_marked(tp: &Toolpath) -> Marked {
     let mut p: [Option<f64>; 3] = [None; 3];
     let mut pts = Vec::new();
+    let mut marks = Vec::new();
     for m in &tp.moves {
+        if let Move::Operation { id, .. } = m {
+            marks.push((*id, pts.len()));
+            continue;
+        }
         let cut = match *m {
             Move::Rapid3 { x, y, z } => {
                 for (k, v) in [x, y, z].into_iter().enumerate() {
@@ -383,7 +407,7 @@ pub fn polyline3(tp: &Toolpath) -> Vec<(f64, f64, f64, bool)> {
             pts.push((x, y, z, cut));
         }
     }
-    pts
+    (pts, marks)
 }
 
 /// Two-panel preview PNG. `profile` (if any) is drawn as the finished part in the side view.

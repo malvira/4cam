@@ -168,12 +168,20 @@ pub mod api {
     /// Tool-tip polyline, flattened `[x, r, a, kind, ...]` (kind 0 rapid, 1 feed), thinned
     /// to about `max_points` points (rapids and direction changes between rapid and feed are
     /// always kept). 3-axis programs give `[x, y, z, kind, ...]` with kind 2 rapid, 3 feed.
-    fn polyline(tp: &Toolpath, max_points: usize, xyz: bool) -> (Vec<f32>, usize, bool) {
-        let pts = if xyz {
-            render::polyline3(tp)
+    /// The preview polyline (thinned to about `max_points`), and where each operation starts
+    /// in it: (operation index, first point).
+    fn polyline(
+        tp: &Toolpath,
+        max_points: usize,
+        xyz: bool,
+    ) -> (Vec<f32>, usize, bool, Vec<(u32, usize)>) {
+        let (pts, marks) = if xyz {
+            render::polyline3_marked(tp)
         } else {
-            render::polyline(tp)
+            render::polyline_marked(tp)
         };
+        let mut starts = Vec::new();
+        let mut next_mark = 0;
         let kind0 = if xyz { 2u8 } else { 0 };
         let total = pts.len();
         let stride = if max_points > 0 && total > max_points {
@@ -183,6 +191,10 @@ pub mod api {
         };
         let mut out = Vec::with_capacity(4 * (total / stride + 16));
         for (i, p) in pts.iter().enumerate() {
+            while next_mark < marks.len() && marks[next_mark].1 <= i {
+                starts.push((marks[next_mark].0, out.len() / 4));
+                next_mark += 1;
+            }
             let keep = stride == 1
                 || i % stride == 0
                 || i + 1 == total
@@ -197,7 +209,10 @@ pub mod api {
                 ]);
             }
         }
-        (out, total, stride > 1)
+        for m in &marks[next_mark..] {
+            starts.push((m.0, out.len() / 4));
+        }
+        (out, total, stride > 1, starts)
     }
 
     /// Plan, post, verify and gouge-check a job. `opts`: `{"max_points": n}` (default 200000).
@@ -264,7 +279,12 @@ pub mod api {
                     .collect();
                 let g = gouges.iter().find(|g| g.program == tp.name);
                 let c = collisions.iter().find(|c| c.program == tp.name);
-                let (points, total, thinned) = polyline(tp, max_points, job.stock_box.is_some());
+                let (points, total, thinned, starts) = polyline(tp, max_points, job.stock_box.is_some());
+                // each operation's first point in `points` (by planning index and project id)
+                let op_starts: Vec<Value> = starts
+                    .iter()
+                    .map(|(i, k)| json!({"index": i, "id": op_ids.as_ref().and_then(|v| v.get(*i as usize)).cloned(), "start": k}))
+                    .collect();
                 json!({
                     "name": tp.name,
                     "title": tp.title,
@@ -284,7 +304,7 @@ pub mod api {
                         "rapid_mm": time.estimate.rapid_mm,
                         "ops": ops,
                     },
-                    "toolpath": { "points": points, "total": total, "thinned": thinned },
+                    "toolpath": { "points": points, "total": total, "thinned": thinned, "ops": op_starts },
                 })
             })
             .collect();

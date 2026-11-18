@@ -823,10 +823,10 @@ try {
     await inDialog({ name: "bracket", kind: "vise", shot: "15a_new_dialog" });
     await emptyReady();
     const empty = await js("({ name: document.getElementById('projectName').textContent, ops: document.querySelectorAll('#tree .tree-op').length, tabs: document.querySelectorAll('#tabs button').length, gcode: document.getElementById('gcode').value.length, cta: document.getElementById('emptyState').textContent })");
-    await js("document.getElementById('generate').click(); true");
-    const nothing = await js("document.getElementById('error').textContent");
+    // nothing to plan: Generate is disabled and says why
+    const nothing = await js("document.getElementById('generate').disabled ? document.getElementById('generate').title : 'enabled'");
     check("New: a dialog with the three setup types; without an STL, an empty project with a call to action",
-      choices.length === 3 && /Rotary 4th axis/.test(choices[0]) && /Indexed 3\+1/.test(choices[1]) && /3-axis vise/.test(choices[2]) && empty.name === "bracket" && empty.ops === 0 && empty.tabs === 0 && /Import an STL/i.test(empty.cta) && /Nothing to generate/.test(nothing),
+      choices.length === 3 && /Rotary 4th axis/.test(choices[0]) && /Indexed 3\+1/.test(choices[1]) && /3-axis vise/.test(choices[2]) && empty.name === "bracket" && empty.ops === 0 && empty.tabs === 0 && /Import an STL/i.test(empty.cta) && /Import an STL first/.test(nothing),
       `${choices.join(" | ")}; ${JSON.stringify(empty)}`);
     await shot("14a_new_project");
     // the type chosen in New is pre-selected when the STL comes
@@ -1074,8 +1074,9 @@ try {
       await js("document.getElementById('example').value = 'ring'; document.getElementById('loadExample').click(); true");
       await settle();
       const ex = await scene();
-      check("loading an example resets too: the previous example's part, toolpaths and mesh are gone",
-        ex.objs === base.objs && !ex.mesh && ex.gcode === 0 && !ex.result, JSON.stringify(ex));
+      // (the ring's own bar and part show at once: drawn from the project)
+      check("loading an example resets too: the previous example's part, toolpaths and mesh are gone; only the ring's bar and part",
+        ex.path === 0 && ex.part === 1 && ex.stock === 1 && !ex.mesh && ex.gcode === 0 && !ex.result && ex.partTris !== domeTris, JSON.stringify(ex));
     }
 
     // leaving with unsaved changes: the browser asks
@@ -1372,6 +1373,98 @@ try {
     // every operation type offers picking
     const types = await js("window.__marcam.state.tree.types.filter((t) => !(t.picks || []).length).map((t) => t.kind)");
     check("every operation type takes picks", types.length === 0, types.join(", "));
+  }
+
+  // 8n. (Mar) removing every operation keeps the model: part and stock come from the project,
+  // Generate says why it cannot; disabling all and reopening such a project too. And toolpath
+  // visibility per operation, per file, per setup (view only)
+  {
+    const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
+    const view = () => js("(() => { const v = window.__marcam.state.three; return { part: v.groups.part.children.length, stock: v.groups.stock.children.length, path: v.groups.path.children.reduce((n, l) => n + (l.geometry?.attributes.position?.count || 0), 0) }; })()");
+    // import the knob into a vise setup (two starter operations), generate
+    const knobStl = readFileSync(join(root, "examples", "knob", "knob.stl")).toString("base64");
+    const proj0 = { schema_version: "0.2", name: "noops", models: [], tools: [], setups: [] };
+    await js(`window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: proj0 }))}, "noops.marcam.json").then(() => true)`);
+    await settle();
+    await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${knobStl}"), (c) => c.charCodeAt(0))], "knob.stl")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await waitFor(() => js("document.getElementById('setupDialog').open"), "the import dialog", 15000);
+    await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
+    await waitDone("the knob imported on a vise", 240000);
+    // delete every operation, one by one
+    for (const id of await js("[...document.querySelectorAll('#tree .tree-op')].map((r) => r.dataset.op).reverse()")) {
+      await js(`document.querySelector('#tree .tree-op[data-op="${id}"] [data-act="delete"]').click(); true`);
+      await sleep(600);
+    }
+    await sleep(800);
+    const none = await view();
+    const g0 = await js("({ disabled: document.getElementById('generate').disabled, title: document.getElementById('generate').title, empty: document.getElementById('emptyState')?.textContent || '', detected: !!document.getElementById('detected'), ops: document.querySelectorAll('#tree .tree-op').length })");
+    check("every operation removed: the part and stock stay, no old toolpath, Generate disabled with the reason, an empty state that says so",
+      none.part > 0 && none.stock > 0 && none.path === 0 && g0.ops === 0 && g0.disabled && /No operation/.test(g0.title) && /No operations/.test(g0.empty) && g0.detected,
+      `${JSON.stringify(none)} ${JSON.stringify(g0)}`);
+    await shot("18a_no_operations");
+    // reopen it saved with no operations: still the part and stock
+    const saved = await js("JSON.stringify((() => { const st = window.__marcam.state; let bin = ''; for (let i = 0; i < st.mesh.length; i += 8192) bin += String.fromCharCode(...st.mesh.subarray(i, i + 8192)); return { format: 'marcam-project', version: 1, project: JSON.parse(document.getElementById('job').value), meshes: { 'knob.stl': btoa(bin) } }; })())");
+    await js(`window.__marcam.project.openText(${JSON.stringify(saved)}, "noops2.marcam.json").then(() => true)`);
+    await settle();
+    await sleep(800);
+    const reopened = await view();
+    check("a project saved with no operations reopens with its part and stock", reopened.part > 0 && reopened.stock > 0, JSON.stringify(reopened));
+    // add an operation back: Generate works
+    await js("document.getElementById('treeAddType').value = 'raster3d'; document.getElementById('treeAdd').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.draft"), "the new raster", 15000);
+    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await waitFor(async () => (await doc()).setups[0].operations.length === 1, "the raster applied", 15000);
+    await sleep(500);
+    const enabled = await js("!document.getElementById('generate').disabled");
+    await js("document.getElementById('generate').click(); true");
+    await waitDone("generation after adding an operation back", 240000);
+    const back = await view();
+    check("an operation added back: Generate is enabled again and plans", enabled && back.path > 0 && back.part > 0, JSON.stringify(back));
+    // disabled, all of them: the same as none
+    await js("document.querySelector('#tree .tree-op [data-act=\"enable\"]').click(); true");
+    await sleep(800);
+    const off = await view();
+    const g1 = await js("({ disabled: document.getElementById('generate').disabled, title: document.getElementById('generate').title })");
+    check("every operation disabled: the part and stock stay, Generate disabled with the reason", off.part > 0 && off.stock > 0 && g1.disabled && /enable one/.test(g1.title), `${JSON.stringify(off)} ${JSON.stringify(g1)}`);
+    await js("document.querySelector('#tree .tree-op [data-act=\"enable\"]').click(); true");
+    await sleep(500);
+
+    // visibility: the plate (several operations in one file), generated
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await js("document.getElementById('generate').click(); true");
+    await waitDone("the plate for visibility", 240000);
+    const plans0 = await js("window.__marcam.calls.planAndPost || 0");
+    const gcode0 = await js("window.__marcam.state.result.programs.map((p) => p.gcode).join('\\n')");
+    const all = (await view()).path;
+    const opIds = await js("window.__marcam.state.tree.doc.setups[0].outputs[0].operations");
+    // hide the first operation (facing)
+    await js(`document.querySelector('#tree .tree-op[data-op="${opIds[0]}"] [data-act="eye"]').click(); true`);
+    await sleep(500);
+    const lessOne = (await view()).path;
+    const eye = await js(`document.querySelector('#tree .tree-op[data-op="${opIds[0]}"] [data-act="eye"]').classList.contains('off')`);
+    // hide all, then show only the pocket (Alt-click)
+    await js("document.getElementById('eyeNone').click(); true");
+    await sleep(400);
+    const noneShown = (await view()).path;
+    await js(`(() => { const b = document.querySelector('#tree .tree-op[data-op="${opIds[1]}"] [data-act="eye"]'); b.dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true })); return true; })()`);
+    await sleep(400);
+    const only = (await view()).path;
+    const hiddenNow = await js("[...window.__marcam.state.hidden]");
+    const stale = await js("document.body.classList.contains('stale')");
+    const plans1 = await js("window.__marcam.calls.planAndPost || 0");
+    const gcode1 = await js("window.__marcam.state.result.programs.map((p) => p.gcode).join('\\n')");
+    check("hiding toolpaths is view only: one hidden (fewer moves drawn, its eye off), all hidden (none), show only one (Alt-click); nothing planned, nothing out of date, the same G-code",
+      lessOne < all && lessOne > 0 && eye && noneShown === 0 && only > 0 && only < all && hiddenNow.length === (await js("window.__marcam.state.tree.doc.setups[0].operations.length")) - 1 && plans1 === plans0 && !stale && gcode1 === gcode0,
+      `${all} -> ${lessOne} -> ${noneShown} -> ${only}; hidden ${hiddenNow.length}; plans ${plans1 - plans0}; stale ${stale}`);
+    await shot("18b_toolpaths_hidden");
+    // saved and reopened: the same ones hidden
+    const savedPlate = await js("JSON.stringify((() => { const st = window.__marcam.state; let bin = ''; for (let i = 0; i < st.mesh.length; i += 8192) bin += String.fromCharCode(...st.mesh.subarray(i, i + 8192)); return { format: 'marcam-project', version: 1, project: JSON.parse(document.getElementById('job').value), meshes: { 'dome.stl': btoa(bin) }, view: { hidden: [...st.hidden] } }; })())");
+    await js(`window.__marcam.project.openText(${JSON.stringify(savedPlate)}, "plate_view.marcam.json").then(() => true)`);
+    await settle();
+    const restored = await js("[...window.__marcam.state.hidden].sort().join(',')");
+    check("which toolpaths are hidden is saved with the project and comes back on open", restored === hiddenNow.slice().sort().join(","), restored);
+    await js("document.getElementById('eyeAll').click(); true");
   }
 
   // 9. phone width: layout stacks, no horizontal scroll
