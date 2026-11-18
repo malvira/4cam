@@ -103,7 +103,10 @@ pub fn mesh() -> Mesh {
             }
         }
     }
-    Mesh { triangles: tris }
+    Mesh {
+        triangles: tris,
+        faces: Vec::new(),
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,13 @@
 set -e
 cd "$(dirname "$0")/.."
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+# STEP import builds SolidCraft's kernel: MARCAM_SKIP_STEP leaves it to scripts/check-step.sh
+# (CI runs that as a job of its own)
+if [ -n "$MARCAM_SKIP_STEP" ]; then
+  cargo clippy --workspace --exclude marcam-step --all-targets -- -D warnings
+else
+  cargo clippy --workspace --all-targets -- -D warnings
+fi
 cargo clippy -p marcam-cli --features gpu --all-targets -- -D warnings
 cargo test
 # the GPU prototype against the CPU (skips, saying so, without a hardware GPU)
@@ -31,4 +37,5 @@ node web/tests/project.test.mjs
 node web/tests/e2e.mjs
 # stateful UI tests: scripted scenarios and the seeded monkey (fixed seeds)
 node web/tests/stress.mjs
+if [ -z "$MARCAM_SKIP_STEP" ]; then sh scripts/check-step.sh; else echo "STEP checks skipped (MARCAM_SKIP_STEP)"; fi
 echo "ALL CHECKS PASSED"

@@ -27,8 +27,8 @@
   <button id="projectSave" type="button" title="Save the project, with its part mesh, as one .marcam.json file">Save</button>
   <button id="projectSaveAs" type="button">Save as...</button>
   <span class="sep"></span>
-  <button id="importStl" type="button" class="primary" title="Import an STL as the part (or drop it on the page)">Import STL...</button>
-  <input id="importStlFile" type="file" accept=".stl" hidden>
+  <button id="importStl" type="button" class="primary" title="Import an STL or a STEP file as the part (or drop it on the page)">Import STL...</button>
+  <input id="importStlFile" type="file" accept=".stl,.step,.stp" hidden>
   <span class="sep"></span>
   <label for="example" class="small">Example</label>
   <select id="example">
@@ -51,7 +51,7 @@
     <textarea id="machineJson" class="code hidden" rows="8" spellcheck="false" aria-label="Machine JSON"></textarea>
     <div class="row">
       <label for="mesh" title="The mesh file an opened project names, attached as it is (STL or 3MF); to bring in a new part, use Import STL">Attach mesh file</label>
-      <input id="mesh" type="file" accept=".stl,.3mf">
+      <input id="mesh" type="file" accept=".stl,.3mf,.step,.stp">
     </div>
     <div id="meshInfo" class="muted small"></div>
     <details id="libraryPanel">
@@ -204,7 +204,7 @@
     <fieldset id="sdPartSet">
       <legend>Part</legend>
       <div class="sd-grid">
-        <label id="sdFileRow">STL <input id="sdFile" type="file" accept=".stl"></label>
+        <label id="sdFileRow">STL or STEP <input id="sdFile" type="file" accept=".stl,.step,.stp"></label>
         <span id="sdFileName" class="small muted"></span>
         <label>Units <select id="sdUnits"><option value="mm">mm</option><option value="inch">inch</option></select></label>
         <label><span id="sdAxisLabel">Part axis along X</span> <select id="sdAxis"><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>

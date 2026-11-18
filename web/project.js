@@ -47,6 +47,26 @@ export function parseStl(bytes) {
   throw new Error("not an STL file: neither a binary STL (its size does not match its triangle count) nor an ASCII one (it does not start with \"solid\")");
 }
 
+/**
+ * A part file's triangles: an STL as it is, a STEP (.step/.stp) through the STEP module (fetched
+ * the first time one is opened). A STEP also gives `step`: its own bytes (kept: the project saves
+ * the STEP), the STL with its faces numbered (what the engine reads), and what was in it.
+ */
+export async function readPart(bytes, name = "") {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const { isStep, stepToStl } = await import("./step.js");
+  if (!isStep(b, name)) return parseStl(b);
+  const r = await stepToStl(b);
+  return { ...parseStl(r.stl), ascii: false, step: { bytes: b, stl: r.stl, bodies: r.bodies, faces: r.faces, names: r.names, warnings: r.warnings } };
+}
+
+/** "binary STL, 1234 triangles" / "STEP, 2 bodies, 9 faces, 1234 triangles" */
+export function partSummary(parsed) {
+  const n = parsed.tris.length / 9;
+  if (parsed.step) return `STEP, ${parsed.step.bodies} bod${parsed.step.bodies === 1 ? "y" : "ies"}, ${parsed.step.faces} faces, ${n} triangles`;
+  return `${parsed.ascii ? "ASCII" : "binary"} STL, ${n} triangles`;
+}
+
 /** Binary STL bytes of triangles (9 floats each), with normals. */
 export function encodeStl(tris, header = "marcam") {
   const n = tris.length / 9;
@@ -207,7 +227,7 @@ export function setupProject(ctx) {
   const { $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, resetProject, machineArg, currentMachine } = ctx;
   const p = { name: "untitled", dirty: false, fileName: null, pending: null, undo: null };
   state.project = p;
-  const dialog = setupDialog({ $, state, parseStl, placePart, kindOf, KINDS });
+  const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS });
 
   function show() {
     $("projectName").textContent = p.name;
@@ -236,7 +256,7 @@ export function setupProject(ctx) {
   // ------------------------------------------------------------ undo (setup changes)
   /** Offer to undo a setup change: `job` is the project text from before it. */
   function keepUndo(label, job) {
-    p.undo = { label, job, mesh: state.mesh, meshName: state.meshName };
+    p.undo = { label, job, mesh: state.mesh, meshName: state.meshName, meshSource: state.meshSource };
     $("undoBar").innerHTML = `${label} <button type="button" id="undoSetup">Undo</button>`;
     $("undoBar").classList.remove("hidden");
   }
@@ -250,7 +270,7 @@ export function setupProject(ctx) {
     setStatus(`Undoing: ${u.label}`, "busy");
     dropUndo();
     writeJob(JSON.parse(u.job));
-    setMesh(u.mesh, u.meshName);
+    setMesh(u.mesh, u.meshName, u.meshSource);
     await refreshAll();
     setStatus(`Undone: ${u.label} Generate to see it again.`, "ready");
   }
@@ -279,7 +299,21 @@ export function setupProject(ctx) {
     await resetProject("");
     writeJob(project, { load: true });
     const wanted = meshFileOf(project);
-    setMesh(mesh, mesh ? `${meshName} (in the project)` : "");
+    // a STEP part: converted again (the same faces, the same ids)
+    let part = null;
+    if (mesh) {
+      try {
+        const { isStep } = await import("./step.js");
+        if (isStep(mesh, meshName)) {
+          setStatus(`Reading ${meshName} (STEP)...`, "busy");
+          part = await readPart(mesh, meshName);
+        }
+      } catch (e) {
+        showError(`${meshName}: ${e.message}`);
+      }
+    }
+    if (part?.step) setMesh(part.step.stl, `${meshName} (in the project; ${partSummary(part)})`, { name: meshName, bytes: mesh });
+    else setMesh(mesh, mesh ? `${meshName} (in the project)` : "");
     p.fileName = fileName || null;
     p.pending = null;
     clean(name);
@@ -337,7 +371,8 @@ export function setupProject(ctx) {
       if (project.schema_version === "0.2") project.name = name;
       writeJob(project, { load: true });
     }
-    const file = projectFile(project, state.mesh, meshFileOf(project) || state.meshName.split(" ")[0] || "part.stl", { hidden: [...state.hidden] });
+    const src = state.meshSource && state.meshSource.name === meshFileOf(project) ? state.meshSource : null;
+    const file = projectFile(project, src ? src.bytes : state.mesh, meshFileOf(project) || state.meshName.split(" ")[0] || "part.stl", { hidden: [...state.hidden] });
     const blob = new Blob([JSON.stringify(file, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -474,7 +509,7 @@ export function setupProject(ctx) {
 
   /** The parsed STL of the dialog's file, in mm, or (no file) the project's mesh. */
   function trisOf(cfg) {
-    if (cfg.tris) return cfg.units === "inch" ? cfg.tris.map((v) => v * 25.4) : cfg.tris;
+    if (cfg.tris) return cfg.units === "inch" && !cfg.step ? cfg.tris.map((v) => v * 25.4) : cfg.tris;
     return state.mesh ? parseStl(state.mesh).tris : null;
   }
 
@@ -498,9 +533,13 @@ export function setupProject(ctx) {
       both.set(tris, old.length);
       tris = both;
     }
-    const meshFile = `${slug(cfg.file.name)}.stl`;
-    const bytes = encodeStl(tris, `marcam: ${cfg.file.name}`);
-    setMesh(bytes, `${cfg.file.name} (${cfg.ascii ? "ASCII" : "binary"} STL${cfg.units === "inch" ? ", inch" : ""}, ${tris.length / 9} triangles)`);
+    // a STEP on its own: the engine reads the STL with its faces numbered, the project keeps the
+    // STEP itself (merged with another part, its triangles alone)
+    const step = cfg.step && tris === cfg.tris ? cfg.step : null;
+    const meshFile = `${slug(cfg.file.name)}.${step ? "step" : "stl"}`;
+    const bytes = step ? step.stl : encodeStl(tris, `marcam: ${cfg.file.name}`);
+    const what = step ? partSummary({ tris, step }) : `${cfg.ascii ? "ASCII" : "binary"} STL${cfg.units === "inch" ? ", inch" : ""}, ${tris.length / 9} triangles`;
+    setMesh(bytes, `${cfg.file.name} (${what})`, step ? { name: meshFile, bytes: step.bytes } : null);
     let report;
     if (fresh) {
       const name = doc.name && doc.name !== "untitled" ? doc.name : cfg.name && cfg.name !== "untitled" ? cfg.name : slug(cfg.file.name);
@@ -579,7 +618,8 @@ export function setupProject(ctx) {
     showError("");
     let parsed;
     try {
-      parsed = parseStl(new Uint8Array(await file.arrayBuffer()));
+      if (/\.(step|stp)$/i.test(file.name)) setStatus(`Reading ${file.name} (STEP)...`, "busy");
+      parsed = await readPart(new Uint8Array(await file.arrayBuffer()), file.name);
     } catch (e) {
       showError(`${file.name}: ${e.message}`);
       setStatus("Import failed", "error");
@@ -700,9 +740,9 @@ export function setupProject(ctx) {
     document.body.classList.remove("dropping");
     if (!f) return;
     ev.preventDefault();
-    if (/\.(stl)$/i.test(f.name)) await importMesh(f);
+    if (/\.(stl|step|stp)$/i.test(f.name)) await importMesh(f);
     else if (/\.json$/i.test(f.name)) await openFile(f);
-    else showError(`${f.name}: drop an .stl to import it, or a .marcam.json / .project.json to open it`);
+    else showError(`${f.name}: drop an .stl or a .step to import it, or a .marcam.json / .project.json to open it`);
   });
   window.addEventListener("beforeunload", (ev) => {
     if (p.dirty) {

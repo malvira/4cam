@@ -53,6 +53,7 @@ pub fn dome_mesh() -> Mesh {
     // revolved about X; the cyclic swap (x, y, z) -> (y, z, x) turns X into Z and keeps
     // the winding outward
     Mesh {
+        faces: Vec::new(),
         triangles: m
             .triangles
             .iter()

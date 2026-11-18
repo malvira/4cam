@@ -8,9 +8,11 @@ members = [
     "crates/marcam-fixtures",
     "crates/marcam-gpu",
     "crates/marcam-capi",
+    "crates/marcam-step",
     "adapters/solidcraft",
     "examples/embed/rust",
 ]
+exclude = ["crates/web-time-shim"]
 # the Python extension needs a Python toolchain; build it with scripts/build-python
 default-members = ["crates/marcam-core", "crates/marcam-cli", "crates/marcam-wasm", "crates/marcam-fixtures", "crates/marcam-capi"]
 
@@ -29,8 +31,23 @@ rust-version = "1.99"
 [profile.test]
 opt-level = 3
 
+# the browser's STEP module (scripts/build-step-wasm.sh): SolidCraft's kernel is large, so it is
+# built for size and without whole-program LTO (minutes, not tens of minutes)
+[profile.release-step-wasm]
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+codegen-units = 16
+strip = true
+
 [profile.release-wasm]
 inherits = "release"
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# SolidCraft's kernel (the STEP import) times itself with `web-time`, which in the browser
+# needs wasm-bindgen's JavaScript glue. Our stand-in is std::time natively and a still clock in
+# WebAssembly, so the STEP module loads with no glue at all (crates/web-time-shim).
+[patch.crates-io]
+web-time = { path = "crates/web-time-shim" }

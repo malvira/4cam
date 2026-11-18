@@ -213,6 +213,10 @@ fn body_project(
 
 #[pymodule]
 fn marcam(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // STEP parts, when built with the step feature
+    #[cfg(feature = "step")]
+    marcam_step::register();
+    m.add("step", cfg!(feature = "step"))?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(example_job, m)?)?;
     m.add_function(wrap_pyfunction!(machine, m)?)?;

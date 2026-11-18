@@ -1,0 +1,13 @@
+# Stands in for the `web-time` crate (see [patch.crates-io] in the workspace manifest), so the
+# browser STEP module needs no wasm-bindgen glue: SolidCraft's kernel uses it only to time
+# itself for its profiler.
+[package]
+name = "web-time"
+version = "1.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "marcam's stand-in for web-time: std::time natively, a clock that stands still in WebAssembly"
+
+[lib]
+path = "src/lib.rs"

@@ -10,7 +10,14 @@ pub type Triangle = [Vec3; 3];
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Mesh {
     pub triangles: Vec<Triangle>,
+    /// The B-rep face each triangle belongs to (a STEP import, 1-based), or empty: the mesh's
+    /// faces are then found from its sharp edges ([`crate::geometry::face_regions`]).
+    pub faces: Vec<u32>,
 }
+
+/// Binary STL files whose facets' attribute words carry their B-rep face (STEP imports,
+/// see the `marcam-step` crate) start with this header.
+pub const FACES_HEADER: &[u8] = b"marcam STEP faces";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MeshError {
@@ -43,11 +50,38 @@ pub enum Axis {
     Z,
 }
 
+/// Reads a STEP file into a mesh with its B-rep faces: set by a program built with STEP
+/// support (the `marcam-step` crate's `register`), none otherwise.
+static STEP_READER: std::sync::OnceLock<fn(&[u8]) -> Result<Mesh, String>> =
+    std::sync::OnceLock::new();
+
+/// Install the STEP reader (see `marcam_step::register`). The first one stays.
+pub fn set_step_reader(f: fn(&[u8]) -> Result<Mesh, String>) {
+    let _ = STEP_READER.set(f);
+}
+
+/// Whether `data` is a STEP (ISO 10303-21) file.
+pub fn is_step(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(256)];
+    let text = String::from_utf8_lossy(head);
+    text.trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with("ISO-10303-21")
+}
+
 impl Mesh {
-    /// Load from bytes; the format is detected from the content (3MF zip, binary or ASCII STL).
+    /// Load from bytes; the format is detected from the content (3MF zip, binary or ASCII STL,
+    /// and STEP where a STEP reader is installed).
     pub fn from_bytes(data: &[u8]) -> Result<Mesh, MeshError> {
         if data.starts_with(b"PK\x03\x04") {
             read_3mf(data)
+        } else if is_step(data) {
+            match STEP_READER.get() {
+                Some(read) => read(data).map_err(MeshError::Format),
+                None => Err(bad(
+                    "a STEP file: this build reads STL and 3MF (STEP needs the step feature)",
+                )),
+            }
         } else {
             read_stl(data)
         }
@@ -113,6 +147,7 @@ impl Mesh {
                 .iter()
                 .map(|t| t.map(|p| [p[0], c * p[1] - s * p[2], s * p[1] + c * p[2]]))
                 .collect(),
+            faces: self.faces.clone(),
         }
     }
 
@@ -120,18 +155,26 @@ impl Mesh {
     pub fn to_stl(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(84 + 50 * self.triangles.len());
         let mut header = [0u8; 80];
-        let tag = b"marcam binary STL";
+        // with B-rep faces: each facet's attribute word is its face (at most 65535 faces)
+        let labelled = self.faces.len() == self.triangles.len()
+            && self.faces.iter().all(|&f| f <= u16::MAX as u32);
+        let tag: &[u8] = if labelled {
+            FACES_HEADER
+        } else {
+            b"marcam binary STL"
+        };
         header[..tag.len()].copy_from_slice(tag);
         out.extend_from_slice(&header);
         out.extend_from_slice(&(self.triangles.len() as u32).to_le_bytes());
-        for t in &self.triangles {
+        for (i, t) in self.triangles.iter().enumerate() {
             let n = normal(t);
             for v in std::iter::once(&n).chain(t.iter()) {
                 for c in v {
                     out.extend_from_slice(&(*c as f32).to_le_bytes());
                 }
             }
-            out.extend_from_slice(&[0, 0]);
+            let attr = if labelled { self.faces[i] as u16 } else { 0 };
+            out.extend_from_slice(&attr.to_le_bytes());
         }
         out
     }
@@ -174,7 +217,10 @@ impl Mesh {
                 }
             }
         }
-        Mesh { triangles: tris }
+        Mesh {
+            triangles: tris,
+            faces: Vec::new(),
+        }
     }
 }
 
@@ -228,7 +274,18 @@ fn read_binary_stl(data: &[u8], n: usize) -> Mesh {
             [v(0), v(1), v(2)]
         })
         .collect();
-    Mesh { triangles }
+    // a STEP import's faces, from the facets' attribute words
+    let faces = if data.starts_with(FACES_HEADER) {
+        (0..n)
+            .map(|i| {
+                let o = 84 + 50 * i + 48;
+                u16::from_le_bytes([data[o], data[o + 1]]) as u32
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Mesh { triangles, faces }
 }
 
 fn read_ascii_stl(text: &str) -> Result<Mesh, MeshError> {
@@ -251,6 +308,7 @@ fn read_ascii_stl(text: &str) -> Result<Mesh, MeshError> {
     }
     Ok(Mesh {
         triangles: verts.chunks(3).map(|c| [c[0], c[1], c[2]]).collect(),
+        faces: Vec::new(),
     })
 }
 
@@ -606,6 +664,7 @@ mod tests {
     fn orient_z_axis_to_x() {
         let m = Mesh {
             triangles: vec![[[1.0, 2.0, 3.0]; 3]],
+            faces: Vec::new(),
         };
         let o = m.oriented(Axis::Z, [-3.0, 0.0, 0.0]);
         assert_eq!(o.triangles[0][0], [0.0, 1.0, 2.0]);

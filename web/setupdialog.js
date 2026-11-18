@@ -6,7 +6,7 @@
 const DEFAULT_MARGIN = { rotary: 0.5, indexed: 0.5, vise: 2 };
 const DEFAULT_ORIGIN = { rotary: 0, indexed: 0, vise: 0.5 };
 
-export function setupDialog({ $, state, parseStl, placePart, KINDS }) {
+export function setupDialog({ $, state, parseStl, readPart, partSummary, placePart, KINDS }) {
   const dlg = $("setupDialog");
   let cur = null; // { mode, preset, parsed, resolve }
 
@@ -125,8 +125,9 @@ export function setupDialog({ $, state, parseStl, placePart, KINDS }) {
   async function chooseFile(file) {
     if (!file) return;
     try {
-      cur.parsed = { ...parseStl(new Uint8Array(await file.arrayBuffer())), file };
-      $("sdFileName").textContent = `${file.name}: ${cur.parsed.ascii ? "ASCII" : "binary"} STL, ${cur.parsed.tris.length / 9} triangles`;
+      $("sdFileName").textContent = `${file.name}: reading...`;
+      cur.parsed = { ...(await readPart(new Uint8Array(await file.arrayBuffer()), file.name)), file };
+      $("sdFileName").textContent = `${file.name}: ${partSummary(cur.parsed)}`;
     } catch (e) {
       cur.parsed = null;
       $("sdFileName").textContent = "";
@@ -163,7 +164,7 @@ export function setupDialog({ $, state, parseStl, placePart, KINDS }) {
       }
       $("sdFileRow").classList.toggle("hidden", mode !== "new");
       $("sdFile").value = "";
-      $("sdFileName").textContent = cur.parsed ? `${preset.file.name}: ${cur.parsed.ascii ? "ASCII" : "binary"} STL, ${cur.parsed.tris.length / 9} triangles` : "";
+      $("sdFileName").textContent = cur.parsed ? `${preset.file.name}: ${partSummary(cur.parsed)}` : "";
       $("sdUnits").value = preset.units ?? "mm";
       $("sdUnits").disabled = !(mode === "new" || mode === "import");
       for (const id of ["sdMargin", "sdOrigin", "sdAxis"]) delete $(id).dataset.edited;
@@ -217,6 +218,7 @@ export function setupDialog({ $, state, parseStl, placePart, KINDS }) {
         file: c.parsed?.file ?? null,
         tris: c.parsed?.tris ?? null,
         ascii: !!c.parsed?.ascii,
+        step: c.parsed?.step ?? null,
       };
       cur = null;
       dlg.close();

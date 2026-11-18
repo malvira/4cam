@@ -1,0 +1,37 @@
+[package]
+name = "marcam-step"
+description = "STEP (ISO 10303-21) import for marcam: a mesh with each triangle's B-rep face, from SolidCraft's kernel"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version = "1.95"
+# not published: it depends on SolidCraft from git (see docs/THIRD-PARTY.md)
+publish = false
+
+[lib]
+name = "marcam_step"
+crate-type = ["rlib", "cdylib"]
+
+# `marcam-step`: the marcam command line, reading STEP parts too
+[[bin]]
+name = "marcam-step"
+path = "src/bin/marcam-step.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+# the command line (the browser module is built without it: scripts/build-step-wasm.sh)
+cli = ["dep:marcam-cli"]
+
+[dependencies]
+marcam-core = { path = "../marcam-core" }
+marcam-cli = { path = "../marcam-cli", optional = true }
+serde_json = "1"
+# SolidCraft (MIT OR Apache-2.0) and its SolidCore kernel (Apache-2.0), pinned to one commit
+solidcraft-kernel = { git = "https://github.com/tangency-labs/solidcraft", rev = "31a14bace97c3d1b7ed6a927b49d6a67f1066f73" }
+solidcore-tess = { git = "https://github.com/tangency-labs/solidcraft", rev = "31a14bace97c3d1b7ed6a927b49d6a67f1066f73" }
+
+[dev-dependencies]
+serde_json = "1"

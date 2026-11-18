@@ -13,6 +13,10 @@ rust-version.workspace = true
 # the tests read the repository's examples and fixtures: not shipped
 exclude = ["tests/"]
 
+[lib]
+name = "marcam_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "marcam"
 path = "src/main.rs"

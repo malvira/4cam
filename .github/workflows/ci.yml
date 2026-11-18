@@ -49,6 +49,8 @@ jobs:
         env:
           # no GPU on the runners: the web test's 3D view uses Chrome's software WebGL
           MARCAM_E2E_SOFTWARE_GL: "1"
+          # STEP import (SolidCraft's kernel) is checked by the step job
+          MARCAM_SKIP_STEP: "1"
         run: |
           set -o pipefail
           sh scripts/check.sh 2>&1 | tee check.log
@@ -68,4 +70,45 @@ jobs:
           path: |
             check.log
             web/tests/screenshots/
+          if-no-files-found: ignore
+
+  # STEP import: SolidCraft's kernel, which cargo fetches from its GitHub repository at the
+  # revision pinned in crates/marcam-step/Cargo.toml (scripts/check-step.sh)
+  step:
+    name: STEP import
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: step
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: where SolidCraft comes from
+        shell: bash
+        run: grep -n "solidcraft" crates/marcam-step/Cargo.toml
+      - name: scripts/check-step.sh
+        shell: bash
+        env:
+          MARCAM_E2E_SOFTWARE_GL: "1"
+        run: |
+          set -o pipefail
+          sh scripts/check-step.sh 2>&1 | tee check-step.log
+          # the kernel was fetched from GitHub, at the pinned revision
+          grep -n 'source = "git+https://github.com/tangency-labs/solidcraft' Cargo.lock | head -3
+      - name: keep the log and the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-step
+          path: |
+            check-step.log
+            web/tests/screenshots/step_*
           if-no-files-found: ignore

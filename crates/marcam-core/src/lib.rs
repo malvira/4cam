@@ -168,14 +168,17 @@ pub fn face_subset(mesh: &Mesh, ids: &[String]) -> Result<Mesh, String> {
                 .ok_or(format!("the part has no face {id:?}"))
         })
         .collect::<Result<_, _>>()?;
+    // the triangles of those faces (with their B-rep faces, for a STEP import)
+    let keep: Vec<usize> = (0..mesh.triangles.len())
+        .filter(|&i| want.contains(&label[i]))
+        .collect();
     Ok(Mesh {
-        triangles: mesh
-            .triangles
-            .iter()
-            .zip(&label)
-            .filter(|(_, l)| want.contains(l))
-            .map(|(t, _)| *t)
-            .collect(),
+        triangles: keep.iter().map(|&i| mesh.triangles[i]).collect(),
+        faces: if mesh.faces.len() == mesh.triangles.len() {
+            keep.iter().map(|&i| mesh.faces[i]).collect()
+        } else {
+            Vec::new()
+        },
     })
 }
 

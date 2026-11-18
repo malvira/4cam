@@ -18,6 +18,7 @@ fn plane(z: f64) -> Mesh {
         [-5.0, 25.0, z],
     );
     Mesh {
+        faces: Vec::new(),
         triangles: vec![[a, b, c], [a, c, d]],
     }
 }

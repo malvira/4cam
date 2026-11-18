@@ -188,6 +188,7 @@ impl Prism {
 
     pub fn mesh(self) -> Mesh {
         Mesh {
+            faces: Vec::new(),
             triangles: self.tris,
         }
     }

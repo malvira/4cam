@@ -49,6 +49,29 @@ pub fn face_regions(mesh: &Mesh, crease_deg: f64) -> (Vec<FaceRegion>, Vec<usize
     use std::collections::HashMap;
     let tris = &mesh.triangles;
     let normals: Vec<Option<[f64; 3]>> = tris.iter().map(unit_normal).collect();
+    // a STEP import knows its faces: one region per B-rep face, named after it
+    if !tris.is_empty() && mesh.faces.len() == tris.len() {
+        let mut groups: std::collections::BTreeMap<u32, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (i, &f) in mesh.faces.iter().enumerate() {
+            groups.entry(f).or_default().push(i);
+        }
+        let mut of = vec![0; tris.len()];
+        let regions = groups
+            .into_iter()
+            .enumerate()
+            .map(|(k, (f, members))| {
+                for &i in &members {
+                    of[i] = k;
+                }
+                FaceRegion {
+                    id: format!("s{f}"),
+                    ..describe(tris, &normals, &members)
+                }
+            })
+            .collect();
+        return (regions, of);
+    }
     // edges keyed by welded vertex positions
     let mut edges: HashMap<(VKey, VKey), Vec<usize>> = HashMap::new();
     for (i, t) in tris.iter().enumerate() {

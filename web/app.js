@@ -400,9 +400,12 @@ async function loadExampleInto(name) {
   if (state.registry) setStatus(`Loaded the ${name} example: Generate to plan it`, "ready");
 }
 
-function setMesh(bytes, name) {
+/** The part's mesh (an STL, with face numbers when it came from a STEP); `source`: the file it
+ *  was made from, which the project saves instead ({ name, bytes }: a STEP). */
+function setMesh(bytes, name, source = null) {
   state.mesh = bytes;
   state.meshName = name;
+  state.meshSource = source;
   $("meshInfo").textContent = bytes ? `${name}: ${(bytes.length / 1024).toFixed(0)} KiB` : "No mesh loaded";
 }
 
@@ -1077,7 +1080,17 @@ $("machine").addEventListener("change", () => {
 $("mesh").addEventListener("change", async () => {
   const f = $("mesh").files[0];
   if (f) {
-    setMesh(new Uint8Array(await f.arrayBuffer()), f.name);
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    try {
+      const { isStep } = await import("./step.js");
+      if (isStep(bytes, f.name)) {
+        const { readPart } = await import("./project.js");
+        const part = await readPart(bytes, f.name);
+        setMesh(part.step.stl, f.name, { name: f.name, bytes });
+      } else setMesh(bytes, f.name);
+    } catch (e) {
+      return showError(`${f.name}: ${e.message}`);
+    }
     window.__marcam.project.changed();
   }
 });

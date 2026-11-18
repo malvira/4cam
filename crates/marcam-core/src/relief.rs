@@ -300,7 +300,10 @@ pub fn relief_mesh(img: &Gray, r: &ImageRelief) -> Mesh {
                 tris.push([a, c, d]);
             }
         }
-        return Mesh { triangles: tris };
+        return Mesh {
+            triangles: tris,
+            faces: Vec::new(),
+        };
     }
     // wrapped: rings all the way round, the image over its arc and black elsewhere, so the
     // bar keeps its base radius outside the image
@@ -334,7 +337,10 @@ pub fn relief_mesh(img: &Gray, r: &ImageRelief) -> Mesh {
             tris.push([b, d, c]);
         }
     }
-    Mesh { triangles: tris }
+    Mesh {
+        triangles: tris,
+        faces: Vec::new(),
+    }
 }
 
 #[cfg(test)]

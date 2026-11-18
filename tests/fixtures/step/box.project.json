@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.2",
+  "name": "box",
+  "models": [{ "id": "part", "name": "box with a hole", "kind": "mesh", "file": "box_with_hole.step" }],
+  "tools": [
+    { "number": 1, "description": "3.175 mm flat", "kind": "flat", "diameter": 3.175, "flute_length": 15 },
+    { "number": 2, "description": "3 mm ball", "kind": "ball", "diameter": 3.0, "flute_length": 15 }
+  ],
+  "setups": [
+    {
+      "id": "vise", "name": "Vise, top", "kind": "vise", "machine": "makera-carvera-4axis",
+      "stock": { "shape": "box", "min": [0.0, 0.0, -10.0], "max": [40.0, 30.0, 1.0] },
+      "clearance": 3.0, "holding": { "kind": "vise", "tailstock": false }, "part": ["part"], "spindle_rpm": 12000,
+      "operations": [
+        { "id": "op1", "type": "bore", "tool": 1, "points": [[20.0, 15.0]], "diameter": 8.0, "depth": 11.5, "top": 1.0, "feed": 300.0, "plunge_feed": 60.0 }
+      ],
+      "outputs": [{ "name": "box", "title": "box", "operations": ["op1"] }]
+    }
+  ]
+}
