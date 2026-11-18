@@ -528,3 +528,82 @@ fn the_old_command_name_still_works() {
         "{stdout}"
     );
 }
+
+/// `replace-model`: an operation's picked pocket is gone from the new part (error, exit 1,
+/// written in the project, left out of the G-code), and found again on the old one.
+#[test]
+fn replace_model_puts_operations_whose_features_are_gone_in_error() {
+    let dir = out_dir("replace");
+    let fx = root().join("tests/fixtures/picking");
+    for f in ["oval_grip.stl", "bracket.stl"] {
+        std::fs::copy(fx.join(f), dir.join(f)).unwrap();
+    }
+    let mut p: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fx.join("oval_grip.project.json")).unwrap())
+            .unwrap();
+    let project = dir.join("grip.project.json");
+    std::fs::write(&project, p.to_string()).unwrap();
+    // the oval pocket's signature, as picking keeps it
+    let o = bin()
+        .args(["pickables", "--json", "--type", "pocket"])
+        .arg(&project)
+        .output()
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let pocket = list["pickables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["kind"] == "pocket")
+        .unwrap()
+        .clone();
+    p["setups"][0]["operations"] = serde_json::json!([
+        {"id": "op1", "type": "pocket", "tool": 2, "rect": [1.0, 1.0, 5.0, 5.0], "depth": 1.0, "step_down": 0.5, "stepover": 0.5,
+         "feed": 800.0, "plunge_feed": 200.0, "picks": [pocket["signature"]]}]);
+    p["setups"][0]["outputs"] =
+        serde_json::json!([{"name": "grip", "title": "grip", "operations": ["op1"]}]);
+    std::fs::write(&project, p.to_string()).unwrap();
+    let o = bin()
+        .arg("replace-model")
+        .arg(&project)
+        .args(["part"])
+        .arg(dir.join("bracket.stl"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(
+        o.status.code(),
+        Some(1),
+        "{stdout}{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        stdout.contains("vise/op1: ERROR Pocket 20.00 x 14.00") && stdout.contains("1 in error"),
+        "{stdout}"
+    );
+    let q: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    assert_eq!(q["models"][0]["file"], "bracket.stl");
+    assert!(q["setups"][0]["operations"][0]["error"].is_string());
+    // back to the grip: found again, the pocket now follows the oval
+    let o = bin()
+        .arg("replace-model")
+        .arg(&project)
+        .args(["part"])
+        .arg(dir.join("oval_grip.stl"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert!(
+        o.status.success() && r["operations"][0]["ok"] == true,
+        "{r}"
+    );
+    let q: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    let op = &q["setups"][0]["operations"][0];
+    assert!(
+        op.get("error").is_none() && op["paths"].is_array() && op.get("rect").is_none(),
+        "{op}"
+    );
+}

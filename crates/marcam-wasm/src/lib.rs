@@ -1093,6 +1093,62 @@ pub mod api {
         })
     }
 
+    /// A project tool's diameter: inline, or from its library.
+    fn tool_diameter_in(p: &marcam::project::Project, n: u32, libs: &[ToolLibrary]) -> Option<f64> {
+        p.tools
+            .iter()
+            .find(|t| t.number() == n)
+            .and_then(|t| match t {
+                marcam::project::ToolEntry::Inline(_) => {
+                    marcam::replace::inline_tool_diameter(p, n)
+                }
+                marcam::project::ToolEntry::Library { library, tool, .. } => libs
+                    .iter()
+                    .find(|l| &l.id == library)
+                    .and_then(|l| l.tool(tool))
+                    .map(|t| t.shape.diameter()),
+            })
+    }
+
+    /// Replace a mesh model with a new part (`mesh`: its bytes; `opts` = {model?, file,
+    /// libraries?}; the model defaults to the project's first mesh model): its placement,
+    /// setups, tools and operations kept, every operation's picks found again on it. Returns
+    /// {project, operations: [{setup, op, ok, picks, error?}]}.
+    pub fn replace_model(doc: &str, opts: &str, mesh: &[u8]) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let project: Value = match serde_json::from_str(doc) {
+            Ok(v) => v,
+            Err(e) => return err(format!("not JSON: {e}")),
+        };
+        let model = match o["model"].as_str() {
+            Some(m) => m.to_string(),
+            None => match project["models"]
+                .as_array()
+                .and_then(|ms| ms.iter().find(|m| m["kind"] == "mesh"))
+            {
+                Some(m) => m["id"].as_str().unwrap_or("").to_string(),
+                None => return err("the project has no mesh model to replace"),
+            },
+        };
+        let Some(file) = o["file"].as_str() else {
+            return err("replace_model needs the new file's name");
+        };
+        let libs = libraries(&o).unwrap_or_default();
+        match marcam::replace::replace_model(
+            &project,
+            &model,
+            file,
+            &|src| src.mesh(mesh).map_err(|e| e.to_string()),
+            &|p, n| tool_diameter_in(p, n, &libs),
+        ) {
+            Ok((project, report)) => {
+                json!({"model": model, "project": project, "operations": report})
+            }
+            Err(e) => err(e),
+        }
+    }
+
     /// The parameters picked features set on an operation: `opts` = {type, ids, setup?,
     /// model?, index_a?, tool?}. Returns {params, notes}.
     pub fn apply_picks(doc: &str, opts: &str, mesh: &[u8]) -> Value {
@@ -1121,20 +1177,7 @@ pub mod api {
         let libs = libraries(&o).unwrap_or_default();
         let tool_diameter = o["tool"]
             .as_u64()
-            .and_then(|n| p.tools.iter().find(|t| t.number() == n as u32))
-            .and_then(|t| match t {
-                marcam::project::ToolEntry::Inline(t) => Some(match t.shape {
-                    marcam::job::ToolShape::Flat { diameter }
-                    | marcam::job::ToolShape::Ball { diameter }
-                    | marcam::job::ToolShape::TaperedBall { diameter, .. } => diameter,
-                    marcam::job::ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0),
-                }),
-                marcam::project::ToolEntry::Library { library, tool, .. } => libs
-                    .iter()
-                    .find(|l| &l.id == library)
-                    .and_then(|l| l.tool(tool))
-                    .map(|t| t.shape.diameter()),
-            });
+            .and_then(|n| tool_diameter_in(&p, n as u32, &libs));
         let cx = pickables::ApplyContext {
             stock_top,
             tool_diameter,
@@ -1283,6 +1326,7 @@ pub mod api {
             "op_defaults" => op_defaults(&s(a), &s(b), c),
             "pickables" => pickables(&s(a), &s(b), c),
             "apply_picks" => apply_picks(&s(a), &s(b), c),
+            "replace_model" => replace_model(&s(a), &s(b), c),
             "op_types" => {
                 // each type with the pickable kinds it takes (marcam::pickables::accepts)
                 let mut v = serde_json::to_value(marcam::ops::registry()).unwrap_or(Value::Null);

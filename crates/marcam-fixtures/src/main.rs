@@ -12,9 +12,13 @@
 //!   pocket with an island and a step, for the picking tests (see `prism::bracket`)
 //! - tests/fixtures/picking/oval_grip.stl: a block with two recessed oval flats (holes in
 //!   them) and a textured grip between, for bounded facing and pockets (see `grip`)
+//! - tests/fixtures/picking/oval_grip_one_oval.stl: the same with only the left oval, for
+//!   replacing a model whose picked pocket is gone
 
 mod grip;
 mod prism;
+#[cfg(test)]
+mod replace_tests;
 
 use marcam::job::Profile;
 use marcam::{Job, Mesh};
@@ -105,6 +109,10 @@ fn files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
         (
             root.join("tests/fixtures/picking/oval_grip.stl"),
             grip::mesh().to_stl(),
+        ),
+        (
+            root.join("tests/fixtures/picking/oval_grip_one_oval.stl"),
+            grip::mesh_with(&grip::OVALS[..1]).to_stl(),
         ),
     ]
 }

@@ -69,6 +69,7 @@ export async function load(source) {
     pickables: (doc, opts, meshBytes) => call("pickables", doc, opts || {}, meshBytes),
     // the parameters picked features set on an operation: {type, ids, setup?, tool?, index_a?}
     applyPicks: (doc, opts, meshBytes) => call("apply_picks", doc, opts || {}, meshBytes),
+    replaceModel: (doc, opts, meshBytes) => call("replace_model", doc, opts || {}, meshBytes),
     // convert a profile file (marcam JSON, Fusion .tools/.json/.mch/.f3d) -> {kind, profile, notes}
     importProfile: (bytes, name) => call("import_profile", bytes, name || "profile.json"),
     meshTriangles: (job, opts, meshBytes) => call("mesh_triangles", job, opts || {}, meshBytes),

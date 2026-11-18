@@ -643,6 +643,53 @@ export function setupProject(ctx) {
     return true;
   }
 
+  /**
+   * Replace the part's model with a new STL or STEP: its placement, the setups, tools and
+   * operations stay; every operation's picked features are found again on it (the engine);
+   * those not found are put in error (kept, not planned) and named. Undo brings the old model
+   * back. Then the toolpaths are planned again.
+   */
+  async function replaceModel(file) {
+    showError("");
+    let doc;
+    try {
+      doc = readJob();
+    } catch (e) {
+      return showError(e.message);
+    }
+    if (doc.schema_version !== "0.2") doc = (await engine("checkProject", doc)).result.project;
+    const wanted = meshFileOf(doc);
+    const model = doc.models?.find((m) => m.kind === "mesh" && m.file === wanted) ?? doc.models?.find((m) => m.kind === "mesh");
+    if (!model) return showError("Replace model: the project has no mesh model (import a part instead)");
+    setStatus(`Reading ${file.name}...`, "busy");
+    let part;
+    try {
+      part = await readPart(new Uint8Array(await file.arrayBuffer()), file.name);
+    } catch (e) {
+      setStatus("Replace failed", "error");
+      return showError(`${file.name}: ${e.message}`);
+    }
+    const name = `${slug(file.name)}.${part.step ? "step" : "stl"}`;
+    const bytes = part.step ? part.step.stl : encodeStl(part.tris, `marcam: ${file.name}`);
+    let result;
+    try {
+      ({ result } = await engine("replaceModel", doc, { model: model.id, file: name }, bytes));
+    } catch (e) {
+      setStatus("Replace failed", "error");
+      return showError(`Replace model: ${e.message}`);
+    }
+    // undo: the project and the model as they were
+    keepUndo(`Replaced the model with ${file.name}.`, JSON.stringify(doc, null, 2));
+    setMesh(bytes, `${file.name} (${partSummary(part)})`, part.step ? { name, bytes: part.step.bytes } : null);
+    const bad = result.operations.filter((o) => !o.ok);
+    const found = result.operations.length - bad.length;
+    await commitSetupChange(result.project, null, null, true);
+    const msg = `Replaced the model with ${file.name}: ${found} operation(s) found their picks again${bad.length ? `; ${bad.length} not planned until picked again: ${bad.map((o) => `${o.op} (${o.error})`).join("; ")}` : ""}.`;
+    if (bad.length) showError(msg);
+    else setStatus(msg, "done");
+    return result;
+  }
+
   /** Edit a setup: type, machine, stock, origin, holding. A new type converts the setup. */
   async function editSetup(id) {
     let doc;
@@ -752,5 +799,11 @@ export function setupProject(ctx) {
   });
   show();
 
-  return { changed, clean, mayDiscard, newProject, openText, openFile, save, importMesh, editSetup, addSetup, undo, dropUndo, dialog, state: p };
+  $("replaceModelFile").addEventListener("change", async (ev) => {
+    const f = ev.target.files?.[0];
+    ev.target.value = "";
+    if (f) await replaceModel(f);
+  });
+
+  return { changed, clean, mayDiscard, newProject, openText, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, dropUndo, dialog, state: p };
 }

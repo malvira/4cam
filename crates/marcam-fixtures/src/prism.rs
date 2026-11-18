@@ -201,15 +201,34 @@ impl Prism {
 ///   up to -2;
 /// - a step at X56..60 down to -3, open at the end.
 pub fn bracket() -> Mesh {
+    bracket_with(&Bracket::default())
+}
+
+/// What can change in the bracket (for "replace the model" tests): the through holes'
+/// centres and the pocket's rectangle.
+#[derive(Debug, Clone)]
+pub struct Bracket {
+    pub through: [P2; 4],
+    pub pocket: [f64; 4],
+}
+
+impl Default for Bracket {
+    fn default() -> Self {
+        Bracket {
+            through: [[40.0, 8.0], [52.0, 8.0], [40.0, 32.0], [52.0, 32.0]],
+            pocket: [8.0, 8.0, 28.0, 32.0],
+        }
+    }
+}
+
+/// [`bracket`] with its holes and pocket where `b` says.
+pub fn bracket_with(b: &Bracket) -> Mesh {
     const N: usize = 64;
     let mut m = Prism::default();
     let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-    let through: Vec<Vec<P2>> = [[40.0, 8.0], [52.0, 8.0], [40.0, 32.0], [52.0, 32.0]]
-        .iter()
-        .map(|&c| circle(c, 2.5, N))
-        .collect();
+    let through: Vec<Vec<P2>> = b.through.iter().map(|&c| circle(c, 2.5, N)).collect();
     let blind = circle([46.0, 20.0], 3.0, N);
-    let pocket = rect(8.0, 8.0, 28.0, 32.0);
+    let pocket = rect(b.pocket[0], b.pocket[1], b.pocket[2], b.pocket[3]);
     let island = circle([18.0, 20.0], 3.0, N);
     // top Z0: X0..56, minus the pocket and the holes
     let mut top_holes = through.clone();

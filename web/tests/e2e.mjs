@@ -131,6 +131,12 @@ async function shot(name) {
   writeFileSync(join(shots, `${name}.png`), Buffer.from(data, "base64"));
 }
 const state = () => js("document.body.dataset.state");
+// Generate, once it can be pressed: a project just loaded may not have enabled it yet (on a
+// slow machine the click came first and was lost)
+async function clickGenerate() {
+  await waitFor(() => js("!document.getElementById('generate').disabled && document.body.dataset.state !== 'busy'"), "Generate to be enabled", 60000);
+  await js("document.getElementById('generate').click(); true");
+}
 // console.error from the page (an error swallowed into the console is still a failure), less
 // the browser's own resource noise (a favicon) and what a test causes on purpose
 const EXPECTED_CONSOLE = [/favicon/i, /net::ERR_/, /Failed to load resource/];
@@ -219,7 +225,7 @@ try {
   check("page loads and the WebAssembly engine starts", true, await js("document.getElementById('version').textContent"));
 
   // 1. knob example on the Makera Z1: byte-identical to the cut G-code
-  await js("document.getElementById('generate').click()");
+  await clickGenerate();
   await waitDone("knob generation", 60000);
   const tabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
   check("two programs, both verified OK", JSON.stringify(tabs) === JSON.stringify(["knob_1_profileOK", "knob_2_knurlOK"]), tabs.join(", "));
@@ -375,7 +381,7 @@ try {
   const outs = await js("[...document.querySelectorAll('#tree .tree-out')].map(o => o.dataset.out + ':' + o.querySelectorAll('.tree-op').length).join(' ')");
   check("tree shows the knob as one setup, two files, three operations", outs === "knob_1_profile:1 knob_2_knurl:2", outs);
   const gen = async () => {
-    await js("document.getElementById('generate').click(); true");
+    await clickGenerate();
     await waitDone("generation", 120000);
     return js("({ lines: window.__marcam.state.result.programs.map(p => p.lines), knurl: (window.__marcam.state.result.programs.find(p => p.name === 'knob_2_knurl') || {}).gcode || '' })");
   };
@@ -492,7 +498,7 @@ try {
   // 8. mesh example: rough + two finishes against knob.stl
   await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
   await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('knob.stl')"), "the example mesh", 15000);
-  await js("document.getElementById('generate').click()");
+  await clickGenerate();
   await waitDone("mesh job generation", 240000);
   const mtabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
   check("mesh job: three programs, all verified OK", mtabs.length === 3 && mtabs.every((t) => t.endsWith("OK")), mtabs.join(", "));
@@ -543,7 +549,7 @@ try {
   await js("document.getElementById('opForm').requestSubmit(); true");
   await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${vOps + 1}`), "the V-carve to be added", 15000);
   check("SVG import replaces the V-carve outline (at the old outline's corner, 8 mm tall)", /^20 24; 40 24; 30 16; 20 24$/.test(svgField), svgField);
-  await js("document.getElementById('generate').click()");
+  await clickGenerate();
   await waitDone("plate generation", 240000);
   const ptabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
   const plimits = await js("document.getElementById('summary').innerText");
@@ -583,7 +589,7 @@ try {
   for (const ex of ["knob", "plate", "knob_indexed"]) {
     await js(`document.getElementById('example').value = '${ex}'; document.getElementById('loadExample').click(); true`);
     await settle();
-    await js("document.getElementById('generate').click(); true");
+    await clickGenerate();
     await waitDone(`${ex} generation for times`, 240000);
     await settle();
     const t = await js(SHOWN_TIMES);
@@ -603,7 +609,7 @@ try {
       await settle();
       const s1 = await js(SHOWN_TIMES);
       check("out of date: the old times stay", s1.stale && s1.ops.filter((o) => o.on).every((o) => o.s > 0), JSON.stringify(s1.ops));
-      await js("document.getElementById('generate').click(); true");
+      await clickGenerate();
       await waitDone("the plate again", 240000);
       await settle();
       const s2 = await js(SHOWN_TIMES);
@@ -622,7 +628,7 @@ try {
     await waitDone("the knob STL imported on a vise", 240000);
     await settle();
     if (!(await js("!!window.__marcam.state.result"))) {
-      await js("document.getElementById('generate').click(); true");
+      await clickGenerate();
       await waitDone("the imported STL", 240000);
       await settle();
     }
@@ -676,7 +682,7 @@ try {
     await js("document.getElementById('pickFaces').click(); true");
     await sleep(400);
     const faces = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.id === 'op5').geometry || [])");
-    await js("document.getElementById('generate').click(); true");
+    await clickGenerate();
     await waitDone("generation with the picked cap", 240000);
     const far = await js("(() => { const p = window.__marcam.state.result.programs.find(q => q.name === 'plate_2_dome').toolpath.points; let m = 0; for (let i = 0; i < p.length; i += 4) if (p[i + 3] === 3) m = Math.max(m, Math.hypot(p[i] - 46, p[i + 1] - 20)); return m; })()");
     const okTabs = await js("[...document.querySelectorAll('#tabs button')].every(b => b.textContent.endsWith('OK'))");
@@ -705,7 +711,7 @@ try {
     await js(`document.getElementById('example').value = '${ex}'; document.getElementById('loadExample').click(); true`);
     await settle();
     await sleep(1500);
-    await js("document.getElementById('generate').click()");
+    await clickGenerate();
     await waitDone(`${ex} generation for the GPU check`, 240000);
     const bg = await simulateWith(true);
     await keepStocks("gpuS");
@@ -731,7 +737,7 @@ try {
   await js("document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");
   await settle();
   await sleep(1500);
-  await js("document.getElementById('generate').click()");
+  await clickGenerate();
   await waitDone("indexed knob generation for the GPU check", 240000);
   const bi = await simulateWith(true);
   check("indexed 3+1 jobs fall back to the CPU and say why", webgpu ? /^CPU \(indexed 3\+1/.test(bi) : String(bi).startsWith("CPU ("), bi);
@@ -740,7 +746,7 @@ try {
   // 8d. relief plaque from a grayscale image: roughing + 45 deg parallel finish, simulated
   await js("document.getElementById('example').value = 'plaque'; document.getElementById('loadExample').click(); true");
   await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('plaque.png')"), "the plaque image", 15000);
-  await js("document.getElementById('generate').click()");
+  await clickGenerate();
   await waitDone("plaque generation", 240000);
   const qtabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
   check("plaque: roughing, finishing and engraving programs verified OK", qtabs.length === 3 && qtabs.every((t) => t.endsWith("OK")), qtabs.join(", "));
@@ -756,7 +762,7 @@ try {
   // 8e. wrapped engraving on the Z1: grooves, text round the bar and a V-carved band
   await js("document.getElementById('example').value = 'ring'; document.getElementById('loadExample').click(); true");
   await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 3"), "the ring in the tree", 15000);
-  await js("document.getElementById('generate').click()");
+  await clickGenerate();
   await waitDone("ring generation", 240000);
   const rtabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
   await js("document.getElementById('simulate').click()");
@@ -771,7 +777,7 @@ try {
   // 8c. indexed 3+1 on the knob: D-flat at A0, cross hole at A90, simulated on the bar
   await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");
   await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 5"), "the indexed knob in the tree", 15000);
-  await js("document.getElementById('generate').click()");
+  await clickGenerate();
   await waitDone("indexed knob generation", 240000);
   const itabs = await js("[...document.querySelectorAll('#tabs button')].map(b => b.textContent)");
   const igold = await js("window.__marcam.state.result.programs.slice(0, 2).map(p => p.gcode)");
@@ -1016,7 +1022,7 @@ try {
     const staleAfterEdit = await js("({ stale: document.body.classList.contains('stale'), attention: document.getElementById('generate').classList.contains('attention') })");
     const convertMsg = await js("document.getElementById('error').textContent");
     check("a setup change marks the results out of date and highlights Generate (nothing planned yet)", staleAfterEdit.stale && staleAfterEdit.attention, JSON.stringify(staleAfterEdit));
-    await js("document.getElementById('generate').click(); true");
+    await clickGenerate();
     await waitDone("regeneration after the type change", 240000);
     const warned = cdp.dialogs.slice(nDialogs).map((d) => d.message).join(" ");
     const dc = await doc();
@@ -1029,7 +1035,7 @@ try {
     await shot("15e_converted_to_vise");
     await js("document.getElementById('undoSetup').click(); true");
     await waitFor(() => js("document.body.dataset.state === 'ready'"), "the undone setup", 60000);
-    await js("document.getElementById('generate').click(); true");
+    await clickGenerate();
     await waitDone("regeneration after Undo", 240000);
     const du = await doc();
     check("Undo brings the rotary setup back, regenerated", du.setups[0].kind === "rotary" && du.setups[0].operations.map((o) => o.type).join() === "rotary_rough,rotary_finish" && (await allGcode()) === gcode2,
@@ -1039,7 +1045,7 @@ try {
     await js("document.getElementById('treeAddSetup').click(); true");
     await inDialog({ kind: "indexed", name: "Flats", shot: "15f_add_setup_dialog" });
     await waitFor(() => js("document.body.dataset.state === 'ready'"), "the added setup", 60000);
-    await js("document.getElementById('generate').click(); true");
+    await clickGenerate();
     await waitDone("generation of the added setup", 240000);
     const da = await doc();
     const va = await viewsOk();
@@ -1158,7 +1164,7 @@ try {
       // an example goes through the same reset
       await js("document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
       await settle();
-      await js("document.getElementById('generate').click(); true");
+      await clickGenerate();
       await waitDone("the example after the resets", 240000);
       await js("document.getElementById('example').value = 'ring'; document.getElementById('loadExample').click(); true");
       await settle();
@@ -1183,7 +1189,7 @@ try {
     const isStale = () => js("document.body.classList.contains('stale')");
     await js("document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
     await settle();
-    await js("document.getElementById('generate').click()");
+    await clickGenerate();
     await waitDone("knob mesh generation for the plan count", 240000);
     const p0 = await plans();
     const autoDefault = await js("document.getElementById('autoGen').checked");
@@ -1234,7 +1240,7 @@ try {
     check("editing a parameter marks the results out of date and highlights Generate, and plans nothing",
       autoDefault === false && edited.stale && edited.banner && edited.attention && (await plans()) === p0, `${JSON.stringify(edited)}; auto-regenerate on by default: ${autoDefault}; ${(await plans()) - p0} plans`);
     await shot("16b_out_of_date");
-    await js("document.getElementById('generate').click()");
+    await clickGenerate();
     await waitDone("generation after the edit", 240000);
     check("Generate: exactly one plan, and the results are current again", (await plans()) === p0 + 1 && !(await isStale()) && !(await js("document.getElementById('generate').classList.contains('attention')")));
     // auto-regenerate on: twenty values while the mouse is held, one plan after the release
@@ -1505,7 +1511,7 @@ try {
     await waitFor(async () => (await doc()).setups[0].operations.length === 1, "the raster applied", 15000);
     await sleep(500);
     const enabled = await js("!document.getElementById('generate').disabled");
-    await js("document.getElementById('generate').click(); true");
+    await clickGenerate();
     await waitDone("generation after adding an operation back", 240000);
     const back = await view();
     check("an operation added back: Generate is enabled again and plans", enabled && back.path > 0 && back.part > 0, JSON.stringify(back));
@@ -1521,7 +1527,7 @@ try {
     // visibility: the plate (several operations in one file), generated
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await settle();
-    await js("document.getElementById('generate').click(); true");
+    await clickGenerate();
     await waitDone("the plate for visibility", 240000);
     const plans0 = await js("window.__marcam.calls.planAndPost || 0");
     const gcode0 = await js("window.__marcam.state.result.programs.map((p) => p.gcode).join('\\n')");
@@ -1604,7 +1610,7 @@ try {
       pocket.got === "pocket" && pocket.op.paths?.length >= 1 && !pocket.op.rect &&
       cut.got === "outline" && cut.op.side === "outside" && Math.abs(cut.op.depth - 8.7) < 1e-6 && cut.op.path.length >= 4,
       JSON.stringify({ face: [face.got, face.op.depth], pocket: [pocket.got, pocket.op.depth], cut: [cut.got, cut.op.depth] }));
-    await js("document.getElementById('generate').click(); true");
+    await clickGenerate();
     await waitDone("the grip block's three programs", 240000);
     await js("document.getElementById('simulate').click(); true");
     await waitFor(() => js("!!window.__marcam.state.sim && document.body.dataset.state === 'done'"), "the grip block simulated", 240000);
@@ -1630,6 +1636,62 @@ try {
       JSON.stringify(sim));
     check("simulated: the cut-out goes all round the part, to just below its bottom (the part separated)",
       sim[2].ringCells > 100 && sim[2].ring >= sim[2].ringCells * 0.98, `${sim[2].ring}/${sim[2].ringCells}`);
+
+    // 8p. (Mar) Replace model: the same project, the part replaced by one without the right
+    // oval. Facing (left oval) and the cut-out find their picks again; the pocket's oval is
+    // gone, so the pocket is in error: marked, named, not planned. Undo brings the old part
+    // back; saved and reopened the error stays; picked again, it plans.
+    const picksKept = (await doc()).setups[0].operations.every((o) => o.picks?.length === 1);
+    const replaceWith = async (name) => {
+      const b64 = readFileSync(join(fx, name)).toString("base64");
+      await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${b64}"), (c) => c.charCodeAt(0))], "${name}")); const i = document.getElementById('replaceModelFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+      await sleep(500);
+      await waitFor(() => js("document.body.dataset.state !== 'busy'"), `replaced by ${name}`, 240000);
+      await settle();
+    };
+    await replaceWith("oval_grip_one_oval.stl");
+    const r1 = await js(`(() => { const d = JSON.parse(document.getElementById('job').value), ops = d.setups[0].operations;
+      return { file: d.models[0].file, errs: ops.map((o) => o.error || ''), warn: [...document.querySelectorAll('#tree .tree-op')].map((r) => !!r.querySelector('.op-error')),
+        programs: window.__marcam.state.result?.programs.map((p) => p.name) || [], msg: document.getElementById('error').textContent, undo: !document.getElementById('undoBar').classList.contains('hidden') }; })()`);
+    check("Replace model: picks were kept as signatures; on a part without the right oval the pocket is in error (marked, named), facing and the cut-out are found again",
+      picksKept && r1.file === "oval_grip_one_oval.stl" && !r1.errs[0] && /Pocket .*not on the new model/.test(r1.errs[1]) && !r1.errs[2] &&
+      JSON.stringify(r1.warn) === "[false,true,false]" && /op2/.test(r1.msg) && r1.undo, JSON.stringify(r1));
+    check("the operation in error is left out of the G-code; the others are planned on the new part",
+      JSON.stringify(r1.programs) === JSON.stringify(["grip_face", "grip_cutout"]), r1.programs.join(","));
+    await js("document.querySelector('#tree .tree-op[data-op=\"op2\"] [data-act=\"select\"]').click(); true");
+    await sleep(300);
+    const edMsg = await js("document.getElementById('opError')?.textContent || ''");
+    await shot("19_replace_model_error");
+    // undo: the old part and the pocket as it was
+    await js("document.getElementById('undoSetup').click(); true");
+    await settle(800);
+    const r2 = await js("(() => { const d = JSON.parse(document.getElementById('job').value); return { file: d.models[0].file, errs: d.setups[0].operations.filter((o) => o.error).length, warn: document.querySelectorAll('#tree .op-error').length }; })()");
+    check("the editor says why it is not planned; Undo brings the old part back, no operation in error",
+      /Not planned: Pocket/.test(edMsg) && r2.file === "oval_grip.stl" && r2.errs === 0 && r2.warn === 0, `${edMsg} | ${JSON.stringify(r2)}`);
+    // again, then saved and reopened: still in error
+    await replaceWith("oval_grip_one_oval.stl");
+    const savedReplaced = await js(`JSON.stringify((() => { const st = window.__marcam.state; let bin = ''; for (let i = 0; i < st.mesh.length; i += 8192) bin += String.fromCharCode(...st.mesh.subarray(i, i + 8192)); return { format: 'marcam-project', version: 1, project: JSON.parse(document.getElementById('job').value), meshes: { 'oval_grip_one_oval.stl': btoa(bin) } }; })())`);
+    await js(`window.__marcam.project.openText(${JSON.stringify(savedReplaced)}, "replaced.marcam.json").then(() => true)`);
+    await settle(500);
+    const r3 = await js("(() => { const d = JSON.parse(document.getElementById('job').value); return { err: d.setups[0].operations.find((o) => o.id === 'op2').error || '', warn: document.querySelectorAll('#tree .op-error').length }; })()");
+    check("saved and reopened, the pocket is still in error", /not on the new model/.test(r3.err) && r3.warn === 1, JSON.stringify(r3));
+    // picked again (the left oval, which this part has): the error goes, it plans
+    await js("document.querySelector('#tree .tree-op[data-op=\"op2\"] [data-act=\"select\"]').click(); true");
+    await waitFor(() => js("window.__marcam.state.tree.selected === 'op2' && !!document.getElementById('pickFaces')"), "the pocket's editor", 15000);
+    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking for the pocket", 30000);
+    await sleep(300);
+    const at = await screenOf("(x) => x.kind === 'pocket'");
+    const repicked = await js(`await window.__marcam.tree.pickAt(${at[0]}, ${at[1]}).then((r) => (r && r.pickable ? r.pickable.id : "nothing")) + " | sel " + [...window.__marcam.state.tree.pick.sel].join(",") + " | " + (document.getElementById('pickNotes')?.textContent || "")`);
+    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), "done picking", 15000);
+    await settle(300);
+    const cleared = await waitFor(() => js("!JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.id === 'op2').error"), "the pocket's error cleared by the new pick", 10000).then(() => true, () => false);
+    if (!cleared) console.log(`  re-pick: ${repicked}; op2 ${await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.id === 'op2'))")}`.slice(0, 1500));
+    await clickGenerate();
+    await waitDone("the repaired project", 240000);
+    const r4 = await js("(() => { const d = JSON.parse(document.getElementById('job').value); return { err: d.setups[0].operations.filter((o) => o.error).length, programs: window.__marcam.state.result.programs.map((p) => p.name) }; })()");
+    check("picked again, the pocket is planned again", r4.err === 0 && r4.programs.length === 3, JSON.stringify(r4));
   }
 
   // 9. phone width: layout stacks, no horizontal scroll

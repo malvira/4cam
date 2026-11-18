@@ -24,9 +24,12 @@ pub fn bump(x: f64, y: f64) -> f64 {
     -0.3 + 0.3 * (x * 1.3).sin() * (y * 1.1).cos()
 }
 
+/// The ovals: centre and semi-axes.
+pub type Ovals = [([f64; 2], [f64; 2])];
+
 /// How far outside an oval a point is (mm, about; <= 0 inside), the nearest oval.
-fn outside(x: f64, y: f64) -> f64 {
-    OVALS
+fn outside(ovals: &Ovals, x: f64, y: f64) -> f64 {
+    ovals
         .iter()
         .map(|&([cx, cy], [a, b])| {
             let d = (((x - cx) / a).powi(2) + ((y - cy) / b).powi(2)).sqrt();
@@ -36,8 +39,14 @@ fn outside(x: f64, y: f64) -> f64 {
 }
 
 /// Height of the top at (x, y).
+#[cfg(test)]
 pub fn height(x: f64, y: f64) -> f64 {
-    let t = outside(x, y);
+    height_with(&OVALS, x, y)
+}
+
+/// Height of the top at (x, y), with these ovals.
+pub fn height_with(ovals: &Ovals, x: f64, y: f64) -> f64 {
+    let t = outside(ovals, x, y);
     if t <= 0.0 {
         FLAT_Z
     } else if t < SLOPE {
@@ -49,13 +58,13 @@ pub fn height(x: f64, y: f64) -> f64 {
 }
 
 /// Whether the grid cell (i, j) is material (not inside a hole).
-fn solid(i: i64, j: i64) -> bool {
+fn solid(ovals: &Ovals, i: i64, j: i64) -> bool {
     let (nx, ny) = cells();
     if i < 0 || j < 0 || i >= nx || j >= ny {
         return false;
     }
     let (x, y) = ((i as f64 + 0.5) * CELL, (j as f64 + 0.5) * CELL);
-    !OVALS
+    !ovals
         .iter()
         .any(|&([cx, cy], _)| (x - cx).hypot(y - cy) < HOLE_R)
 }
@@ -68,16 +77,21 @@ fn cells() -> (i64, i64) {
 }
 
 pub fn mesh() -> Mesh {
+    mesh_with(&OVALS)
+}
+
+/// The block with these ovals (for "replace the model" tests: one removed, one moved).
+pub fn mesh_with(ovals: &Ovals) -> Mesh {
     let (nx, ny) = cells();
     let top = |i: i64, j: i64| {
         let (x, y) = (i as f64 * CELL, j as f64 * CELL);
-        [x, y, height(x, y)]
+        [x, y, height_with(ovals, x, y)]
     };
     let bot = |i: i64, j: i64| [i as f64 * CELL, j as f64 * CELL, BOTTOM];
     let mut tris = Vec::new();
     for j in 0..ny {
         for i in 0..nx {
-            if !solid(i, j) {
+            if !solid(ovals, i, j) {
                 continue;
             }
             let (a, b, c, d) = (top(i, j), top(i + 1, j), top(i + 1, j + 1), top(i, j + 1));
@@ -94,7 +108,7 @@ pub fn mesh() -> Mesh {
                 (0, 1, (i + 1, j + 1), (i, j + 1)),
                 (-1, 0, (i, j + 1), (i, j)),
             ] {
-                if solid(i + di, j + dj) {
+                if solid(ovals, i + di, j + dj) {
                     continue;
                 }
                 let (tp, tq, bp, bq) = (top(p.0, p.1), top(q.0, q.1), bot(p.0, p.1), bot(q.0, q.1));

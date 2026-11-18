@@ -46,6 +46,10 @@ pub struct Pickable {
     pub similar: String,
     /// Kind-specific numbers (mm, degrees), see the recognisers.
     pub data: Value,
+    /// What it is, independent of the mesh's triangles (kind, position, size), for finding it
+    /// again on a changed model: what an operation keeps of its picks (see [`crate::replace`]).
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub signature: Value,
 }
 
 const FLAT: f64 = 0.999; // |nz| of a flat face
@@ -87,6 +91,14 @@ struct Region {
 
 /// Recognise the pickable features of `mesh` (in the setup's frame).
 pub fn pickables(mesh: &Mesh, frame: Frame) -> Vec<Pickable> {
+    let mut out = recognise(mesh, frame);
+    for p in &mut out {
+        p.signature = crate::replace::signature(p);
+    }
+    out
+}
+
+fn recognise(mesh: &Mesh, frame: Frame) -> Vec<Pickable> {
     let (infos, of) = face_regions(mesh, 30.0);
     match frame {
         Frame::Rotary => {
@@ -187,6 +199,7 @@ fn round_edges(mesh: &Mesh, infos: &[FaceRegion], of: &[usize]) -> Vec<Pickable>
             faces: vec![ia.clone(), ib.clone()],
             similar: format!("circular_edge:{}", r2(r)),
             data: json!({"x": round_um(x), "r": round_um(r)}),
+            signature: Value::Null,
         });
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -243,6 +256,7 @@ fn side_faces(mesh: &Mesh, infos: &[FaceRegion], of: &[usize], index_a: f64) -> 
             faces: vec![id.clone()],
             similar: format!("side_face:{}", r2(dist)),
             data: json!({"index_a": a, "distance": round_um(dist), "area": area, "x": infos[k].x}),
+            signature: Value::Null,
         });
     }
     out
@@ -303,6 +317,7 @@ fn rotary(infos: &[FaceRegion]) -> Vec<Pickable> {
                     "r": [round_um(r.r[0]), round_um(r.r[1])],
                     "a": r.a, "shape": r.shape, "area": r.area
                 }),
+                signature: Value::Null,
             }
         })
         .collect()
@@ -549,6 +564,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                 "center": [round_um(c[0]), round_um(c[1])], "diameter": round_um(d), "top": top, "bottom": bottom,
                 "depth": depth, "through": through
             }),
+            signature: Value::Null,
         });
     }
     let hole_set: std::collections::HashSet<usize> = hole_regions.iter().map(|h| h.0).collect();
@@ -690,6 +706,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                     "cx": round_um(lps.first().map_or(0.0, |l| { let (lo, hi) = bbox(l); (lo[0] + hi[0]) / 2.0 })),
                     "cy": round_um(lps.first().map_or(0.0, |l| { let (lo, hi) = bbox(l); (lo[1] + hi[1]) / 2.0 }))
                 }),
+                signature: Value::Null,
             });
             let pocket_like = (walls_up && !wall_regions.iter().any(|w| hole_set.contains(w)))
                 || (recessed && !outer_regions.iter().any(|w| hole_set.contains(w)));
@@ -728,6 +745,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                         "floor": z, "top": rim, "depth": depth, "outline": close(&outline),
                         "islands": islands.iter().map(|l| close(l)).collect::<Vec<_>>()
                     }),
+                    signature: Value::Null,
                 });
             }
         }
@@ -752,6 +770,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                 faces: vec![id.clone()],
                 similar: format!("edge_loop:{}:{}:{}", r2(z), side, r2(len)),
                 data: json!({"z": z, "path": close(l), "side": side, "length": len, "up": up}),
+                signature: Value::Null,
             });
         }
     }
@@ -768,6 +787,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
             faces: vec![r.info.id.clone()],
             similar: format!("surface:{}", r.info.id),
             data: json!({"z": r.z, "area": r.area}),
+            signature: Value::Null,
         });
     }
     // the part's outline: picked on its bottom or on any outer side face (however many facets,
@@ -799,6 +819,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
             faces,
             similar: "outline".into(),
             data: json!({"path": close(&path), "bottom": zmin, "top": zmax}),
+            signature: Value::Null,
         });
     }
     out.sort_by(|a, b| (kind_order(&a.kind), &a.id).cmp(&(kind_order(&b.kind), &b.id)));

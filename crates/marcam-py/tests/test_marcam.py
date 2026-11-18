@@ -78,6 +78,25 @@ def test_picking():
     assert marcam.call("pickables", project, {}, stl)["setup"] == "vise"
 
 
+def test_replace_model():
+    import json
+    fx = ROOT / "tests" / "fixtures" / "picking"
+    project = json.loads((fx / "oval_grip.project.json").read_text())
+    grip = (fx / "oval_grip.stl").read_bytes()
+    pocket = next(x for x in marcam.pickables(project, grip)["pickables"] if x["kind"] == "pocket")
+    project["setups"][0]["operations"] = [{"id": "op1", "type": "pocket", "tool": 2, "rect": [1, 1, 5, 5], "depth": 1, "step_down": 0.5,
+                                           "stepover": 0.5, "feed": 800, "plunge_feed": 200, "picks": [pocket["signature"]]}]
+    project["setups"][0]["outputs"] = [{"name": "grip", "title": "grip", "operations": ["op1"]}]
+    # the bracket has no such pocket: the operation is in error
+    res = marcam.replace_model(project, (fx / "bracket.stl").read_bytes(), "bracket.stl")
+    assert res["operations"][0]["ok"] is False and "Pocket" in res["operations"][0]["error"]
+    assert res["project"]["models"][0]["file"] == "bracket.stl"
+    assert "error" in res["project"]["setups"][0]["operations"][0]
+    # the grip again: found, the error cleared
+    res = marcam.replace_model(res["project"], grip, "oval_grip.stl")
+    assert res["operations"][0]["ok"] is True and "error" not in res["project"]["setups"][0]["operations"][0]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

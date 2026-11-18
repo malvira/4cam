@@ -100,7 +100,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     let html = `<div class="row small"><label for="treeSetup">Setup</label><select id="treeSetup">${setupSel}</select>
       <button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
       <button type="button" id="treeAddSetup" title="Another setup for the same part (e.g. the other side, or a vise setup)">+ Setup</button>
-      <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>
+      <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button>
+      <button type="button" id="treeReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button></div>
       <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
       <div class="row small detected" id="detected"></div>
       <div class="row small eyes"><span class="muted">Toolpaths shown:</span>
@@ -131,7 +132,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
           <input type="checkbox" data-act="enable" ${op.enabled === false ? "" : "checked"} aria-label="Enable ${esc(id)}">
           <input type="color" data-act="color" value="${colorOf(op, i)}" aria-label="Colour of ${esc(id)}">
           <button type="button" data-act="eye" class="eye ${isHidden(id) ? "off" : ""}" aria-pressed="${!isHidden(id)}" aria-label="Show the toolpath of ${esc(id)}" title="Show or hide this toolpath (view only; Alt-click: show only this)">${isHidden(id) ? "◌" : "◉"}</button>
-          <span class="tree-label" data-act="select">${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}${ot != null ? ` · <span class="tree-time">${fmt(ot)}</span>` : ""}</span></span>
+          <span class="tree-label" data-act="select">${op.error ? `<span class="op-error" title="${esc(op.error)}">⚠</span> ` : ""}${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}${ot != null ? ` · <span class="tree-time">${fmt(ot)}</span>` : ""}</span></span>
           <button type="button" data-act="up" ${k === 0 ? "disabled" : ""} aria-label="Move ${esc(id)} up">▲</button>
           <button type="button" data-act="down" ${k === out.operations.length - 1 ? "disabled" : ""} aria-label="Move ${esc(id)} down">▼</button>
           <button type="button" data-act="delete" aria-label="Delete ${esc(id)}">✕</button></div>`;
@@ -186,6 +187,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       .map((x) => `<option value="${x.kind}" ${x.kind === op.type ? "selected" : ""}>${esc(x.title)}</option>`)
       .join("");
     let html = `<form class="opform" id="opForm"><div class="tree-outname">${esc(ty?.title || op.type)} <span class="muted">${esc(op.id)}</span></div>
+      ${op.error ? `<div class="error small" id="opError">Not planned: ${esc(op.error)}. Pick it again or change its type.</div>` : ""}
       <label>Type <select name="__type" aria-label="Operation type of ${esc(op.id)}">${typeOpts}</select></label>
       ${t.typeNote && t.typeNote.id === op.id ? `<div class="muted small" id="typeNote">${esc(t.typeNote.text)}</div>` : ""}
       ${t.retype && t.retype.op.id === op.id ? `<div class="muted small">Type changed from ${esc(typeOf(t.retype.from)?.title || t.retype.from)}: not saved until Apply</div>` : ""}
@@ -454,11 +456,22 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     return hit ? { ...t.regions.list[t.regions.of[hit.faceIndex]], point: hit.point } : null;
   }
 
+  /** What an operation keeps of its picks: each feature's signature (kind, position, size). */
+  const sigsOf = (list, ids) => ids.map((id) => list.find((x) => x.id === id)?.signature).filter(Boolean);
+  function keepPicks(op, list, ids) {
+    const sigs = sigsOf(list, ids);
+    if (sigs.length) op.picks = sigs;
+    else delete op.picks;
+    // picked again: whatever was missing is not any more
+    delete op.error;
+  }
+
   /** The picks become the operation's faces, or the fields the engine fills from them. */
   async function applySel() {
     const op = opById(t.selected);
     const pk = t.pick;
     const { mode } = pk;
+    keepPicks(op, pk.list, [...pk.sel]);
     if (mode.faces) {
       const ids = [...new Set([...pk.sel].flatMap((id) => pk.list.find((x) => x.id === id)?.faces || []))];
       op.geometry = (op.geometry || []).filter((g) => !(g.kind === "faces" && g.model === t.regions.model));
@@ -520,6 +533,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const { result: def } = await engine("opDefaults", t.doc, { type: "bore", setup: s.id, tool: boreTool(d), machine: machineArg?.() ?? null }, state.mesh);
       const { result: filled } = await engine("applyPicks", t.doc, { type: "bore", ids, setup: s.id, model: t.regions.model, tool: def.tool, index_a: op.index_a ?? 0 }, state.mesh);
       const bore = { id: op.id, ...(op.name ? { name: op.name } : {}), ...(op.color ? { color: op.color } : {}), ...def, ...filled.params, index_a: op.index_a ?? 0 };
+      keepPicks(bore, pk.list, ids);
       if (t.draft) {
         t.draft.op = bore;
         t.draft.title = typeOf("bore")?.title || "bore";
@@ -620,6 +634,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const { result: filled } = await engine("applyPicks", t.doc, { type, ids, setup: s.id, model: partModel(s), tool: op.tool }, state.mesh);
       const full = { id, ...op, ...filled.params };
       if (type === "pocket") delete full.rect;
+      keepPicks(full, detected.list, ids);
       s.operations.push(full);
       let out = s.outputs[0];
       if (!out) s.outputs.push((out = { name: `${s.id}_${id}`, title: typeOf(type)?.title || type, operations: [] }));
@@ -671,6 +686,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.id === "treeAddSetup") {
       await window.__marcam.project.addSetup();
+      return;
+    }
+    if (el.id === "treeReplace") {
+      $("replaceModelFile").click();
       return;
     }
     if (el.id === "cancelDraft") {

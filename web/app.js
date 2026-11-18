@@ -84,7 +84,8 @@ function writeJob(job, opts = {}) {
 /** The Generate button asks for attention when the results are out of date or missing. */
 /** Whether the project has an operation to plan (one that is enabled). */
 function hasEnabledOps(j) {
-  return j.schema_version === "0.2" ? !!j.setups?.some((s) => s.operations?.some((o) => o.enabled !== false)) : !!j.programs?.some((p) => p.operations?.length);
+  // (an operation in error is not planned: its picked features are gone)
+  return j.schema_version === "0.2" ? !!j.setups?.some((s) => s.operations?.some((o) => o.enabled !== false && !o.error)) : !!j.programs?.some((p) => p.operations?.length);
 }
 
 /** Whether the project has a part (a model, a mesh or a profile). */

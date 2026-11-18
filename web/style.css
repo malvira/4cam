@@ -160,3 +160,6 @@ body.stale #gcode, body.stale #view3d, body.stale #side { opacity: 0.45; }
 .eye { border: none; background: transparent; color: var(--accent); cursor: pointer; font-size: 13px; padding: 0 3px; line-height: 1; }
 .eye.off { color: var(--muted); opacity: 0.7; }
 .eyes { gap: 4px; align-items: center; }
+
+/* an operation whose picked features are gone (after a model was replaced) */
+.op-error { color: var(--bad); font-weight: 700; }

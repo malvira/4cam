@@ -488,7 +488,7 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
         return vec![format!("unknown operation type {kind:?}")];
     };
     let obj = op.as_object().cloned().unwrap_or_default();
-    const COMMON: [&str; 5] = ["type", "id", "name", "color", "enabled"];
+    const COMMON: [&str; 7] = ["type", "id", "name", "color", "enabled", "picks", "error"];
     for k in obj.keys() {
         if !COMMON.contains(&k.as_str()) && !t.params.iter().any(|p| p.name == k) {
             out.push(format!("{kind}: unknown parameter {k:?}"));

@@ -6,6 +6,7 @@
 //   node web/tests/stress.mjs --seeds 1,2,3 --steps 60
 //   node web/tests/stress.mjs --random 20 --steps 120   (20 fresh seeds: a longer local run)
 //   node web/tests/stress.mjs --only monkey|scenarios
+//   node web/tests/stress.mjs --only scenarios --match "replace the model"
 //
 // A failure prints the seed and the actions so far: `--seeds <seed> --steps <n>` replays it.
 // Needs web/pkg (scripts/build-wasm.*) and Chrome, Edge or Chromium, like e2e.mjs.
@@ -28,6 +29,8 @@ let seeds = arg("--seeds", null)?.split(",").map(Number) || CI_SEEDS;
 if (arg("--random", null)) seeds = Array.from({ length: Number(arg("--random")) }, () => Math.floor(Math.random() * 1e9));
 const STEPS = Number(arg("--steps", 40));
 const ONLY = arg("--only", "");
+// --match <text>: only the scenarios whose name has it
+const MATCH = arg("--match", "");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function freePort() {
@@ -125,6 +128,7 @@ function pageErrors(from = 0) {
 }
 
 const busy = () => js("document.body.dataset.state === 'busy'");
+const app_settle = () => settle(400);
 async function settle(ms = 250) {
   await waitFor(async () => !(await busy()) && (await js("!!window.__marcam.state.registry")), "the app to settle", 240000);
   await sleep(ms);
@@ -196,7 +200,7 @@ const INVARIANTS = `(async () => {
   } else if (t.pickMesh) bad.push('the pick highlight stayed after picking ended');
   // Generate: enabled exactly when there is an enabled operation (not while busy)
   if (document.body.dataset.state !== 'busy' && st.registry) {
-    const ops = doc.setups.some((x) => x.operations.some((o) => o.enabled !== false));
+    const ops = doc.setups.some((x) => x.operations.some((o) => o.enabled !== false && !o.error));
     if (document.getElementById('generate').disabled === ops) bad.push('Generate ' + (ops ? 'disabled with operations' : 'enabled with none'));
   }
   if (st.stale && !st.result) bad.push('out of date without results');
@@ -232,6 +236,8 @@ const RESULT_CHECK = `(async () => {
 // Each returns a short description for the log, or null when it does not apply now.
 const EXAMPLES = ["knob", "knob_finish", "plate", "plaque", "ring", "knob_indexed"];
 const STLS = [["knob.stl", "examples/knob/knob.stl"], ["bracket.stl", "tests/fixtures/picking/bracket.stl"], ["oval_grip.stl", "tests/fixtures/picking/oval_grip.stl"]];
+// what a model can be replaced with (the one-oval grip: a part whose pocket is gone)
+const REPLACEMENTS = [...STLS, ["oval_grip_one_oval.stl", "tests/fixtures/picking/oval_grip_one_oval.stl"]];
 const b64 = (p) => readFileSync(join(root, p)).toString("base64");
 
 const A = {
@@ -350,6 +356,22 @@ const A = {
     await settle(100);
     return `${act} ${id}`;
   },
+  async replaceModel(r, which) {
+    // a project with a mesh model only
+    if (!(await js("(() => { try { return JSON.parse(document.getElementById('job').value).models?.some((m) => m.kind === 'mesh') && !!window.__marcam.state.mesh; } catch { return false; } })()"))) return null;
+    const [name, path] = which ? REPLACEMENTS.find((x) => x[0] === which) : r.pick(REPLACEMENTS);
+    await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${b64(path)}"), (c) => c.charCodeAt(0))], "${name}")); const i = document.getElementById('replaceModelFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await sleep(400);
+    await settle(400);
+    // whatever is in error is marked in the tree, and nothing in error is planned
+    const st = await js(`(() => { const d = JSON.parse(document.getElementById('job').value), s = d.setups.find((x) => x.id === window.__marcam.state.tree.setup) || d.setups[0];
+      const errs = s.operations.filter((o) => o.error).map((o) => o.id);
+      const marked = [...document.querySelectorAll('#tree .tree-op')].filter((x) => x.querySelector('.op-error')).map((x) => x.dataset.op);
+      return { errs, marked, file: d.models.find((m) => m.kind === 'mesh')?.file }; })()`);
+    const extra = [];
+    if (JSON.stringify(st.errs) !== JSON.stringify(st.marked)) extra.push(`operations in error ${st.errs} but marked ${st.marked}`);
+    return { log: `replace the model with ${name}${st.errs.length ? ` (in error: ${st.errs.join(", ")})` : ""}`, extra };
+  },
   async cancel() {
     if (!(await js("!!document.getElementById('cancelDraft')"))) return null;
     await js("document.getElementById('cancelDraft').click(); true");
@@ -388,7 +410,7 @@ const A = {
 const WEIGHTS = [
   ["loadExample", 3], ["importStl", 2], ["addOp", 8], ["apply", 8], ["changeType", 6], ["editParam", 6], ["changeTool", 3],
   ["pick", 5], ["select", 6], ["up", 2], ["down", 2], ["enable", 3], ["eye", 2], ["delete", 3], ["cancel", 2], ["undo", 1],
-  ["generate", 4], ["saveReopen", 2],
+  ["generate", 4], ["saveReopen", 2], ["replaceModel", 2],
 ];
 function rng(seed) {
   let a = seed >>> 0;
@@ -492,6 +514,45 @@ const SCENARIOS = {
     },
     () => A.addOp(r0, "bore"),
     () => A.apply(),
+  ],
+  // Mar: replace the model; operations whose picked feature is gone are in error, left out
+  "replace the model: a pocket whose oval is gone is in error and left out; undo; picked again": () => [
+    () => A.importStl(r0, "oval_grip.stl", "vise"),
+    async () => {
+      // a pocket on the right oval (detected), facing on the left one
+      // the detected pocket whose outline is on the right (X > 30)
+      await js(`await (async () => { const st = window.__marcam.state; const d = JSON.parse(document.getElementById('job').value);
+        const { result } = await window.__marcam.engine('pickables', d, { setup: d.setups[0].id }, st.mesh);
+        const right = result.pickables.find((x) => x.kind === 'pocket' && x.data.outline[0][0] > 30);
+        const b = [...document.querySelectorAll('#detected .detected-btn')].find((x) => (x.dataset.ids || '').split(',').includes(right.id));
+        b.click(); return true; })()`);
+      await app_settle();
+      return "pocket the right oval";
+    },
+    () => A.generate(),
+    async () => {
+      const r = await A.replaceModel(r0, "oval_grip_one_oval.stl");
+      const s = await js("(() => { const d = JSON.parse(document.getElementById('job').value); return { errs: d.setups[0].operations.filter((o) => o.error).length, n: d.setups[0].operations.length }; })()");
+      return { log: r.log, extra: [...r.extra, ...(s.errs === 1 ? [] : [`${s.errs} operations in error, wanted 1 (the pocket)`])] };
+    },
+    () => A.generate(),
+    () => A.undo(),
+    async () => {
+      const errs = await js("JSON.parse(document.getElementById('job').value).setups[0].operations.filter((o) => o.error).length");
+      return { log: "after undo", extra: errs ? [`${errs} still in error after undo`] : [] };
+    },
+    () => A.replaceModel(r0, "oval_grip_one_oval.stl"),
+    () => A.saveReopen(),
+    async () => {
+      const errs = await js("JSON.parse(document.getElementById('job').value).setups[0].operations.filter((o) => o.error).length");
+      return { log: "reopened", extra: errs === 1 ? [] : [`${errs} in error after reopening, wanted 1`] };
+    },
+    () => A.replaceModel(r0, "oval_grip.stl"),
+    async () => {
+      const errs = await js("JSON.parse(document.getElementById('job').value).setups[0].operations.filter((o) => o.error).length");
+      return { log: "the original part again", extra: errs ? [`${errs} still in error on the original part`] : [] };
+    },
+    () => A.generate(),
   ],
   "an applied operation's type changed, then cancelled: the old one stays": () => [
     () => A.importStl(r0, "bracket.stl", "vise"),
@@ -606,7 +667,7 @@ try {
   await S("Page.navigate", { url });
   await waitFor(() => js("document.body.dataset.state === 'ready'"), "the engine", 60000);
   if (ONLY !== "monkey") {
-    for (const [name, steps] of Object.entries(SCENARIOS)) {
+    for (const [name, steps] of Object.entries(SCENARIOS).filter(([n]) => n.includes(MATCH))) {
       try {
         const log = await run(name, steps(), true);
         report(`scenario: ${name}`, true, `${log.length} steps`);

@@ -136,8 +136,23 @@ pub struct ProjectOp {
     /// Where it may cut (empty = the whole model). See [`crate::geometry::Selection`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub geometry: Vec<crate::geometry::Selection>,
+    /// What was picked for it, by what each feature is (kind, position, size: see
+    /// [`crate::replace`]), so it is found again on a changed model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub picks: Vec<serde_json::Value>,
+    /// Why it cannot be planned (a picked feature the model no longer has): left out of the
+    /// G-code until it is picked again or changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     #[serde(flatten)]
     pub op: Operation,
+}
+
+impl ProjectOp {
+    /// Whether it is planned: enabled and not in error.
+    pub fn plans(&self) -> bool {
+        self.enabled && self.error.is_none()
+    }
 }
 
 fn yes() -> bool {
@@ -238,6 +253,8 @@ impl Project {
                     color: None,
                     enabled: true,
                     geometry: Vec::new(),
+                    picks: Vec::new(),
+                    error: None,
                     op: op.clone(),
                 });
             }
@@ -505,7 +522,7 @@ impl Project {
         for o in setup
             .operations
             .iter()
-            .filter(|o| o.enabled && !o.geometry.is_empty())
+            .filter(|o| o.plans() && !o.geometry.is_empty())
         {
             let radius = job
                 .tool(o.op.tool())
@@ -632,7 +649,7 @@ impl Project {
                     .operations
                     .iter()
                     .filter_map(|id| setup.operations.iter().find(|o| &o.id == id))
-                    .filter(|o| o.enabled)
+                    .filter(|o| o.plans())
                     .map(|o| &o.op)
                     .collect();
                 if ops.is_empty() {
@@ -670,7 +687,7 @@ impl Project {
             .outputs
             .iter()
             .flat_map(|out| out.operations.iter())
-            .filter(|id| setup.operations.iter().any(|o| &o.id == *id && o.enabled))
+            .filter(|id| setup.operations.iter().any(|o| &o.id == *id && o.plans()))
             .cloned()
             .collect()
     }

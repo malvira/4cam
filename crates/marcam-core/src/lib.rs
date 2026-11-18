@@ -25,6 +25,7 @@ pub mod profiles;
 pub mod project;
 pub mod relief;
 pub mod render;
+pub mod replace;
 pub mod sim;
 pub mod sim3;
 pub mod smoothing;

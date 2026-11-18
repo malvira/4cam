@@ -78,6 +78,17 @@ All calls take and return JSON. No wasm-bindgen is needed.
     tool cannot drill. Python: `marcam.pickables(project, mesh, setup=...)` and
     `marcam.apply_picks(project, type, ids, mesh, ...)`; C: `marcam_pickables`,
     `marcam_apply_picks`; Rust: `marcam::pickables`;
+  - each pickable also has a `signature` (its kind, label and numbers, without the mesh's
+    face ids). An operation keeps the signatures of what was picked for it in `picks`;
+  - `replaceModel(doc, {model, file}, mesh)` replaces a mesh model with a new part (`mesh`:
+    its bytes; `file`: the name the project gives it). Its placement, the setups, tools and
+    operations stay. Every operation's `picks` are looked for on the new part (within
+    0.05 mm, or 1 % of a size). Found: the operation is derived from them again. Not found,
+    or more than one match: it gets an `error` naming the feature, stays in the project and
+    is left out of planning until it is picked again or its type is changed. Returns
+    `{project, operations: [{setup, op, ok, picks, error}]}`. Python:
+    `marcam.replace_model(project, mesh, file, model=None)`; Rust:
+    `marcam::replace::replace_model`; CLI: `marcam replace-model`;
   - `wizardKnurl(doc, params, mesh)` runs the knurl wizard.
 - **Simulation:**
   - `gpuOpen(doc, {res, dx, na, cell, setup}, mesh)` / `gpuStats(opts, keyBytes)`: inputs
@@ -112,6 +123,7 @@ The CLI covers the same features:
 - `ops list|show|check|defaults`;
 - `faces`;
 - `pickables` (`--type drill` lists only what drilling takes, `--json` for programs);
+- `replace-model <project> <model> <new mesh>` (exits 1 when an operation is put in error);
 - `wizard knurl`;
 - `profiles list|show|import|export`;
 - `mesh-info`.

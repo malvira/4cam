@@ -164,6 +164,8 @@ impl KnurlWizard {
                 color: None,
                 enabled: true,
                 geometry: vec![],
+                picks: Vec::new(),
+                error: None,
                 op: Operation::RotaryTurning(RotaryTurning {
                     tool: self.flat_tool,
                     rough_depth: self.rough_depth,
@@ -191,6 +193,8 @@ impl KnurlWizard {
             color: None,
             enabled: true,
             geometry: vec![],
+            picks: Vec::new(),
+            error: None,
             op: Operation::HelicalKnurl(HelicalKnurl {
                 tool: self.vbit_tool,
                 body_back,
@@ -224,6 +228,8 @@ impl KnurlWizard {
                 color: None,
                 enabled: true,
                 geometry: vec![],
+                picks: Vec::new(),
+                error: None,
                 op: Operation::FlankChamfer(FlankChamfer {
                     tool: self.vbit_tool,
                     edge: [snap(front), snap(face.r[1])],

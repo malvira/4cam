@@ -165,6 +165,26 @@ fn pickables(
     to_py(py, v)
 }
 
+/// Replace a mesh model with a new part (`mesh`: its bytes or a path; `file`: the name the
+/// project gives it): placement, setups, tools and operations kept, every operation's picks
+/// found again. Returns `{"project": {...}, "operations": [{"setup", "op", "ok", "error"}]}`;
+/// operations whose features are gone are in error in the project (left out of the G-code).
+#[pyfunction]
+#[pyo3(signature = (project, mesh, file, model = None))]
+fn replace_model(
+    py: Python<'_>,
+    project: &Bound<'_, PyAny>,
+    mesh: &Bound<'_, PyAny>,
+    file: &str,
+    model: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let doc = json_text(py, project)?;
+    let mesh = mesh_bytes(Some(mesh))?;
+    let req = serde_json::json!({"model": model, "file": file}).to_string();
+    let v = py.detach(|| api::replace_model(&doc, &req, &mesh));
+    to_py(py, v)
+}
+
 /// The parameters picked features (`ids` from [`pickables`]) set on an operation of type
 /// `op_type`: `{"params": {...}, "notes": [...]}`.
 #[pyfunction]
@@ -227,5 +247,6 @@ fn marcam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(body_project, m)?)?;
     m.add_function(wrap_pyfunction!(pickables, m)?)?;
     m.add_function(wrap_pyfunction!(apply_picks, m)?)?;
+    m.add_function(wrap_pyfunction!(replace_model, m)?)?;
     Ok(())
 }

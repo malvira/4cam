@@ -20,6 +20,12 @@ USAGE:
       --machine, else the job's \"machine\", else makera-z1-4axis. Built in:
       makera-z1-4axis, makera-carvera-4axis, makera-carvera-air-4axis,
       linuxcnc-4axis (see `marcam profiles list`).
+  marcam replace-model <project.json> <model-id> <new.stl|.3mf|.step> [--out <file>] [--json]
+      Replace a mesh model with a new part (placement, setups, tools and operations
+      kept) and find every operation's picks again on it. Operations whose picked
+      features are gone (or match ambiguously) are put in error: kept, left out of
+      the G-code until picked again. Writes the project (--out, else in place) and
+      prints each operation's outcome; exits 1 when some are in error.
   marcam upgrade <job.json> [--out <project.json>]
       Convert a 0.1 job to a 0.2 project (models, tools, setups, operations).
       run/simulate/toolpath accept either version.
@@ -311,6 +317,69 @@ fn cmd_ops(args: &[String]) -> Result<ExitCode, String> {
     }
 }
 
+fn cmd_replace_model(o: &Opts) -> Result<ExitCode, String> {
+    let [path, model, mesh] = o.positional.as_slice() else {
+        return Err(format!(
+            "expected <project.json> <model-id> <new mesh file>\n\n{USAGE}"
+        ));
+    };
+    let dir = Path::new(path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let (p, _) = marcam::project::Project::from_json_any(&read(path)?)
+        .map_err(|e| format!("{path}: {e}"))?;
+    let project = serde_json::to_value(&p).map_err(|e| e.to_string())?;
+    // the model names its file relative to the project's folder when it is in it
+    let mesh_path = Path::new(mesh);
+    let file = std::fs::canonicalize(mesh_path)
+        .ok()
+        .and_then(|m| {
+            std::fs::canonicalize(&dir)
+                .ok()
+                .and_then(|d| m.strip_prefix(d).ok().map(Path::to_path_buf))
+        })
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|| {
+            std::path::absolute(mesh_path)
+                .unwrap_or(mesh_path.to_path_buf())
+                .to_string_lossy()
+                .into_owned()
+        });
+    let (out, report) = marcam::replace::replace_model(
+        &project,
+        model,
+        &file,
+        &|src| src.load(&dir).map_err(|e| e.to_string()),
+        &marcam::replace::inline_tool_diameter,
+    )?;
+    let target = o.flag("out").unwrap_or(path);
+    let text = serde_json::to_string_pretty(&out).map_err(|e| e.to_string())? + "\n";
+    std::fs::write(target, text).map_err(|e| format!("{target}: {e}"))?;
+    let bad = report.iter().filter(|r| !r.ok).count();
+    if o.has("json") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"file": file, "operations": report}))
+                .map_err(|e| e.to_string())?
+        );
+    } else {
+        println!("model {model} is now {file}; wrote {target}");
+        for r in &report {
+            match &r.error {
+                None => println!("  {}/{}: {} pick(s) found again", r.setup, r.op, r.picks),
+                Some(e) => println!("  {}/{}: ERROR {e}", r.setup, r.op),
+            }
+        }
+        println!("{} operation(s) with picks, {bad} in error (left out of the G-code until picked again)", report.len());
+    }
+    Ok(if bad == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
 fn cmd_upgrade(o: &Opts) -> Result<ExitCode, String> {
     let path = o.one_input()?;
     let (p, upgraded) = marcam::project::Project::from_json_any(&read(path)?)
@@ -360,6 +429,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "pickables" => cmd_pickables(&parse(rest, &["setup", "model", "index", "type", "json?"])?),
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
         "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
+        "replace-model" => cmd_replace_model(&parse(rest, &["out", "json?"])?),
         "ops" => cmd_ops(rest),
         "faces" => cmd_faces(&parse(rest, &["model", "crease"])?),
         "wizard" => {
