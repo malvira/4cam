@@ -455,6 +455,8 @@ const A = {
     return "undo";
   },
   async generate() {
+    // (disabled while an update after the edits plans: waited for, a while)
+    await waitFor(() => js("!document.getElementById('generate').disabled || document.body.dataset.state !== 'busy'"), "Replan all", 120000).catch(() => {});
     if (await js("document.getElementById('generate').disabled")) return null;
     await js("document.getElementById('generate').click(); true");
     await sleep(300);
