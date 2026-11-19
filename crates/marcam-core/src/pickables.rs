@@ -1067,9 +1067,47 @@ pub fn apply(
             ));
         }
     }
+    // several faces / pockets / outlines in one operation: each as one alone, as regions done
+    // in turn (each with its own outline and depth); the first also fills the fields
+    if picks.len() > 1
+        && matches!(op_type, "face" | "pocket" | "contour")
+        && picks.iter().all(|p| p.kind != "side_face")
+    {
+        let mut regions = Vec::new();
+        let mut first = None;
+        let mut notes: Vec<String> = Vec::new();
+        for p in picks {
+            let (v, n) = apply(op_type, &[*p], cx)?;
+            let keep = |k: &str| v.get(k).cloned();
+            let mut r = Map::new();
+            for k in ["paths", "path", "side", "top", "depth"] {
+                if let Some(x) = keep(k) {
+                    r.insert(k.into(), x);
+                }
+            }
+            regions.push(Value::Object(r));
+            for x in n {
+                if !notes.contains(&x) {
+                    notes.push(x);
+                }
+            }
+            first.get_or_insert(v);
+        }
+        let mut v = first.unwrap_or_default();
+        v.insert("regions".into(), Value::Array(regions));
+        notes.push(format!(
+            "{} picked: each is worked in turn (nearest next), to its own depth",
+            picks.len()
+        ));
+        return Ok((v, notes));
+    }
     let f = |p: &Pickable, k: &str| p.data[k].as_f64().unwrap_or(0.0);
     let mut v = Map::new();
     let mut notes = Vec::new();
+    if matches!(op_type, "face" | "pocket" | "contour") {
+        // (one feature: the plain fields, no regions)
+        v.insert("regions".into(), json!([]));
+    }
     match op_type {
         "drill" => {
             let points: Vec<Value> = picks.iter().map(|p| p.data["center"].clone()).collect();

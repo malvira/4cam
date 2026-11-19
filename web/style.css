@@ -200,3 +200,10 @@ details.menu[open] > summary { border-color: var(--accent); }
 .tp-row { text-align: left; }
 .tn-table { border-collapse: collapse; margin: 6px 0; }
 .tn-table td, .tn-table th { padding: 3px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+
+/* what an operation uses: its picks, each removable */
+.geometry-list { margin: 4px 0; display: flex; flex-direction: column; gap: 2px; }
+.geom-row { display: flex; justify-content: space-between; align-items: center; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; }
+.geom-row:hover { border-color: var(--accent); }
+.geom-row.missing { border-color: var(--bad); color: var(--bad); }
+.geom-row button { padding: 0 5px; }

@@ -61,6 +61,7 @@ pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> 
             feed: op.feed,
             plunge_feed: op.plunge_feed,
             smoothing: None,
+            regions: Vec::new(),
         };
         b.comment("--- facing (bounded by a face) ---");
         return path_pocket(b, d, stock, safe, &p);

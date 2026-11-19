@@ -1756,6 +1756,52 @@ try {
     await waitDone("the repaired project", 240000);
     const r4 = await js("(() => { const d = JSON.parse(document.getElementById('job').value); return { err: d.setups[0].operations.filter((o) => o.error).length, programs: window.__marcam.state.result.programs.map((p) => p.name) }; })()");
     check("picked again, the pocket is planned again", r4.err === 0 && r4.programs.length === 3, JSON.stringify(r4));
+
+    // 8t. (Mar) several picks in one operation, and the Geometry list: the grip block again,
+    // one facing picked on both ovals (a click adds, another removes); the list shows them,
+    // × removes one, Clear all clears them, Undo brings them back
+    await js(`window.__marcam.project.openText(${JSON.stringify(file)}, "oval_grip2.marcam.json").then(() => true)`);
+    await settle();
+    if ((await js("window.__marcam.state.tree.selected")) !== "op1") await js(`document.querySelector('#tree .tree-op[data-op="op1"] [data-act="select"]').click(); true`);
+    await waitFor(() => js("window.__marcam.state.tree.selected === 'op1' && !!document.getElementById('pickFaces')"), "the facing's editor (multi)", 15000);
+    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking for the facing", 30000);
+    await sleep(300);
+    const flatAt = (left) => screenOf(`(x) => x.kind === 'flat_face' && x.data.z < -1.4 && (x.data.cx < 30) === ${left}`);
+    const a1 = await flatAt(true), a2 = await flatAt(false);
+    await js(`window.__marcam.tree.pickAt(${a1[0]}, ${a1[1]}).then(() => true)`);
+    await js(`window.__marcam.tree.pickAt(${a2[0]}, ${a2[1]}).then(() => true)`);
+    const chips2 = await js("document.querySelectorAll('#pickChips .pick-chip').length");
+    // a click on a picked one removes it, again adds it back
+    await js(`window.__marcam.tree.pickAt(${a2[0]}, ${a2[1]}).then(() => true)`);
+    const chips1 = await js("document.querySelectorAll('#pickChips .pick-chip').length");
+    await js(`window.__marcam.tree.pickAt(${a2[0]}, ${a2[1]}).then(() => true)`);
+    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), "done picking (multi)", 15000);
+    await settle();
+    const f2 = (await doc()).setups[0].operations.find((o) => o.id === "op1");
+    const rows = await js("[...document.querySelectorAll('#geometryList .geom-row')].map((r) => r.textContent.replace('×', '').trim())");
+    const shown = await js("(() => { const v = window.__marcam.state.three; let n = 0; v.scene.traverse((o) => { if (o.userData?.geom != null) n++; }); return n; })()");
+    check("facing takes several flat faces: a click adds one, another removes it; two picked: two regions, each to its depth; the Geometry list shows them and they are drawn on the model",
+      chips2 === 2 && chips1 === 1 && f2.picks?.length === 2 && f2.regions?.length === 2 && f2.regions.every((r) => Math.abs(r.depth - 2) < 1e-6) && rows.length === 2 && rows.every((r) => /Flat face at Z-1\.50/.test(r)) && shown === 2,
+      `chips ${chips2}/${chips1}; picks ${f2.picks?.length}; regions ${JSON.stringify(f2.regions?.map((r) => r.depth))}; rows ${JSON.stringify(rows)}; drawn ${shown}`);
+    await clickGenerate();
+    await waitDone("the facing of both ovals", 240000);
+    await shot("19_grip_two_ovals");
+    // × on the first row: one left (no regions, its own fields); Clear all: none (the whole
+    // top again); Undo: back
+    await js("document.querySelector('#geometryList [data-ungeom=\"0\"]').click(); true");
+    await settle();
+    const f1 = (await doc()).setups[0].operations.find((o) => o.id === "op1");
+    await js("document.getElementById('geomClear').click(); true");
+    await settle();
+    const f0 = (await doc()).setups[0].operations.find((o) => o.id === "op1");
+    await js("document.getElementById('undoSetup').click(); true");
+    await settle();
+    const fu = (await doc()).setups[0].operations.find((o) => o.id === "op1");
+    check("the Geometry list: × removes one (the other stays, picked alone), Clear all removes them (the whole top again), Undo puts them back",
+      f1.picks?.length === 1 && !f1.regions?.length && f1.paths?.length >= 1 && !f0.picks && !f0.paths?.length && !f0.regions?.length && fu.picks?.length === 1,
+      `${f1.picks?.length} ${f1.regions?.length} ${f1.paths?.length} | ${JSON.stringify(f0.picks)} ${f0.paths?.length} | ${fu.picks?.length}`);
   }
 
   // 8s. (Mar) Generate plans only what changed: unchanged operations are reused from the last

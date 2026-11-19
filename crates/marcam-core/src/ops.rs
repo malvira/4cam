@@ -273,6 +273,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("step_down", "number", "mm", "Depth per pass.").min(0.01),
                 p("stepover", "number", "× tool Ø", "Stepover as a fraction of the tool diameter (0.65: 65% of it).").min(0.05).max(1.0),
                 p("paths", "paths", "mm", "Where to face: closed outlines, even-odd (a picked flat face's outline and its openings); the tool stays a radius inside. Empty: the whole stock top.").opt(json!([])),
+                p("regions", "regions", "", "Several picked features worked in turn, each with its own outline and depth (set by picking; empty: the fields above).").opt(json!([])),
                 feed(),
                 plunge(),
             ],
@@ -291,6 +292,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
                 p("rect", "rect", "mm", "[x0, y0, x1, y1] of a rectangular pocket (used when there are no paths).").opt(Value::Null),
                 p("paths", "paths", "mm", "Closed outlines, even-odd (an outline and its islands), e.g. imported from an SVG; when given, the pocket follows them instead of the rectangle.").opt(json!([])),
+                p("regions", "regions", "", "Several picked features worked in turn, each with its own outline and depth (set by picking; empty: the fields above).").opt(json!([])),
                 p("depth", "number", "mm", "Depth below the top.").min(0.01),
                 p("top", "number", "mm", "Top of the pocket (default: stock top).").opt(Value::Null),
                 p("step_down", "number", "mm", "Depth per level.").min(0.01),
@@ -362,6 +364,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
                 p("path", "points", "mm", "Closed outline as [[x, y], ...] (3 or more)."),
                 p("side", "choice", "", "Which side of the outline the tool runs on.").choices(&["outside", "inside", "on"]),
+                p("regions", "regions", "", "Several picked features worked in turn, each with its own outline and depth (set by picking; empty: the fields above).").opt(json!([])),
                 p("depth", "number", "mm", "Depth below the top.").min(0.01),
                 p("top", "number", "mm", "Top (default: stock top).").opt(Value::Null),
                 p("step_down", "number", "mm", "Depth per pass.").min(0.01),
@@ -552,6 +555,10 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
                 .as_array()
                 .is_some_and(|a| !a.is_empty() && a.iter().all(|x| x.is_i64())),
             "choice" => v.as_str().is_some_and(|s| p.choices.contains(&s)),
+            "regions" => v.as_array().is_some_and(|a| {
+                a.iter()
+                    .all(|r| r.get("depth").is_some_and(Value::is_number))
+            }),
             _ => true,
         };
         if !ok {

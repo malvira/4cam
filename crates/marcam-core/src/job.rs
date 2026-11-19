@@ -222,6 +222,68 @@ pub enum Operation {
     Vcarve(Vcarve),
 }
 
+/// One of several features a facing, pocket or contour works on, each in turn (the ones
+/// picked: the ovals of a part): its outline(s) and depth (and top, side for a contour).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Region {
+    /// Closed outlines, even-odd (facing, pocket).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<Vec<[f64; 2]>>,
+    /// A closed outline (contour).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<[f64; 2]>,
+    /// "outside", "inside" or "on" (contour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    pub depth: f64,
+}
+
+impl Region {
+    /// The middle of its outline(s): where the tool goes to it.
+    pub fn centre(&self) -> [f64; 2] {
+        let pts: Vec<[f64; 2]> = self
+            .paths
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.path.clone());
+        if pts.is_empty() {
+            return [0.0, 0.0];
+        }
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for p in &pts {
+            for k in 0..2 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]
+    }
+}
+
+/// The order to work `regions` in from `start`: nearest next (short travels between them).
+pub fn region_order(regions: &[Region], start: [f64; 2]) -> Vec<usize> {
+    let mut left: Vec<usize> = (0..regions.len()).collect();
+    let mut at = start;
+    let mut out = Vec::new();
+    while !left.is_empty() {
+        let (k, _) = left
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| {
+                let c = regions[i].centre();
+                (k, (c[0] - at[0]).hypot(c[1] - at[1]))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap();
+        let i = left.remove(k);
+        at = regions[i].centre();
+        out.push(i);
+    }
+    out
+}
+
 /// 3-axis: face the top of the stock down by `depth`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Face {
@@ -240,6 +302,9 @@ pub struct Face {
     /// stays inside, a radius in from the outline. Empty: the whole stock top.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<Vec<[f64; 2]>>,
+    /// Several faces, each faced in turn to its own depth (then `paths`/`depth` are unused).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<Region>,
 }
 
 /// 3-axis: rectangular pocket `[x0, y0, x1, y1]`, `depth` below `top` (default: stock top).
@@ -269,6 +334,9 @@ pub struct Pocket {
     /// [`crate::smoothing`]); None: the type's default; 0: off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing: Option<f64>,
+    /// Several pockets, each cleared in turn (then `paths`/`rect`/`top`/`depth` are unused).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<Region>,
 }
 
 /// 3-axis: holes at `points`, pecking `peck` at a time.
@@ -371,6 +439,9 @@ pub struct Contour {
     /// [`crate::smoothing`]); None: the type's default; 0: off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing: Option<f64>,
+    /// Several outlines, each followed in turn (then `path`/`side`/`top`/`depth` are unused).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<Region>,
 }
 
 /// 3-axis: drop-cutter raster over the part mesh (passes along X, stepping in Y), cut in

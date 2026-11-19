@@ -196,12 +196,120 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (t.doc) render();
   }
 
+  // ------------------------------------------------------------ what the operation uses, in 3D
+  // The selected operation's picks drawn over the part (faint; the one hovered in the
+  // Geometry list brighter), so you see what it works on without picking.
+  let overlay = null;
+  let overlayKey = null;
+  function dropOverlay() {
+    const v = state.three;
+    if (overlay && v && !v.failed) {
+      v.scene.remove(overlay);
+      overlay.traverse((o) => {
+        o.geometry?.dispose();
+        o.material?.dispose?.();
+      });
+    }
+    overlay = null;
+    overlayKey = null;
+  }
+  async function showUses(op) {
+    const sigs = op?.picks || [];
+    const key = op && sigs.length && !t.picking ? JSON.stringify([op.id, sigs, t.doc?.models, state.mesh?.length]) : null;
+    if (key === overlayKey) return;
+    dropOverlay();
+    if (!key) return;
+    overlayKey = key;
+    const v = await getThree();
+    if (!v || v.failed) return;
+    const s = setup();
+    const model = partModel(s);
+    let regions, found;
+    try {
+      [{ result: regions }, { result: found }] = await Promise.all([
+        engine("faceRegions", t.doc, model, state.mesh),
+        engine("resolvePicks", t.doc, { setup: s.id, model, index_a: op.index_a ?? 0, signatures: sigs }, state.mesh),
+      ]);
+    } catch {
+      return;
+    }
+    if (overlayKey !== key) return;
+    const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const tri = new Float32Array(bytes(regions.triangles).buffer);
+    const of = new Uint16Array(bytes(regions.region_of).buffer);
+    const { THREE } = v;
+    const grp = new THREE.Group();
+    found.picks.forEach((p, i) => {
+      if (!p.faces) return;
+      const want = new Set(p.faces);
+      const ids = new Set(regions.regions.map((r, k) => (want.has(r.id) ? k : -1)).filter((k) => k >= 0));
+      const pos = [];
+      for (let k = 0; k < of.length; k++) if (ids.has(of[k])) for (let q = 0; q < 9; q++) pos.push(tri[9 * k + q]);
+      if (!pos.length) return;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      g.computeVertexNormals();
+      const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.35, depthTest: false, side: THREE.DoubleSide }));
+      m.userData.geom = i;
+      m.renderOrder = 5;
+      grp.add(m);
+    });
+    overlay = grp;
+    v.scene.add(grp);
+  }
+  /** The Geometry list's row `i` hovered (null: none): brighter in 3D. */
+  function hoverUse(i) {
+    for (const m of overlay?.children || []) m.material.opacity = m.userData.geom === i ? 0.75 : 0.35;
+  }
+
+  /** Remove pick `i` (or every pick) of the selected operation: the rest picked again (their
+   *  fields follow); none left, the operation is as before picking. */
+  async function removeUse(i) {
+    const op = opById(t.selected);
+    if (!op?.picks?.length) return;
+    const keep = i == null ? [] : op.picks.filter((_, k) => k !== i);
+    const before = JSON.stringify(t.doc, null, 2);
+    const ty = typeOf(op.type);
+    const mode = pickModeOf(ty);
+    const s = setup();
+    const model = partModel(s);
+    if (keep.length && !mode?.faces) {
+      try {
+        const { result: found } = await engine("resolvePicks", t.doc, { setup: s.id, model, index_a: op.index_a ?? 0, signatures: keep }, state.mesh);
+        const ids = found.picks.filter((p) => p.id).map((p) => p.id);
+        const { result } = await engine("applyPicks", t.doc, { type: op.type, ids, setup: s.id, model, tool: op.tool, index_a: op.index_a ?? 0, op }, state.mesh);
+        Object.assign(op, result.params);
+        if (op.type === "pocket" && result.params.paths) delete op.rect;
+      } catch (e) {
+        return showError(`Remove: ${e.message}`);
+      }
+    } else if (mode?.faces) {
+      // faces: the ones the rest cover
+      const { result: found } = await engine("resolvePicks", t.doc, { setup: s.id, model, index_a: op.index_a ?? 0, signatures: keep }, state.mesh);
+      const ids = [...new Set(found.picks.flatMap((p) => p.faces || []))];
+      op.geometry = (op.geometry || []).filter((g) => g.kind !== "faces");
+      if (ids.length) op.geometry.push({ kind: "faces", model, ids });
+      if (!op.geometry.length) delete op.geometry;
+    } else {
+      // none left: back to the fields alone (a facing: the whole top again)
+      if (op.type === "face") delete op.paths;
+      delete op.regions;
+    }
+    if (keep.length) op.picks = keep;
+    else delete op.picks;
+    delete op.error;
+    if (t.draft?.op.id === op.id || t.retype?.op.id === op.id) return renderEditor();
+    window.__marcam.project?.keepUndo?.(i == null ? "Cleared the picks." : "Removed a pick.", before);
+    await commit();
+  }
+
   /** Form for the selected operation, built from the registry's parameter specs. */
   function renderEditor() {
     const ed = $("opEditor");
     const op = t.selected && opById(t.selected);
     if (!op) {
       ed.innerHTML = "";
+      dropOverlay();
       return;
     }
     const ty = typeOf(op.type);
@@ -222,6 +330,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (p.name === "stepover_mm" && op.pattern === "along" && op.stepover_deg != null) continue;
       // a vise has no rotary axis to index
       if (p.name === "index_a" && isBox(setup())) continue;
+      // several picked features: shown in the Geometry list, set by picking
+      if (p.kind === "regions") continue;
       const label = `${p.name.replace(/_/g, " ")}${p.unit ? ` (${p.unit})` : ""}`;
       if (p.name === "tool") {
         // the project's tools, those the type cannot use greyed with the reason; a tool the
@@ -264,6 +374,13 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         ${pk && pk.sel.size && !mode.single ? '<button type="button" id="pickSimilar" title="Add every feature like the ones picked">Select all similar</button>' : ""}
         <span id="pickInfo">${esc(pickInfoText(op, mode))}</span>
         ${mode.faces && faces ? '<button type="button" id="clearFaces">Clear</button>' : ""}</div>`;
+      // what it uses (when not picking): a row per pick, × to remove it, hover to see it
+      if (!pk && op.picks?.length) {
+        const missing = (label) => op.error && op.error.includes(label);
+        html += `<div id="geometryList" class="geometry-list"><div class="small muted">Geometry (${op.picks.length}) <button type="button" id="geomClear" title="Clear every pick">Clear all</button></div>${op.picks
+          .map((sg, i) => `<div class="geom-row ${missing(sg.label) ? "missing" : ""}" data-geom="${i}" title="${missing(sg.label) ? "Not on the model now: pick it again" : "Hover to see it on the model"}">${esc(sg.label || sg.kind)}${missing(sg.label) ? " (missing)" : ""}<button type="button" data-ungeom="${i}" aria-label="Remove ${esc(sg.label || sg.kind)}">×</button></div>`)
+          .join("")}</div>`;
+      }
       if (pk) {
         html += `<div id="pickChips" class="pick-chips">${[...pk.sel]
           .map((id) => pk.list.find((x) => x.id === id))
@@ -279,6 +396,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const pending = (t.draft && t.draft.op.id === op.id) || (t.retype && t.retype.op.id === op.id);
     html += `<div id="opErrors" class="error small hidden"></div><div class="row"><button type="submit" class="primary">Apply</button>${pending ? ' <button type="button" id="cancelDraft">Cancel</button>' : ""}</div></form>`;
     ed.innerHTML = html;
+    showUses(op);
   }
 
   function readForm() {
@@ -341,7 +459,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // operations record the picked faces (a faces selection); the others take the fields the
   // engine fills from the picks (drill points and depth, a pocket's outline, ...).
   const FACE_TYPES = ["raster3d", "rough3d", "rotary_finish"];
-  const SINGLE = ["pocket", "contour", "face", "helical_knurl", "flank_chamfer", "engrave", "vcarve"];
+  const SINGLE = ["helical_knurl", "flank_chamfer", "engrave", "vcarve"];
   function pickModeOf(ty) {
     if (!ty) return null;
     // before picking existed per type: rotary operations (and the raster) were bounded by faces
@@ -431,6 +549,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     v.renderer.render(v.scene, v.camera);
     t.picking = true;
+    dropOverlay();
     paintPicked();
     renderEditor();
   }
@@ -752,6 +871,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       }
       return;
     }
+    if (el.id === "geomClear") return removeUse(null);
+    if (el.dataset?.ungeom != null) return removeUse(Number(el.dataset.ungeom));
     if (el.id === "pickFaces") return t.picking ? stopPicking() : startPicking();
     if (el.id === "pickSimilar") return pickSimilar();
     if (el.id === "boreInstead") return boreInstead();
@@ -876,6 +997,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (!setup()?.operations.some((o) => o.id === t.selected)) return;
     ev.preventDefault();
     nudge(t.selected, ev.key === "ArrowUp" ? -1 : 1);
+  });
+
+  $("tree").addEventListener("mouseover", (ev) => {
+    const row = ev.target.closest?.(".geom-row");
+    hoverUse(row ? Number(row.dataset.geom) : null);
   });
 
   // fields the user typed into keep their values when defaults are refreshed
@@ -1132,6 +1258,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   /** A new project: stop picking without writing anything, drop the face regions and the
    *  pick highlight, and forget the selection and any unsaved new operation. */
   function reset() {
+    dropOverlay();
     const v = state.three;
     if (t.pickMesh) {
       v?.scene?.remove(t.pickMesh);

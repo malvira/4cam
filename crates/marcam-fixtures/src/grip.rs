@@ -248,6 +248,60 @@ mod picked {
             .expect("an oval flat")
     }
 
+    /// Facing / pocketing both ovals in one operation: the same cuts as one operation each,
+    /// the nearer oval (to the stock's corner) first.
+    #[test]
+    fn several_ovals_in_one_operation_are_the_ovals_one_by_one() {
+        let ovals: Vec<Pickable> = picks()
+            .into_iter()
+            .filter(|p| p.kind == "flat_face" && p.data["z"].as_f64().unwrap() < -1.4)
+            .collect();
+        assert_eq!(ovals.len(), 2);
+        let cx = ApplyContext {
+            stock_top: Some(0.5),
+            tool_diameter: Some(2.0 * R),
+            model: "part".into(),
+            op: None,
+        };
+        for ty in ["face", "pocket"] {
+            let base = json!({"id": "op1", "type": ty, "tool": 2, "depth": 1.0, "step_down": 0.5, "stepover": 0.6, "feed": 800.0, "plunge_feed": 200.0});
+            let with = |picks: &[&Pickable]| {
+                let mut op = base.clone();
+                let (v, _) = apply(ty, picks, &cx).unwrap();
+                for (k, x) in v {
+                    op[k] = x;
+                }
+                op
+            };
+            let both = with(&[&ovals[0], &ovals[1]]);
+            assert_eq!(
+                both["regions"].as_array().unwrap().len(),
+                2,
+                "{ty}: two regions"
+            );
+            let set = |pts: Vec<[f64; 3]>| {
+                let mut v: Vec<[i64; 3]> = pts
+                    .iter()
+                    .map(|p| p.map(|c| (c * 1e4).round() as i64))
+                    .collect();
+                v.sort();
+                v.dedup();
+                v
+            };
+            let all = cuts(both);
+            let mut one = cuts(with(&[&ovals[0]]));
+            one.extend(cuts(with(&[&ovals[1]])));
+            assert_eq!(
+                set(all.clone()),
+                set(one),
+                "{ty}: the same cuts as one operation each"
+            );
+            // the oval nearer the stock's corner (X -5, Y -5) first
+            let first_x = all.iter().find(|p| p[2] < 0.0).unwrap()[0];
+            assert!(first_x < 30.0, "{ty}: the left oval first ({first_x})");
+        }
+    }
+
     #[test]
     fn the_features_are_found() {
         let ps = picks();

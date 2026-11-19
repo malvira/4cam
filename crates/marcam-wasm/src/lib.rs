@@ -1206,6 +1206,28 @@ pub mod api {
         }
     }
 
+    /// The features an operation's picks are on the part as it is: `opts` = {setup?, model?,
+    /// index_a?, signatures: [...]}. Returns {picks: [{id, faces, label} | {error}]}.
+    pub fn resolve_picks(doc: &str, opts: &str, mesh: &[u8]) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let (_, _, part, frame) = match pick_context(doc, &o, mesh) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let list = pickables::pickables(&part, frame);
+        let picks: Vec<Value> = o["signatures"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|s| match marcam::replace::find(s, &list) {
+                Ok(p) => json!({"id": p.id, "faces": p.faces, "label": p.label}),
+                Err(e) => json!({"error": e, "label": s["label"]}),
+            })
+            .collect();
+        json!({ "picks": picks })
+    }
+
     /// The parameters picked features set on an operation: `opts` = {type, ids, setup?,
     /// model?, index_a?, tool?}. Returns {params, notes}.
     pub fn apply_picks(doc: &str, opts: &str, mesh: &[u8]) -> Value {
@@ -1392,6 +1414,7 @@ pub mod api {
             "pickables" => pickables(&d(a), &s(b), c),
             "apply_picks" => apply_picks(&d(a), &s(b), c),
             "replace_model" => replace_model(&d(a), &s(b), c),
+            "resolve_picks" => resolve_picks(&d(a), &s(b), c),
             "op_types" => {
                 // each type with the pickable kinds it takes (marcam::pickables::accepts)
                 let mut v = serde_json::to_value(marcam::ops::registry()).unwrap_or(Value::Null);

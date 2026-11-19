@@ -70,6 +70,7 @@ export async function load(source) {
     // the parameters picked features set on an operation: {type, ids, setup?, tool?, index_a?}
     applyPicks: (doc, opts, meshBytes) => call("apply_picks", doc, opts || {}, meshBytes),
     replaceModel: (doc, opts, meshBytes) => call("replace_model", doc, opts || {}, meshBytes),
+    resolvePicks: (doc, opts, meshBytes) => call("resolve_picks", doc, opts || {}, meshBytes),
     // project files: the project as TOML text; the single-file bundle (.marcam, a zip of
     // project.toml and the files it names) written from [{ name, bytes }] and read back
     toToml: (doc) => call("to_toml", doc),

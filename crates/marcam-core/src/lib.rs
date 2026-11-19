@@ -663,6 +663,42 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let err = |e: String| Error::Invalid(format!("program {}: {e}", prog.name));
                 use strategy::three_axis as t3;
                 match op3 {
+                    // several picked faces / pockets / outlines: each in turn, nearest next
+                    Operation::Face(o) if !o.regions.is_empty() => {
+                        for i in job::region_order(&o.regions, [sb.min[0], sb.min[1]]) {
+                            let r = &o.regions[i];
+                            let mut one = o.clone();
+                            one.regions.clear();
+                            one.paths = r.paths.clone();
+                            one.depth = r.depth;
+                            t3::face(&mut b, d, sb, safe_r, &one).map_err(err)?
+                        }
+                    }
+                    Operation::Pocket(o) if !o.regions.is_empty() => {
+                        for i in job::region_order(&o.regions, [sb.min[0], sb.min[1]]) {
+                            let r = &o.regions[i];
+                            let mut one = o.clone();
+                            one.regions.clear();
+                            one.paths = r.paths.clone();
+                            one.top = r.top.or(o.top);
+                            one.depth = r.depth;
+                            t3::pocket(&mut b, d, sb, safe_r, &one).map_err(err)?
+                        }
+                    }
+                    Operation::Contour(o) if !o.regions.is_empty() => {
+                        for i in job::region_order(&o.regions, [sb.min[0], sb.min[1]]) {
+                            let r = &o.regions[i];
+                            let mut one = o.clone();
+                            one.regions.clear();
+                            one.path = r.path.clone();
+                            if let Some(side) = &r.side {
+                                one.side = side.clone();
+                            }
+                            one.top = r.top.or(o.top);
+                            one.depth = r.depth;
+                            t3::contour(&mut b, d, sb, safe_r, &one).map_err(err)?
+                        }
+                    }
                     Operation::Face(o) => t3::face(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Pocket(o) => t3::pocket(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Drill(o) => t3::drill(&mut b, sb, safe_r, o),

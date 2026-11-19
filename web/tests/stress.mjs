@@ -356,6 +356,16 @@ const A = {
     await sleep(300);
     return { log: `pick ${what}`, extra: invPicking };
   },
+  async ungeom(r) {
+    const n = await js("document.querySelectorAll('#geometryList [data-ungeom]').length");
+    if (!n) return null;
+    const k = r.int(n + 1);
+    if (k === n) await js("document.getElementById('geomClear').click(); true");
+    else await js(`document.querySelectorAll('#geometryList [data-ungeom]')[${k}].click(); true`);
+    await sleep(300);
+    await settle(200);
+    return k === n ? "clear the picks" : `remove pick ${k}`;
+  },
   async select(r) {
     const ids = await js("[...document.querySelectorAll('#tree .tree-op')].map((x) => x.dataset.op)");
     if (!ids.length) return null;
@@ -445,7 +455,7 @@ const A = {
 // the monkey's choice of action, weighted
 const WEIGHTS = [
   ["loadExample", 3], ["importStl", 2], ["addOp", 8], ["apply", 8], ["changeType", 6], ["editParam", 6], ["changeTool", 3], ["addLibraryTool", 1],
-  ["pick", 5], ["select", 6], ["move", 2], ["nudge", 2], ["enable", 3], ["eye", 2], ["delete", 3], ["cancel", 2], ["undo", 1],
+  ["pick", 5], ["ungeom", 2], ["select", 6], ["move", 2], ["nudge", 2], ["enable", 3], ["eye", 2], ["delete", 3], ["cancel", 2], ["undo", 1],
   ["generate", 4], ["saveReopen", 2], ["replaceModel", 2],
 ];
 function rng(seed) {
