@@ -64,9 +64,13 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (!m.session) return;
     const saved = savedColors();
     const proj = m.session.project_ops;
+    // colours follow the operation (its id), as the tree shows them: the same whatever is
+    // hidden (hidden operations are not played, so the list has fewer entries)
+    const setupOps = state.tree?.doc?.setups?.find((x) => x.id === state.tree?.setup)?.operations || [];
     m.session.ops.forEach((o, i) => {
       if (proj) o.project_id = proj.ids[i];
-      const hex = (proj && proj.colors[i]) || saved[opKey(o)] || PALETTE[i % PALETTE.length];
+      const k = o.project_id != null ? setupOps.findIndex((x) => x.id === o.project_id) : -1;
+      const hex = (proj && proj.colors[i]) || saved[opKey(o)] || PALETTE[(k >= 0 ? k : i) % PALETTE.length];
       m.colors[o.tag] = hexToRgb(hex);
       const row = document.createElement("label");
       row.className = "oprow";
@@ -88,15 +92,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** Which playback operations the tree's eyes hide (by project id, or a 0.1 job's planning
    *  order). */
   function refreshHidden() {
+    // (hidden operations are left out of the playback altogether: nothing played is hidden)
     m.hiddenTags = new Set();
-    if (!m.session || !state.hidden?.size) return;
-    const setupId = state.tree?.setup;
-    const s = state.tree?.doc?.setups?.find((x) => x.id === setupId);
-    const planned = s ? s.outputs.flatMap((o) => o.operations).filter((id) => s.operations.find((op) => op.id === id)?.enabled !== false) : [];
-    m.session.ops.forEach((o, i) => {
-      const id = o.project_id ?? planned[i];
-      if (id && state.hidden.has(`${setupId}/${id}`)) m.hiddenTags.add(o.tag);
-    });
   }
 
   /** The tree's eyes changed: the playback plays the visible operations, so it is opened
@@ -270,7 +267,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // the work turns by A (right-handed about +X; 0 on a vise); the tool stands at its tip
     v.groups.work.rotation.x = (a * Math.PI) / 180;
     v.groups.toolModel.position.set(x, y, z);
-    v.groups.toolModel.visible = !m.hiddenTags.has(opTag);
+    // the tool is always drawn: what is played is what is shown
+    v.groups.toolModel.visible = true;
     $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.gpu ? "GPU" : "CPU"}`;
   }
 

@@ -87,6 +87,17 @@ pub mod api {
         static PLAN_CACHE: std::cell::RefCell<marcam::PlanCache> = std::cell::RefCell::new(marcam::PlanCache::new());
     }
 
+    /// The project's operations (ids, colours) the simulation plays: those not hidden
+    /// (`opts.hide`, planning numbers), in order, so they line up with its operation list.
+    fn visible_ops(ids: Vec<String>, colors: Vec<Option<String>>, opts: &Value) -> Value {
+        let hide: Vec<usize> = opts["hide"].as_array().map(|a| a.iter().filter_map(|v| v.as_u64().map(|x| x as usize)).collect()).unwrap_or_default();
+        let keep = |k: &usize| !hide.contains(k);
+        json!({
+            "ids": ids.into_iter().enumerate().filter(|(k, _)| keep(k)).map(|(_, v)| v).collect::<Vec<_>>(),
+            "colors": colors.into_iter().enumerate().filter(|(k, _)| keep(k)).map(|(_, v)| v).collect::<Vec<_>>(),
+        })
+    }
+
     /// The job planned for a simulation (through the plan cache), without the operations
     /// `opts.hide` lists (planning numbers): hidden in the view, so not simulated either.
     fn plan_for_sim(
@@ -689,7 +700,7 @@ pub mod api {
             "program_starts": first_seg_of_program,
             "path": f32s(&path),
             "ops": ops_of(tps),
-            "project_ops": with_setup(opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| json!({"ids": ids, "colors": colors})),
+            "project_ops": with_setup(opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, opts)),
             "tools": job.tools,
         });
         SESSION.with(|s| *s.borrow_mut() = Some(Session::Xyz(pb)));
@@ -996,7 +1007,7 @@ pub mod api {
             "program_starts": first_seg_of_program,
             "path": f32s(&path),
             "ops": ops,
-            "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| json!({"ids": ids, "colors": colors})),
+            "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, &opts)),
             "tools": job.tools,
         });
         SESSION.with(|s| *s.borrow_mut() = Some(Session::Rotary(pb)));

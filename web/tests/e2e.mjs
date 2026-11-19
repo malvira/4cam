@@ -1624,6 +1624,43 @@ try {
       cutOne > 0 && cutAll > cutOne && /hidden: not simulated/.test(note) && playOps >= 1 && playOps < allOps && (await js("window.__marcam.calls.planAndPost || 0")) === plansS,
       `cut ${cutOne} -> ${cutAll}; playback ${playOps} of ${allOps} operations; ${note}`);
     await shot("18c_simulation_hidden");
+    // (Mar) hiding operations never hides the tool nor changes a colour in the playback: the
+    // first hidden, the last, the one playing, all but one; the tool drawn where the path is
+    // at each scrub position, each played operation in its tree colour; nothing planned
+    {
+      const plansH = await js("window.__marcam.calls.planAndPost || 0");
+      const ids = await js("window.__marcam.state.tree.doc.setups[0].operations.map((o) => o.id)");
+      const treeColor = await js("Object.fromEntries([...document.querySelectorAll('#tree .tree-op')].map((r) => [r.dataset.op, r.querySelector('input[data-act=\"color\"]').value]))");
+      const setHide = (list) => js(`window.__marcam.setHidden(${JSON.stringify(list.map((id) => `${"vise1"}/${id}`))}); true`);
+      const results = [];
+      for (const [label, hide] of [["the first", [ids[0]]], ["the last", [ids[ids.length - 1]]], ["all but one", ids.slice(1)], ["the playing one", null]]) {
+        await setHide(hide || []);
+        await sleep(400);
+        await js("document.getElementById('simOpen').click(); true");
+        await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), `the playback (${label} hidden)`, 120000);
+        if (!hide) {
+          // the op playing at the middle: hidden now, with the playback open (it reopens)
+          const mid = await js("(() => { const m = window.__marcam.state.machining; const k = Math.floor(m.session.segments / 2); const tag = m.session.path[7 * k + 6]; return m.session.ops.find((o) => o.tag === tag)?.project_id; })()");
+          await js(`await window.__marcam.machining.seek(Math.floor(window.__marcam.state.machining.session.segments / 2))`);
+          await setHide([mid]);
+          await sleep(1500);
+          await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the playback reopened", 120000);
+        }
+        const r = await js(`await (async () => { const m = window.__marcam.state.machining, mc = window.__marcam.machining, v = window.__marcam.state.three; const n = m.session.segments; const out = [];
+          for (const f of [0.1, 0.5, 0.9]) { const k = Math.max(1, Math.floor(n * f)); await mc.seek(k); await new Promise((r) => setTimeout(r, 120));
+            const p = m.session.path; const want = [p[7 * (k - 1)], p[7 * (k - 1) + 1], p[7 * (k - 1) + 2]]; const at = v.groups.toolModel.position;
+            out.push({ visible: v.groups.toolModel.visible && v.groups.toolModel.children.length > 0, near: Math.hypot(at.x - want[0], at.y - want[1], at.z - want[2]) < 1e-3 }); }
+          const colours = m.session.ops.map((o) => [o.project_id, [...document.querySelectorAll('#opLegend input[type=color]')].find((e) => Number(e.dataset.tag) === o.tag)?.value]);
+          return { out, colours, ops: m.session.ops.length }; })()`);
+        const colourOk = r.colours.every(([id, c]) => c && treeColor[id] && c.toLowerCase() === treeColor[id].toLowerCase());
+        results.push({ label, tool: r.out.every((x) => x.visible && x.near), colourOk, ops: r.ops });
+        await js("document.getElementById('simClose').click(); true");
+        await sleep(400);
+      }
+      await setHide([]);
+      check("hiding the first, the last, the playing or all but one operation: the tool is always drawn where the path is, every played operation keeps its colour; nothing planned",
+        results.every((x) => x.tool && x.colourOk && x.ops >= 1) && (await js("window.__marcam.calls.planAndPost || 0")) === plansH, JSON.stringify(results));
+    }
   }
 
   // 8o. (Mar's oval part) a block with two recessed oval flats and a textured grip between:
