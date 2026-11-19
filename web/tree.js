@@ -153,13 +153,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         const i = s.operations.indexOf(op);
         const ot = opTime(id);
         const geo = op.geometry?.length ? ` · ${op.geometry.map((g) => (g.kind === "faces" ? `${g.ids.length} face${g.ids.length > 1 ? "s" : ""}` : g.kind.replace("_", " "))).join(", ")}` : "";
-        html += `<div class="tree-op ${t.selected === id ? "sel" : ""} ${op.enabled === false ? "off" : ""}" data-op="${esc(id)}">
+        html += `<div class="tree-op ${t.selected === id ? "sel" : ""} ${op.enabled === false ? "off" : ""}" data-op="${esc(id)}" draggable="true" title="Drag to reorder (or Alt+Up / Alt+Down)">
           <input type="checkbox" data-act="enable" ${op.enabled === false ? "" : "checked"} aria-label="Enable ${esc(id)}">
           <input type="color" data-act="color" value="${colorOf(op, i)}" aria-label="Colour of ${esc(id)}">
           <button type="button" data-act="eye" class="eye ${isHidden(id) ? "off" : ""}" aria-pressed="${!isHidden(id)}" aria-label="Show the toolpath of ${esc(id)}" title="Show or hide this toolpath (view only; Alt-click: show only this)">${isHidden(id) ? "◌" : "◉"}</button>
           <span class="tree-label" data-act="select">${opProblem(op) ? `<span class="op-error" title="${esc(opProblem(op))}">⚠</span> ` : ""}${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}${ot != null ? ` · <span class="tree-time">${fmt(ot)}</span>` : ""}</span></span>
-          <button type="button" data-act="up" ${k === 0 ? "disabled" : ""} aria-label="Move ${esc(id)} up">▲</button>
-          <button type="button" data-act="down" ${k === out.operations.length - 1 ? "disabled" : ""} aria-label="Move ${esc(id)} down">▼</button>
           <button type="button" data-act="delete" aria-label="Delete ${esc(id)}">✕</button></div>`;
         n++;
       });
@@ -793,11 +791,6 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.typeNote = null;
       t.selected = t.selected === id ? null : id;
       render();
-    } else if (act === "up" || act === "down") {
-      const k = out.operations.indexOf(id);
-      const j = act === "up" ? k - 1 : k + 1;
-      [out.operations[k], out.operations[j]] = [out.operations[j], out.operations[k]];
-      await commit();
     } else if (act === "delete") {
       if (t.selected === id && t.picking) endPicking(false);
       if (t.retype?.op.id === id) t.retype = null;
@@ -808,6 +801,80 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       await commit();
     }
   });
+  // ------------------------------------------------------------ reordering
+  /**
+   * Move operation `id` before (or after) operation `target`, in the target's file (a file of
+   * the same setup); its old file goes if it is left empty. A real edit (the order is the
+   * G-code's), undoable.
+   */
+  async function moveOp(id, target, after) {
+    if (id === target) return;
+    const s = setup();
+    const before = JSON.stringify(t.doc, null, 2);
+    const from = s.outputs.find((o) => o.operations.includes(id));
+    const to = s.outputs.find((o) => o.operations.includes(target));
+    if (!from || !to) return;
+    from.operations = from.operations.filter((x) => x !== id);
+    const k = to.operations.indexOf(target) + (after ? 1 : 0);
+    to.operations.splice(k, 0, id);
+    s.outputs = s.outputs.filter((o) => o.operations.length);
+    window.__marcam.project?.keepUndo?.(`Moved ${id}.`, before);
+    await commit();
+  }
+  /** Alt+Up / Alt+Down: the selected operation one place up or down (across its setup's files). */
+  async function nudge(id, dir) {
+    const order = setup().outputs.flatMap((o) => o.operations);
+    const k = order.indexOf(id);
+    const j = k + dir;
+    if (k < 0 || j < 0 || j >= order.length) return;
+    await moveOp(id, order[j], dir > 0);
+  }
+  const tree = $("tree");
+  let dragging = null;
+  const clearMarks = () => tree.querySelectorAll(".drop-before, .drop-after").forEach((r) => r.classList.remove("drop-before", "drop-after"));
+  tree.addEventListener("dragstart", (ev) => {
+    const row = ev.target.closest?.(".tree-op");
+    if (!row) return;
+    dragging = row.dataset.op;
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", dragging);
+    row.classList.add("dragging");
+  });
+  tree.addEventListener("dragover", (ev) => {
+    const row = ev.target.closest?.(".tree-op");
+    if (!dragging || !row) return;
+    ev.preventDefault();
+    const r = row.getBoundingClientRect();
+    clearMarks();
+    // the drop line: above or below the row under the pointer
+    row.classList.add(ev.clientY < r.top + r.height / 2 ? "drop-before" : "drop-after");
+  });
+  tree.addEventListener("dragleave", (ev) => {
+    if (!tree.contains(ev.relatedTarget)) clearMarks();
+  });
+  tree.addEventListener("drop", async (ev) => {
+    const row = ev.target.closest?.(".tree-op");
+    const id = dragging || ev.dataTransfer.getData("text/plain");
+    clearMarks();
+    tree.querySelectorAll(".dragging").forEach((r) => r.classList.remove("dragging"));
+    dragging = null;
+    if (!row || !id) return;
+    ev.preventDefault();
+    const r = row.getBoundingClientRect();
+    await moveOp(id, row.dataset.op, ev.clientY >= r.top + r.height / 2);
+  });
+  tree.addEventListener("dragend", () => {
+    clearMarks();
+    tree.querySelectorAll(".dragging").forEach((r) => r.classList.remove("dragging"));
+    dragging = null;
+  });
+  tree.addEventListener("keydown", (ev) => {
+    if (!ev.altKey || !(ev.key === "ArrowUp" || ev.key === "ArrowDown") || !t.selected) return;
+    if (!setup()?.operations.some((o) => o.id === t.selected)) return;
+    ev.preventDefault();
+    nudge(t.selected, ev.key === "ArrowUp" ? -1 : 1);
+  });
+
   // fields the user typed into keep their values when defaults are refreshed
   $("tree").addEventListener("input", (ev) => {
     const f = ev.target.closest("#opForm");
@@ -1060,5 +1127,5 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     $("tree").innerHTML = "";
   }
 
-  return { refresh, pickAt, pickSimilar, reset, renderEyes, changeType, state: t };
+  return { refresh, pickAt, pickSimilar, reset, renderEyes, changeType, moveOp, nudge, state: t };
 }

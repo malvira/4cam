@@ -82,6 +82,36 @@ pub mod api {
         static SETUP: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     }
 
+    thread_local! {
+        /// Operations planned before (see marcam::PlanCache).
+        static PLAN_CACHE: std::cell::RefCell<marcam::PlanCache> = std::cell::RefCell::new(marcam::PlanCache::new());
+    }
+
+    /// The job planned for a simulation (through the plan cache), without the operations
+    /// `opts.hide` lists (planning numbers): hidden in the view, so not simulated either.
+    fn plan_for_sim(
+        job: &Job,
+        mesh: Option<&Mesh>,
+        opts: &Value,
+    ) -> Result<Vec<Toolpath>, marcam::Error> {
+        let mut tps = PLAN_CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            let r = marcam::plan_with_mesh_cached(job, mesh, &mut c);
+            c.take_counts();
+            r
+        })?;
+        let hide: Vec<u32> = opts["hide"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_u64().map(|x| x as u32))
+                    .collect()
+            })
+            .unwrap_or_default();
+        marcam::sim::without_ops(&mut tps, &hide);
+        Ok(tps)
+    }
+
     fn with_setup<T>(opts: &Value, f: impl FnOnce() -> T) -> T {
         let id = opts["setup"].as_str().map(str::to_string);
         SETUP.with(|s| *s.borrow_mut() = id);
@@ -249,9 +279,33 @@ pub mod api {
         let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
             .unwrap_or(Value::Null);
         let max_points = opts["max_points"].as_u64().unwrap_or(200_000) as usize;
-        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+        // operations planned before and unchanged are reused (the page's edits plan only what
+        // they touch)
+        // (`cache: false`: planned from scratch, the cache left alone: tests compare with it)
+        let planned_now = if opts["cache"] == false {
+            plan_with_mesh(&job, mesh.as_ref())
+        } else {
+            PLAN_CACHE
+                .with(|c| marcam::plan_with_mesh_cached(&job, mesh.as_ref(), &mut c.borrow_mut()))
+        };
+        let tps = match planned_now {
             Ok(t) => t,
             Err(e) => return err(e),
+        };
+        let (reused, planned) = if opts["cache"] == false {
+            (
+                0,
+                tps.iter()
+                    .map(|t| {
+                        t.moves
+                            .iter()
+                            .filter(|m| matches!(m, marcam::Move::Operation { .. }))
+                            .count()
+                    })
+                    .sum(),
+            )
+        } else {
+            PLAN_CACHE.with(|c| c.borrow_mut().take_counts())
         };
         let gouges = gouge_check(&job, &tps, mesh.as_ref()).unwrap_or_default();
         let collisions = marcam::collision_check(&job, &tps, &machine).unwrap_or_default();
@@ -319,6 +373,7 @@ pub mod api {
             "mesh_bounds": mesh.as_ref().and_then(|m| m.bounds()),
             "programs": programs,
             "time_total_s": total_s,
+            "plan_cache": { "reused": reused, "planned": planned },
         })
     }
 
@@ -359,7 +414,7 @@ pub mod api {
         let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
             .unwrap_or(Value::Null);
         let (dx, na) = rotary_res(&opts);
-        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+        let tps = match plan_for_sim(&job, mesh.as_ref(), &opts) {
             Ok(t) => t,
             Err(e) => return err(e),
         };
@@ -685,7 +740,7 @@ pub mod api {
             Ok(m) => m,
             Err(e) => return err(e),
         };
-        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+        let tps = match plan_for_sim(&job, mesh.as_ref(), &opts) {
             Ok(t) => t,
             Err(e) => return err(e),
         };
@@ -888,7 +943,7 @@ pub mod api {
             Err(e) => return err(e),
         };
         let (dx, na) = rotary_res(&opts);
-        let tps = match plan_with_mesh(&job, mesh.as_ref()) {
+        let tps = match plan_for_sim(&job, mesh.as_ref(), &opts) {
             Ok(t) => t,
             Err(e) => return err(e),
         };

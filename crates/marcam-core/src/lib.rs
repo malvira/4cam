@@ -132,6 +132,89 @@ struct Ctx<'a> {
     profile: Option<RevolvedProfile>,
     mesh: Option<&'a Mesh>,
     revolved: Option<Mesh>,
+    /// Operations planned before, reused when nothing they depend on changed.
+    cache: Option<&'a mut PlanCache>,
+    /// What every operation of this job depends on besides itself (stock, part, ...): part of
+    /// each cache key.
+    job_key: u64,
+}
+
+/// Operations planned before, kept between planning runs: an operation is planned again only
+/// when something it depends on changed. Its key covers the operation, its tool, the job's
+/// stock, clearance, spindle and part (the mesh's triangles, or the profile), the program's
+/// frame, and where the tool was when it started (position, A, the tool loaded): anything
+/// else gives the same moves, so a hit replays them (bit-identical to planning again).
+#[derive(Debug, Default)]
+pub struct PlanCache {
+    map: std::collections::HashMap<u64, CachedOp>,
+    /// Operations reused / planned in the last run (see [`PlanCache::take_counts`]).
+    pub hits: usize,
+    pub misses: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CachedOp {
+    /// The operation's moves (from its marker on), with its marker's number to renumber.
+    moves: Vec<Move>,
+    /// The builder after it.
+    exit: (Option<f64>, Option<f64>, f64, Option<[f64; 3]>),
+}
+
+impl PlanCache {
+    /// Most operations kept (the oldest go first: the whole cache is dropped past it).
+    pub const MAX_OPS: usize = 4096;
+
+    pub fn new() -> PlanCache {
+        PlanCache::default()
+    }
+
+    /// (reused, planned) since the last call, and the counts reset.
+    pub fn take_counts(&mut self) -> (usize, usize) {
+        let c = (self.hits, self.misses);
+        self.hits = 0;
+        self.misses = 0;
+        c
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+fn hash_of<T: std::hash::Hash + ?Sized>(v: &T) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
+}
+
+/// What a job's operations share: everything they may depend on but themselves.
+fn job_key(job: &Job, mesh: Option<&Mesh>) -> u64 {
+    let mut bits: Vec<u64> = Vec::new();
+    if let Some(m) = mesh {
+        bits.reserve(m.triangles.len() * 9);
+        for t in &m.triangles {
+            for p in t {
+                bits.extend(p.iter().map(|c| c.to_bits()));
+            }
+        }
+        bits.extend(m.faces.iter().map(|&f| f as u64));
+    }
+    let rest = serde_json::to_string(&(
+        &job.stock,
+        &job.stock_box,
+        job.clearance,
+        job.spindle_rpm,
+        &job.part.profile,
+        &job.part.mesh,
+        &job.tools,
+    ))
+    .unwrap_or_default();
+    hash_of(&(bits, rest, env!("CARGO_PKG_VERSION")))
 }
 
 impl Ctx<'_> {
@@ -421,6 +504,44 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 _,
             ) => return Err(wrong("flat")),
         };
+        // planned before with everything the same: replay it (renumbered)
+        let key = ctx.cache.as_ref().map(|_| {
+            hash_of(&(
+                ctx.job_key,
+                serde_json::to_string(&(
+                    op,
+                    tool,
+                    three,
+                    stock_box,
+                    safe_r.to_bits(),
+                    current,
+                    b.x.map(f64::to_bits),
+                    b.r.map(f64::to_bits),
+                    b.a.to_bits(),
+                    b.p3.map(|p| p.map(f64::to_bits)),
+                ))
+                .unwrap_or_default(),
+            ))
+        });
+        if let (Some(cache), Some(key)) = (ctx.cache.as_deref_mut(), key) {
+            if let Some(hit) = cache.map.get(&key) {
+                cache.hits += 1;
+                let mut moves = hit.moves.clone();
+                if let Some(Move::Operation { id, .. }) = moves.first_mut() {
+                    *id = *next_op;
+                }
+                b.moves.extend(moves);
+                (b.x, b.r, b.a, b.p3) = hit.exit;
+                *next_op += 1;
+                if current != Some(number) {
+                    current = Some(number);
+                    first_tool.get_or_insert((number, tool.description.clone()));
+                }
+                continue;
+            }
+            cache.misses += 1;
+        }
+        let cache_from = b.moves.len();
         b.operation(*next_op, op_name(op));
         // boring on a vise (not indexed): the post writes its circles as arcs
         if let Operation::Bore(o) = op {
@@ -620,6 +741,18 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             smoothing::smooth(&mut tail, smooth_tol, flat);
             b.moves.extend(tail);
         }
+        if let (Some(cache), Some(key)) = (ctx.cache.as_deref_mut(), key) {
+            if cache.map.len() >= PlanCache::MAX_OPS {
+                cache.map.clear();
+            }
+            cache.map.insert(
+                key,
+                CachedOp {
+                    moves: b.moves[cache_from..].to_vec(),
+                    exit: (b.x, b.r, b.a, b.p3),
+                },
+            );
+        }
     }
     Ok(Toolpath {
         name: prog.name.clone(),
@@ -669,6 +802,24 @@ pub fn plan(job: &Job) -> Result<Vec<Toolpath>, Error> {
 
 /// Plan every program, finishing against `mesh` (already oriented, see [`load_mesh`]).
 pub fn plan_with_mesh(job: &Job, mesh: Option<&Mesh>) -> Result<Vec<Toolpath>, Error> {
+    plan_cached(job, mesh, None)
+}
+
+/// [`plan_with_mesh`], reusing the operations `cache` has planned before (and keeping the new
+/// ones): the same toolpaths, only the operations whose inputs changed are planned.
+pub fn plan_with_mesh_cached(
+    job: &Job,
+    mesh: Option<&Mesh>,
+    cache: &mut PlanCache,
+) -> Result<Vec<Toolpath>, Error> {
+    plan_cached(job, mesh, Some(cache))
+}
+
+fn plan_cached(
+    job: &Job,
+    mesh: Option<&Mesh>,
+    cache: Option<&mut PlanCache>,
+) -> Result<Vec<Toolpath>, Error> {
     if job.schema_version != job::SCHEMA_VERSION {
         return Err(Error::UnsupportedSchema(job.schema_version.clone()));
     }
@@ -681,6 +832,12 @@ pub fn plan_with_mesh(job: &Job, mesh: Option<&Mesh>) -> Result<Vec<Toolpath>, E
             .map(|p| RevolvedProfile::new(p, job.stock.radius)),
         mesh,
         revolved: None,
+        job_key: if cache.is_some() {
+            job_key(job, mesh)
+        } else {
+            0
+        },
+        cache,
     };
     let mut next_op = 0;
     job.programs

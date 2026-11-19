@@ -220,7 +220,7 @@ const RESULT_CHECK = `(async () => {
   const a = m.planArgs();
   let fresh;
   try {
-    ({ result: fresh } = await m.engine('planAndPost', job, a.machine, st.mesh, { max_points: 150000, libraries: a.libraries, setup: job.schema_version === '0.2' ? st.tree?.setup : undefined }));
+    ({ result: fresh } = await m.engine('planAndPost', job, a.machine, st.mesh, { max_points: 150000, libraries: a.libraries, setup: job.schema_version === '0.2' ? st.tree?.setup : undefined, cache: false }));
   } catch (e) { return ['a fresh plan of the project fails: ' + e.message]; }
   const g = (r) => r.programs.map((p) => p.name + '\\n' + p.gcode);
   const x = g(st.result), y = g(fresh);
@@ -347,6 +347,25 @@ const A = {
     await sleep(200);
     return `select ${id}`;
   },
+  async move(r) {
+    const ids = await js("[...document.querySelectorAll('#tree .tree-op')].map((x) => x.dataset.op)");
+    if (ids.length < 2) return null;
+    const [a, b] = [r.pick(ids), r.pick(ids)];
+    if (a === b) return null;
+    const after = r.int(2) === 1;
+    await js(`window.__marcam.tree.moveOp('${a}', '${b}', ${after}).then(() => true)`);
+    await settle(100);
+    return `move ${a} ${after ? "after" : "before"} ${b}`;
+  },
+  async nudge(r) {
+    const sel = await js("window.__marcam.state.tree.selected");
+    if (!sel || !(await js(`!!document.querySelector('#tree .tree-op[data-op="${sel}"]')`))) return null;
+    const up = r.int(2) === 1;
+    await js(`(() => { document.getElementById('tree').dispatchEvent(new KeyboardEvent('keydown', { key: '${up ? "ArrowUp" : "ArrowDown"}', altKey: true, bubbles: true })); return true; })()`);
+    await sleep(300);
+    await settle(100);
+    return `Alt+${up ? "Up" : "Down"} ${sel}`;
+  },
   async rowAct(r, act) {
     const ids = await js(`[...document.querySelectorAll('#tree .tree-op')].filter((x) => { const b = x.querySelector('[data-act="${act}"]'); return b && !b.disabled; }).map((x) => x.dataset.op)`);
     if (!ids.length) return null;
@@ -409,7 +428,7 @@ const A = {
 // the monkey's choice of action, weighted
 const WEIGHTS = [
   ["loadExample", 3], ["importStl", 2], ["addOp", 8], ["apply", 8], ["changeType", 6], ["editParam", 6], ["changeTool", 3],
-  ["pick", 5], ["select", 6], ["up", 2], ["down", 2], ["enable", 3], ["eye", 2], ["delete", 3], ["cancel", 2], ["undo", 1],
+  ["pick", 5], ["select", 6], ["move", 2], ["nudge", 2], ["enable", 3], ["eye", 2], ["delete", 3], ["cancel", 2], ["undo", 1],
   ["generate", 4], ["saveReopen", 2], ["replaceModel", 2],
 ];
 function rng(seed) {
@@ -424,7 +443,7 @@ function rng(seed) {
   return { next, int: (n) => Math.floor(next() * n), pick: (xs) => xs[Math.floor(next() * xs.length)] };
 }
 async function act(name, r, ...args) {
-  if (["up", "down", "enable", "eye", "delete"].includes(name)) return A.rowAct(r, name);
+  if (["enable", "eye", "delete"].includes(name)) return A.rowAct(r, name);
   return A[name](r, ...args);
 }
 

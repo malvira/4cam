@@ -193,8 +193,18 @@ function setHidden(keys, opts = {}) {
     drawSide();
   }
   window.__marcam.tree?.renderEyes?.();
-  // the machining playback too: hidden operations' cuts in grey, no tool while they run
+  // the simulations leave hidden operations out: done again (nothing is planned again)
   window.__marcam.machining?.applyHidden?.();
+  if (state.sim && opts.resimulate !== false) resimulate();
+}
+
+/** The simulated stock again (the eyes changed): the toolpaths stay, only what is cut. */
+let resimTimer = null;
+function resimulate() {
+  clearTimeout(resimTimer);
+  resimTimer = setTimeout(() => {
+    if (document.body.dataset.state !== "busy" && state.result) simulate();
+  }, 200);
 }
 /** Each preview point of program `p`: whether its operation is hidden (null: none is). */
 function hiddenMask(p) {
@@ -484,7 +494,10 @@ async function generate() {
     // done only once everything is shown and the buttons work again
     $("generate").disabled = $("simulate").disabled = false;
     updateGenerateButton();
-    setStatus(`Generated ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s, ${issues} issue(s); estimated machining time ${fmtTime(result.time_total_s)}`, "done");
+    // what was planned (operations unchanged since the last plan are reused)
+    const pc = result.plan_cache;
+    const what = pc && pc.reused ? ` (planned ${pc.planned} operation${pc.planned === 1 ? "" : "s"}, ${pc.reused} unchanged)` : "";
+    setStatus(`Generated ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s${what}, ${issues} issue(s); estimated machining time ${fmtTime(result.time_total_s)}`, "done");
   } catch (e) {
     showError(e.message);
     setStatus("Failed", "error");
@@ -497,9 +510,24 @@ async function generate() {
 /** The grid asked for: a preset, or custom cell sizes (rotary mm x degrees, 3-axis mm). */
 function simOpts() {
   const v = $("simRes").value;
-  if (v !== "custom") return { res: v };
+  // operations hidden in the tree are not simulated (their material stays)
+  const hide = hiddenPlanned();
+  if (v !== "custom") return { res: v, hide };
   const deg = Number($("simDeg").value) || 1.5;
-  return { dx: Number($("simDx").value) || 0.1, na: Math.max(8, Math.round(360 / deg)), cell: Number($("simCell").value) || 0.25 };
+  return { dx: Number($("simDx").value) || 0.1, na: Math.max(8, Math.round(360 / deg)), cell: Number($("simCell").value) || 0.25, hide };
+}
+
+/** The planning numbers of the operations hidden in the tree (those the engine planned: enabled,
+ *  not in error, their tool in the project), in the setup the results are for. */
+function hiddenPlanned() {
+  if (!state.hidden?.size) return [];
+  const j = state.job;
+  const setupId = state.tree?.setup;
+  const s = j?.schema_version === "0.2" ? j.setups?.find((x) => x.id === setupId) ?? j.setups?.[0] : null;
+  if (!s) return [];
+  const tools = new Set((j.tools || []).map((t) => t.number));
+  const planned = s.outputs.flatMap((o) => o.operations).map((id) => s.operations.find((o) => o.id === id)).filter((o) => o && o.enabled !== false && !o.error && tools.has(o.tool));
+  return planned.map((o, i) => (state.hidden.has(`${s.id}/${o.id}`) ? i : -1)).filter((i) => i >= 0);
 }
 
 function saveSimRes() {
@@ -602,6 +630,7 @@ async function simulate() {
     if (gpu) {
       try {
         const { result: open } = await engine("gpuOpen", state.job, { ...simOpts(), libraries: libraries() }, state.mesh);
+        // (gpuOpen plans through the same cache and leaves the hidden operations out)
         result = await simulateOnGpu(gpu, open, async (o, bytes) => (await engine("gpuStats", o, bytes)).result);
         backend = `GPU (${gpu.name})`;
       } catch (e) {
@@ -613,6 +642,7 @@ async function simulate() {
     const ms = performance.now() - t0;
     if (epoch !== state.epoch) return;
     showBackend(backend);
+    result.stocks.forEach((st) => (st.hidden = hiddenPlanned().length));
     state.sim = result;
     selectTab(state.tab);
     const s = result.stocks[state.tab];
@@ -672,6 +702,7 @@ function selectTab(i) {
     ${collisionHtml(p.collisions)}
     ${g && g.moves_checked ? `<div class="small">Gouge check: ${g.moves_checked.toLocaleString("en")} cut moves, deepest ${g.max_depth.toFixed(4)} mm into the part</div>` : ""}
     ${sim && !sim.samples ? `<div class="small muted">Not simulated: its tool has no full shape (a V-bit needs a diameter). The stock shown is from the programs before it.</div>` : ""}
+    ${sim && sim.hidden ? `<div class="small muted" id="simHidden">${sim.hidden} operation${sim.hidden === 1 ? "" : "s"} hidden: not simulated (their material is left)</div>` : ""}
     ${sim ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock${sim.feature_cells ? `; ${sim.feature_cells.toLocaleString("en")} cells cut below the part on purpose (engraving, knurl, indexed features) not counted` : ""}</div>` : ""}`;
   $("gcode").value = p.gcode;
   $("codeInfo").textContent = `${p.name}.nc, ${(p.gcode.length / 1024).toFixed(0)} KiB`;
@@ -1518,3 +1549,40 @@ window.__marcam.pixelAt = (fx, fy) => {
     }
   });
 }
+
+// ---------------------------------------------------------------- the side view (optional)
+// Off by default (the view cube does most of what it did), remembered in this browser. View
+// only: nothing is planned.
+{
+  const apply = (on) => {
+    $("side").classList.toggle("hidden", !on);
+    $("split3d").classList.toggle("hidden", !on);
+    if (on) drawSide();
+  };
+  let on = false;
+  try {
+    on = localStorage.getItem("marcam.sideView") === "1";
+  } catch {}
+  $("showSide").checked = on;
+  apply(on);
+  $("showSide").addEventListener("change", () => {
+    try {
+      localStorage.setItem("marcam.sideView", $("showSide").checked ? "1" : "0");
+    } catch {}
+    apply($("showSide").checked);
+  });
+}
+
+// ---------------------------------------------------------------- the menus
+// File: what the toolbar's buttons did; a menu closes once something in it is chosen.
+$("menuImport").addEventListener("click", () => $("importStl").click());
+$("menuReplace").addEventListener("click", () => $("replaceModelFile").click());
+$("menuDownload").addEventListener("click", () => $("download").click());
+for (const d of document.querySelectorAll("details.menu")) {
+  d.addEventListener("click", (ev) => {
+    if (ev.target.closest("button")) d.open = false;
+  });
+}
+document.addEventListener("click", (ev) => {
+  for (const d of document.querySelectorAll("details.menu[open]")) if (!d.contains(ev.target)) d.open = false;
+});

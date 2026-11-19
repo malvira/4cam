@@ -394,12 +394,36 @@ try {
   check("turning an operation off drops it from the G-code (document saved as 0.2)", schema === "0.2" && off.lines[1] < 15146 && !off.knurl.includes("front chamfer"), `knurl file ${off.lines[1]} lines; schema ${schema}`);
   await treeAct("op3", "enable");
   await settle();
-  await treeAct("op3", "up");
+  // (Mar) reordered by dragging: op3 dropped on the upper half of op2 (the arrows are gone)
+  const dragOnto = (src, dst, before) => js(`(() => { const a = document.querySelector('#tree .tree-op[data-op="${src}"]'), b = document.querySelector('#tree .tree-op[data-op="${dst}"]');
+    const dt = new DataTransfer(); const r = b.getBoundingClientRect(); const y = before ? r.top + 2 : r.bottom - 2;
+    a.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+    b.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, clientY: y }));
+    const line = b.classList.contains(before ? 'drop-before' : 'drop-after');
+    b.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientY: y }));
+    a.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+    return line; })()`);
+  const arrows = await js("document.querySelectorAll('#tree [data-act=\"up\"], #tree [data-act=\"down\"]').length");
+  const line = await dragOnto("op3", "op2", true);
   await settle();
+  const order = await js("JSON.parse(document.getElementById('job').value).setups[0].outputs.map((o) => o.operations.join(',')).join(' | ')");
   const swapped = await gen();
   const ci = swapped.knurl.indexOf("front chamfer"), ki = swapped.knurl.indexOf("knurl family");
-  check("reordering operations reorders the G-code", ci > 0 && ki > ci, `chamfer at ${ci}, knurl at ${ki}`);
-  await treeAct("op3", "down");
+  check("reordering by dragging (a drop line shows where; no arrows): the project's order and the G-code's", arrows === 0 && line && /op3,op2/.test(order) && ci > 0 && ki > ci, `arrows ${arrows}; line ${line}; ${order}; chamfer at ${ci}, knurl at ${ki}`);
+  // undone: the old order
+  await js("document.getElementById('undoSetup').click(); true");
+  await settle();
+  const undone = await js("JSON.parse(document.getElementById('job').value).setups[0].outputs.map((o) => o.operations.join(',')).join(' | ')");
+  // and with the keyboard: Alt+Up on the selected op3
+  await js("document.querySelector('#tree .tree-op[data-op=\"op3\"] [data-act=\"select\"]').click(); true");
+  await sleep(200);
+  await js("document.getElementById('tree').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true })); true");
+  await settle();
+  const keyed = await js("JSON.parse(document.getElementById('job').value).setups[0].outputs.map((o) => o.operations.join(',')).join(' | ')");
+  check("Undo puts the order back; Alt+Up moves the selected operation up", /op2,op3/.test(undone) && /op3,op2/.test(keyed), `${undone} -> ${keyed}`);
+  await js("document.getElementById('undoSetup').click(); true");
+  await settle();
+  await js("document.querySelector('#tree .tree-op[data-op=\"op3\"] [data-act=\"select\"]').click(); true");
   await settle();
   // every operation type: the create form comes fully filled and applies without problems
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
@@ -522,7 +546,12 @@ try {
   check("mesh job: part, stock and simulated stock render closed (end faces filled)",
     mv.length === 6 && mv.every((v) => v.filled), mv.map((v) => `${v.layer}/${v.end}:${v.filled ? "filled" : "OPEN " + v.px}`).join(" "));
 
-  // 8b. resizable panes: drag the bars, keyboard, reset, persistence, minimum sizes
+  // 8b. resizable panes: drag the bars, keyboard, reset, persistence, minimum sizes (the side
+  // view, off by default, shown for these)
+  const sideOff = await js("document.getElementById('side').classList.contains('hidden') && !document.getElementById('showSide').checked");
+  check("the side view is off by default (a toggle under the 3D view)", sideOff);
+  await js("document.getElementById('showSide').click(); true");
+  await sleep(300);
   const rect = (id) => js(`(() => { const r = document.getElementById('${id}').getBoundingClientRect(); return [r.x, r.y, r.width, r.height].map(Math.round).join(','); })()`).then((t) => String(t).split(",").map(Number));
   // 8b. 3-axis plate on the Carvera vise: types, forms with points, generate, preview
   await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
@@ -1564,30 +1593,32 @@ try {
     await settle();
     const restored = await js("[...window.__marcam.state.hidden].sort().join(',')");
     check("which toolpaths are hidden is saved with the project and comes back on open", restored === hiddenNow.slice().sort().join(","), restored);
-    // (Mar) the machining playback too: hidden operations' cuts in grey, no tool while they
-    // run, marked in its legend; showing them again recolours it (view only)
+    // (Mar) hidden operations are not simulated either (their material stays), in the
+    // simulated stock and in the playback; showing them again simulates again; nothing is
+    // planned for any of it
     await clickGenerate();
-    await waitDone("the plate for the playback", 240000);
+    await waitDone("the plate for the simulations", 240000);
+    const plansS = await js("window.__marcam.calls.planAndPost || 0");
+    const cutCells = () => js("(() => { const s = window.__marcam.state.sim; if (!s) return -1; const top = s.stock_box.max[2]; return s.stocks[s.stocks.length - 1].z.filter((z) => z < top - 0.01).length; })()");
+    await js("document.getElementById('simulate').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.sim && document.body.dataset.state === 'done'"), "the simulation with one operation shown", 240000);
+    const cutOne = await cutCells();
+    const note = await js("document.getElementById('simHidden')?.textContent || ''");
     await js("document.getElementById('simOpen').click(); true");
     await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the machining playback", 120000);
-    const pb = async () => js(`(() => { const m = window.__marcam.state.machining, mc = window.__marcam.machining;
-      const tags = [...m.hiddenTags]; const grey = tags.length ? mc.colorOf(tags[0]).join(",") : "";
-      const shown = m.session.ops.filter((o) => !m.hiddenTags.has(o.tag)).map((o) => mc.colorOf(o.tag).join(","));
-      return { hidden: tags.length, ops: m.session.ops.length, grey, greyShown: shown.includes(grey), legend: document.querySelectorAll('#opLegend .op-hidden').length }; })()`);
-    const pb1 = await pb();
-    // the tool, at a move of a hidden operation: not drawn
-    const toolHidden = await js(`await (async () => { const m = window.__marcam.state.machining; const p = m.session.path; const n = m.session.segments;
-      let k = -1; for (let i = 0; i < n; i++) if (m.hiddenTags.has(p[7 * i + 6])) { k = i; break; }
-      if (k < 0) return "none"; await window.__marcam.machining.seek(k + 1); await new Promise((r) => setTimeout(r, 300)); return window.__marcam.state.three.groups.toolModel.visible; })()`);
-    await js("document.getElementById('eyeAll').click(); true");
-    await sleep(800);
-    const pb2 = await pb();
-    check("the machining playback follows the eyes: hidden operations' cuts in grey (not their colour), no tool while they run, marked in its legend; shown again, all coloured",
-      pb1.hidden === hiddenNow.length && pb1.hidden > 0 && pb1.hidden < pb1.ops && !pb1.greyShown && pb1.legend === pb1.hidden && toolHidden === false && pb2.hidden === 0 && pb2.legend === 0,
-      `${JSON.stringify(pb1)}; tool at a hidden move: ${toolHidden}; then ${JSON.stringify(pb2)}`);
-    await shot("18c_playback_hidden");
+    const playOps = await js("window.__marcam.state.machining.session.ops.length");
     await js("document.getElementById('simClose').click(); true");
     await sleep(500);
+    // all shown again: simulated again (in the background), more cut, more in the playback
+    await js("document.getElementById('eyeAll').click(); true");
+    await sleep(600);
+    await waitFor(async () => (await js("document.body.dataset.state")) !== "busy" && (await cutCells()) > cutOne, "the simulation again with everything shown", 240000).catch(() => {});
+    const cutAll = await cutCells();
+    const allOps = await js("window.__marcam.state.result.programs.reduce((n, p) => n + (p.time?.ops?.length || 0), 0)");
+    check("hidden operations are not simulated (their material stays) nor played back; shown again, simulated again; nothing planned",
+      cutOne > 0 && cutAll > cutOne && /hidden: not simulated/.test(note) && playOps >= 1 && playOps < allOps && (await js("window.__marcam.calls.planAndPost || 0")) === plansS,
+      `cut ${cutOne} -> ${cutAll}; playback ${playOps} of ${allOps} operations; ${note}`);
+    await shot("18c_simulation_hidden");
   }
 
   // 8o. (Mar's oval part) a block with two recessed oval flats and a textured grip between:
@@ -1720,6 +1751,33 @@ try {
     await waitDone("the repaired project", 240000);
     const r4 = await js("(() => { const d = JSON.parse(document.getElementById('job').value); return { err: d.setups[0].operations.filter((o) => o.error).length, programs: window.__marcam.state.result.programs.map((p) => p.name) }; })()");
     check("picked again, the pocket is planned again", r4.err === 0 && r4.programs.length === 3, JSON.stringify(r4));
+  }
+
+  // 8s. (Mar) Generate plans only what changed: unchanged operations are reused from the last
+  // plan (the same G-code as planning everything), an edit to one plans that one
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate", 240000);
+    const n = await js("JSON.parse(document.getElementById('job').value).setups[0].operations.length");
+    const editFeed = async (k) => {
+      await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); const o = j.setups[0].operations[${k}]; o.feed = Math.round(o.feed * 0.9); t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+      await settle();
+      await clickGenerate();
+      await waitDone("the plate after an edit", 240000);
+      return js("window.__marcam.state.result.plan_cache");
+    };
+    const c1 = await editFeed(n - 1);
+    const c2 = await editFeed(1);
+    // the same as planning from scratch
+    const same = await js(`await (async () => { const m = window.__marcam, st = m.state, a = m.planArgs(); const job = JSON.parse(document.getElementById('job').value);
+      const { result } = await m.engine('planAndPost', job, a.machine, st.mesh, { max_points: 150000, libraries: a.libraries, setup: st.tree.setup, cache: false });
+      return result.programs.map((p) => p.gcode).join('|') === st.result.programs.map((p) => p.gcode).join('|'); })()`);
+    const status = await js("document.getElementById('status').textContent");
+    check("Generate plans only the edited operation (the others reused), with the same G-code as planning them all",
+      c1.planned === 1 && c1.reused === n - 1 && c2.planned === 1 && c2.reused === n - 1 && same && /planned 1 operation, \d+ unchanged/.test(status),
+      `${JSON.stringify(c1)} ${JSON.stringify(c2)} same ${same} | ${status}`);
   }
 
   // 8q. (Mar) the view cube: each face turns the camera to look from that side (machine

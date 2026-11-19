@@ -805,5 +805,5 @@ export function setupProject(ctx) {
     if (f) await replaceModel(f);
   });
 
-  return { changed, clean, mayDiscard, newProject, openText, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, dropUndo, dialog, state: p };
+  return { changed, clean, mayDiscard, newProject, openText, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, dropUndo, keepUndo, dialog, state: p };
 }

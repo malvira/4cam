@@ -99,14 +99,17 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     });
   }
 
-  /** The tree's eyes changed: recolour the stock and the legend (view only). */
+  /** The tree's eyes changed: the playback plays the visible operations, so it is opened
+   *  again at the same place (nothing is planned again). */
   async function applyHidden() {
     if (!m.session) return;
-    refreshHidden();
-    renderLegend();
     if (m.open) {
-      await buildScene();
-      placeTool();
+      const at = m.pos;
+      await open();
+      if (m.session) await seek(Math.min(at, m.session.segments));
+    } else {
+      refreshHidden();
+      renderLegend();
     }
   }
 
