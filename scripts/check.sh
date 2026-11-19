@@ -15,7 +15,9 @@ fi
 cargo clippy -p marcam-cli --features gpu --all-targets -- -D warnings
 cargo test
 # the GPU prototype against the CPU (skips, saying so, without a hardware GPU)
-cargo test -p marcam-gpu -- --nocapture
+# one test at a time: several GPU devices opened at once have hung (a test burned 15 min of
+# CPU in parallel, 5 s alone)
+cargo test -p marcam-gpu -- --nocapture --test-threads=1
 # the SolidCraft plugin: tests, the guest linted and packed, and the real host when
 # SOLIDCRAFT_CLI names a solidcraft-cli (skipped otherwise, saying so)
 cargo build -p marcam-cli
