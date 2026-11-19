@@ -192,3 +192,11 @@ details.menu[open] > summary { border-color: var(--accent); }
 .menu-items button { text-align: left; }
 .menu-items hr { border: none; border-top: 1px solid var(--line); margin: 2px 0; }
 #status { font-size: 12px; max-width: 45vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* the tool dialogs */
+.tool-dialog { min-width: 420px; max-width: 640px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; }
+.tool-dialog h3 { margin: 0 0 8px; }
+.tp-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
+.tp-row { text-align: left; }
+.tn-table { border-collapse: collapse; margin: 6px 0; }
+.tn-table td, .tn-table th { padding: 3px 8px; border-bottom: 1px solid var(--line); text-align: left; }

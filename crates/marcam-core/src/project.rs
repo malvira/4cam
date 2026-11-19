@@ -19,8 +19,14 @@ pub struct Project {
     #[serde(default)]
     pub name: String,
     pub models: Vec<Model>,
-    /// Tools by T number: inline definitions or library references.
+    /// Tools by number: inline definitions or library references. The number is also the
+    /// T number written in the G-code, unless the tool is in `unindexed`.
     pub tools: Vec<ToolEntry>,
+    /// Tools (by their number in `tools`) not given a T number yet: the number is only the
+    /// project's way to name them. Planned, each is written as the next free T number, with
+    /// a warning in the G-code (index it before running).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unindexed: Vec<u32>,
     pub setups: Vec<Setup>,
 }
 
@@ -282,6 +288,7 @@ impl Project {
             name: name.into(),
             models,
             tools: job.tools.iter().cloned().map(ToolEntry::Inline).collect(),
+            unindexed: Vec::new(),
             setups: vec![Setup {
                 id: "setup1".into(),
                 name: "Rotary setup".into(),
@@ -683,8 +690,113 @@ impl Project {
         if let StockDef::Box { min, max } = setup.stock {
             v["stock_box"] = serde_json::json!({"min": min, "max": max});
         }
+        self.number_tools(&mut v);
         profiles::resolve_job_tools(&mut v, libraries)?;
         serde_json::from_value(v).map_err(|e| format!("setup {:?}: {e}", setup.id))
+    }
+
+    /// A setup's job (as JSON, before tool libraries are resolved): unindexed tools given the
+    /// next free T numbers (their operations follow), and warnings in the G-code of the
+    /// programs that use them, and where one tool is under two numbers.
+    fn number_tools(&self, v: &mut Value) {
+        let used: Vec<u32> = v["programs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|p| p["operations"].as_array().into_iter().flatten())
+            .filter_map(|o| o["tool"].as_u64().map(|n| n as u32))
+            .collect();
+        let indexed: std::collections::HashSet<u32> = self
+            .tools
+            .iter()
+            .map(ToolEntry::number)
+            .filter(|n| !self.unindexed.contains(n))
+            .collect();
+        let mut given: Vec<(u32, u32)> = Vec::new();
+        for &n in &used {
+            if !self.unindexed.contains(&n) || given.iter().any(|g| g.0 == n) {
+                continue;
+            }
+            let f = (1..)
+                .find(|k| !indexed.contains(k) && !given.iter().any(|g| g.1 == *k))
+                .unwrap_or(n);
+            given.push((n, f));
+        }
+        let describe = |n: u32| -> String {
+            match self.tools.iter().find(|t| t.number() == n) {
+                Some(ToolEntry::Library {
+                    library,
+                    tool,
+                    description,
+                    ..
+                }) => description
+                    .clone()
+                    .unwrap_or_else(|| format!("{library}/{tool}")),
+                Some(ToolEntry::Inline(t)) => t.description.clone(),
+                None => String::new(),
+            }
+        };
+        // the same tool under two numbers (both used)
+        let mut twins: Vec<String> = Vec::new();
+        for (k, a) in self.tools.iter().enumerate() {
+            for b in &self.tools[k + 1..] {
+                let same = match (a, b) {
+                    (
+                        ToolEntry::Library {
+                            library: la,
+                            tool: ta,
+                            ..
+                        },
+                        ToolEntry::Library {
+                            library: lb,
+                            tool: tb,
+                            ..
+                        },
+                    ) => la == lb && ta == tb,
+                    (ToolEntry::Inline(x), ToolEntry::Inline(y)) => {
+                        x.shape == y.shape && x.description == y.description
+                    }
+                    _ => false,
+                };
+                if same && used.contains(&a.number()) && used.contains(&b.number()) {
+                    twins.push(format!(
+                        "(Warning: {} is both T{} and T{}: one tool, two tool numbers)",
+                        describe(a.number()),
+                        a.number(),
+                        b.number()
+                    ));
+                }
+            }
+        }
+        // renumber: the tools, then the operations
+        let to = |n: u32| given.iter().find(|g| g.0 == n).map_or(n, |g| g.1);
+        if let Some(ts) = v["tools"].as_array_mut() {
+            for t in ts {
+                if let Some(n) = t["number"].as_u64() {
+                    t["number"] = serde_json::json!(to(n as u32));
+                }
+            }
+        }
+        for p in v["programs"].as_array_mut().into_iter().flatten() {
+            let mut notes: Vec<String> = Vec::new();
+            for o in p["operations"].as_array_mut().into_iter().flatten() {
+                if let Some(n) = o["tool"].as_u64().map(|n| n as u32) {
+                    if let Some(&(_, f)) = given.iter().find(|g| g.0 == n) {
+                        o["tool"] = serde_json::json!(f);
+                        let note = format!("(Warning: {} has no tool number in the project: written as T{f}, the next free one. Give it a number (Tools) before running.)", describe(n));
+                        if !notes.contains(&note) {
+                            notes.push(note);
+                        }
+                    }
+                }
+            }
+            notes.extend(twins.iter().cloned());
+            if !notes.is_empty() {
+                let mut all: Vec<Value> = p["notes"].as_array().cloned().unwrap_or_default();
+                all.extend(notes.into_iter().map(Value::String));
+                p["notes"] = Value::Array(all);
+            }
+        }
     }
 
     /// Project operation ids in planning order for a setup (matches `Move::Operation` ids).

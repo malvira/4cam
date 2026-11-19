@@ -344,6 +344,8 @@ pub mod api {
                     "title": tp.title,
                     "tool": tp.tool,
                     "lines": gcode.lines().count(),
+                    // what its G-code warns about (tools without a number, one tool twice)
+                    "warnings": tp.notes.iter().filter(|n| n.starts_with("(Warning")).map(|n| n.trim_start_matches("(Warning: ").trim_end_matches(')').to_string()).collect::<Vec<_>>(),
                     "gcode": gcode,
                     "issues": issues,
                     "gouge": g.map(|g| json!({"moves_checked": g.moves_checked, "max_depth": g.max_depth, "at": g.at})),

@@ -70,10 +70,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const t = libs.find((l) => l.id === x.library)?.tools.find((y) => y.id === x.tool);
     return { number: x.number, kind: t?.shape?.kind, diameter: t?.shape?.diameter ?? t?.shape?.tip_diameter, name: t?.name || x.tool };
   }
-  /** A project tool: "T1 flat 3.175 · Spiral O Metal ..." */
+  /** A project tool: "T3 · Spiral O Metal 3.175 (flat 3.175)", "— · ..." without a T number. */
   function toolLabel(x) {
     const i = toolInfo(x);
-    return `T${i.number} ${i.kind || "tool"}${i.diameter != null ? ` ${i.diameter}` : ""}${i.name ? ` · ${i.name}` : ""}`;
+    const unindexed = (t.doc?.unindexed || []).includes(x.number);
+    return `${unindexed ? "—" : `T${i.number}`} · ${i.name || i.kind || "tool"} (${i.kind || "tool"}${i.diameter != null ? ` ${i.diameter}` : ""})`;
   }
   /** Why tool `x` does not suit type `ty` ("" when it does). */
   function toolMisfit(ty, x) {
@@ -231,6 +232,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
           return `<option value="${x.number}" ${x.number === v ? "selected" : ""} ${why ? `disabled title="${esc(why)}"` : ""}>${esc(toolLabel(x))}${why ? ` (${esc(why)})` : ""}</option>`;
         });
         if (v != null && !list.some((x) => x.number === v)) opts.unshift(`<option value="${v}" selected>T${v} (not in the project)</option>`);
+        // a tool from the libraries (or a new one), added to the project
+        opts.push(`<option value="__add">Add tool from library...</option>`);
         html += `<label>${label}<select name="tool">${opts.join("")}</select></label>`;
       } else if (p.kind === "choice") {
         html += `<label>${label}<select name="${p.name}">${p.choices.map((c) => `<option ${c === v ? "selected" : ""}>${c}</option>`).join("")}</select></label>`;
@@ -289,7 +292,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const el = f.elements[p.name];
       if (!el) continue;
       if (p.kind === "boolean") out[p.name] = el.checked;
-      else if (p.name === "tool" || p.kind === "integer") out[p.name] = el.value === "" ? undefined : parseInt(el.value, 10);
+      else if (p.name === "tool" || p.kind === "integer") out[p.name] = el.value === "" || el.value === "__add" ? (p.name === "tool" ? op.tool : undefined) : parseInt(el.value, 10);
       else if (p.kind === "choice") out[p.name] = el.value;
       else if (p.kind === "string") out[p.name] = el.value;
       else if (p.kind === "paths") {
@@ -1020,6 +1023,21 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     if (el.closest("#opForm") && el.name === "__type") return changeType(el.value);
+    if (el.closest("#opForm") && el.name === "tool" && el.value === "__add") {
+      // the library browser; the tool it adds becomes this operation's
+      const op = opById(t.selected);
+      const ty = op && typeOf(op.type);
+      const n = await window.__marcam.tools?.pick(ty?.tool_shapes);
+      await refresh();
+      if (!n) return renderEditor();
+      if (t.draft && t.draft.op.id === t.selected) {
+        t.draft.op.tool = n;
+        t.edited?.delete("tool");
+        renderEditor();
+        return refreshDefaults();
+      }
+      return retool(n);
+    }
     if (el.closest("#opForm") && el.name === "tool" && t.draft && t.draft.op.id === t.selected) {
       t.edited.delete("tool");
       return refreshDefaults();

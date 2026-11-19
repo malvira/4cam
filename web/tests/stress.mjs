@@ -300,6 +300,23 @@ const A = {
     await sleep(150);
     return `set ${f} ${v} -> ${nv}`;
   },
+  async addLibraryTool(r) {
+    if (!(await js("!!document.getElementById('opForm')?.elements.tool"))) return null;
+    await js("(() => { const e = document.getElementById('opForm').elements.tool; e.value = '__add'; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    const open = await waitFor(() => js("document.getElementById('toolPick').open"), "the tool library", 10000).then(() => true, () => false);
+    if (!open) return "add a library tool (no dialog)";
+    const n = await js("document.querySelectorAll('#tpList .tp-row').length");
+    if (!n) {
+      await js("document.getElementById('toolPick').close(); true");
+      await sleep(200);
+      return "add a library tool (none of its type)";
+    }
+    const k = r.int(n);
+    await js(`document.querySelectorAll('#tpList .tp-row')[${k}].click(); true`);
+    await sleep(300);
+    await settle(200);
+    return `add library tool #${k}`;
+  },
   async changeTool(r) {
     const opts = await js("[...(document.getElementById('opForm')?.elements.tool?.options || [])].map((o) => o.value)");
     if (opts.length < 2) return null;
@@ -427,7 +444,7 @@ const A = {
 
 // the monkey's choice of action, weighted
 const WEIGHTS = [
-  ["loadExample", 3], ["importStl", 2], ["addOp", 8], ["apply", 8], ["changeType", 6], ["editParam", 6], ["changeTool", 3],
+  ["loadExample", 3], ["importStl", 2], ["addOp", 8], ["apply", 8], ["changeType", 6], ["editParam", 6], ["changeTool", 3], ["addLibraryTool", 1],
   ["pick", 5], ["select", 6], ["move", 2], ["nudge", 2], ["enable", 3], ["eye", 2], ["delete", 3], ["cancel", 2], ["undo", 1],
   ["generate", 4], ["saveReopen", 2], ["replaceModel", 2],
 ];

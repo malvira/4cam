@@ -620,6 +620,13 @@ fn run_setup(
         for i in &issues {
             println!("  {i}");
         }
+        // what the G-code warns about (tools without a T number, one tool under two)
+        for n in tp.notes.iter().filter(|n| n.starts_with("(Warning")) {
+            println!(
+                "  warning: {}",
+                n.trim_start_matches("(Warning: ").trim_end_matches(')')
+            );
+        }
         bad += issues.len();
         let time = marcam::estimate::estimate_toolpath(tp, &profile);
         let e = &time.estimate;

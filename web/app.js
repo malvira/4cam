@@ -4,6 +4,7 @@ import { blockSolid, cylinder, heightmapSolid, revolveProfile, stockObject, STOC
 import { gpuDevice, simulateOnGpu } from "./gpu/gpusim.js";
 import { setupMachining } from "./machining.js";
 import { addViewCube } from "./viewcube.js";
+import { setupToolDialogs } from "./tooldialog.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
 import { setupProject } from "./project.js";
@@ -707,6 +708,7 @@ function selectTab(i) {
         : "Verifier: 0 issues (no fast plunges, no low rapids)"
     }</div>
     ${limitsHtml(p.name, esc)}
+    ${p.warnings?.length ? `<div class="limits" id="toolWarnings">${p.warnings.map((w) => `<div>Warning: ${esc(w)}</div>`).join("")}</div>` : ""}
     ${p.time ? `<div class="small" id="timeEst">Estimated time: <strong>${fmtTime(p.time.total_s)}</strong> (cutting ${fmtTime(p.time.feed_s)}, rapids ${fmtTime(p.time.rapid_s)}, tool changes/dwells ${fmtTime(p.time.other_s)})${state.result.programs.length > 1 ? ` &middot; all files ${fmtTime(state.result.time_total_s)}` : ""}</div>` : ""}
     ${collisionHtml(p.collisions)}
     ${g && g.moves_checked ? `<div class="small">Gouge check: ${g.moves_checked.toLocaleString("en")} cut moves, deepest ${g.max_depth.toFixed(4)} mm into the part</div>` : ""}
@@ -1594,4 +1596,18 @@ for (const d of document.querySelectorAll("details.menu")) {
 }
 document.addEventListener("click", (ev) => {
   for (const d of document.querySelectorAll("details.menu[open]")) if (!d.contains(ev.target)) d.open = false;
+});
+
+// ---------------------------------------------------------------- tools from the libraries
+window.__marcam.tools = setupToolDialogs({
+  $, state, readJob,
+  writeJob: (doc) => {
+    writeJob(doc);
+    renderTools();
+  },
+  userLibraries: libraries,
+});
+$("menuToolNumbers").addEventListener("click", () => window.__marcam.tools.openNumbers());
+$("menuAddTool").addEventListener("click", async () => {
+  if (await window.__marcam.tools.pick()) await window.__marcam.tree?.refresh();
 });

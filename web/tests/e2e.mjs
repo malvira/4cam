@@ -1829,10 +1829,10 @@ try {
     await js(`document.querySelector('#tree .tree-op[data-op="${face.id}"] [data-act="select"]').click(); true`);
     await waitFor(() => js("!!document.getElementById('opForm')?.elements.tool"), "the facing's editor", 15000);
     const opts = await js("[...document.getElementById('opForm').elements.tool.options].map((o) => ({ v: o.value, t: o.textContent, off: o.disabled }))");
-    const ball = opts.find((o) => /ball/.test(o.t));
-    const flats = opts.filter((o) => /flat/.test(o.t) && !o.off);
+    const ball = opts.find((o) => /\(ball/.test(o.t));
+    const flats = opts.filter((o) => /\(flat/.test(o.t) && !o.off);
     check("the Tool field names each tool (T1 flat 3.175); facing cannot use a ball: greyed with the reason",
-      opts.every((o) => /^T\d+ \w+/.test(o.t)) && (!ball || (ball.off && /takes flat/.test(ball.t))) && flats.length >= 1, JSON.stringify(opts));
+      opts.filter((o) => o.v !== "__add").every((o) => /^(T\d+|—) · /.test(o.t)) && opts[opts.length - 1].v === "__add" && (!ball || (ball.off && /takes flat/.test(ball.t))) && flats.length >= 1, JSON.stringify(opts));
     // another flat tool (a copy of T1 with another number, if the project has one flat only)
     let other = flats.find((o) => Number(o.v) !== face.tool);
     if (!other) {
@@ -1861,6 +1861,42 @@ try {
     const g2 = await js(`window.__marcam.state.result.programs.map((p) => p.gcode).join('\\n')`);
     check("its tool removed from the project: the operation is marked in error (naming the tool) and left out of the G-code",
       new RegExp(`tool T${other.v} is not in the project`).test(row) && !new RegExp(`T${other.v}\\b`).test(g2), row);
+
+    // (Mar) "Add tool from library...": the last entry of the Tool field opens the library;
+    // the tool picked joins the project without a T number and becomes the operation's; the
+    // G-code then uses the next free number and warns; given a number (Tools > Tool numbers),
+    // the warning goes
+    await js(`document.querySelector('#tree .tree-op[data-op="${face.id}"] [data-act="select"]').click(); true`);
+    await waitFor(() => js("!!document.getElementById('opForm')?.elements.tool"), "the facing's editor (3)", 15000);
+    await js("(() => { const e = document.getElementById('opForm').elements.tool; e.value = '__add'; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await waitFor(() => js("document.getElementById('toolPick').open"), "the tool library", 10000);
+    const offered = await js("document.querySelectorAll('#tpList .tp-row').length");
+    const kindFilter = await js("document.getElementById('tpKind').value");
+    // a flat tool (the filter starts on the operation's tool type)
+    await js("document.querySelector('#tpList .tp-row').click(); true");
+    await waitFor(() => js("!document.getElementById('toolPick').open"), "the library closed", 10000);
+    await settle();
+    await waitFor(() => js("!!document.querySelector('#opForm button[type=submit]')"), "the editor after the pick", 10000);
+    const picked = await js("(() => { const d = JSON.parse(document.getElementById('job').value); const sel = document.getElementById('opForm').elements.tool; return { n: Number(sel.value), label: sel.options[sel.selectedIndex].textContent, unindexed: d.unindexed || [], tools: d.tools.length }; })()");
+    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate with a library tool", 240000);
+    const warn = await js("document.getElementById('toolWarnings')?.textContent || ''");
+    const g3 = await js(`window.__marcam.state.result.programs.map((p) => p.gcode).join('\\n')`);
+    check("Add tool from library: the library opens on the operation's type, the tool joins the project without a number (— in the list) and is the operation's; the G-code uses the next free number and warns, here and in the file",
+      offered > 0 && kindFilter === "flat" && picked.unindexed.includes(picked.n) && /^— · /.test(picked.label) && /has no tool number in the project/.test(warn) && /\(Warning: .* has no tool number/.test(g3),
+      `${offered} offered (${kindFilter}); ${JSON.stringify(picked)}; ${warn}`);
+    // numbered: no warning
+    await js("document.getElementById('menuToolNumbers').click(); true");
+    await waitFor(() => js("document.getElementById('toolNumbers').open"), "the tool numbers", 10000);
+    await js("(() => { for (const c of document.querySelectorAll('#toolNumbers .tn-has')) c.checked = true; document.getElementById('tnApply').click(); return true; })()");
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate with every tool numbered", 240000);
+    const warn2 = await js("document.getElementById('toolWarnings')?.textContent || ''");
+    const un2 = await js("JSON.parse(document.getElementById('job').value).unindexed || []");
+    check("Tool numbers: every tool given its number, the warning goes", !warn2 && un2.length === 0, `${warn2} | ${JSON.stringify(un2)}`);
   }
 
   // 9. phone width: layout stacks, no horizontal scroll
