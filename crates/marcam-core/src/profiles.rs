@@ -199,6 +199,10 @@ pub struct MachineProfile {
     pub timing: Option<Timing>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// How 2D contours are cut by default: "climb" (None: climb) or "conventional" (less
+    /// rigid machines).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_direction: Option<String>,
     /// G-code templates.
     pub post: Machine,
 }
@@ -1232,6 +1236,7 @@ pub fn import(bytes: &[u8], name: &str) -> Result<Import, String> {
             tool_changer: None,
             timing: None,
             notes: vec!["Imported from post templates only: no travels or spindle limits.".into()],
+            cut_direction: None,
             post,
         };
         p.validate()?;
@@ -1653,6 +1658,7 @@ fn fusion_machine(v: &Value, stem: &str) -> Result<Import, String> {
         }),
         timing: None,
         notes: notes.clone(),
+        cut_direction: None,
         post,
     };
     let mut p = p;

@@ -395,6 +395,11 @@ pub fn registry() -> Vec<OperationType> {
                 p("depth", "number", "mm", "Depth below the top.").min(0.01),
                 p("top", "number", "mm", "Top (default: stock top).").opt(Value::Null),
                 p("step_down", "number", "mm", "Depth per pass.").min(0.01),
+                p("direction", "choice", "", "Climb (the usual on a rigid machine) or conventional milling, spindle clockwise; new operations take the machine's preference.").choices(&["climb", "conventional"]).opt(json!("climb")),
+                p("tabs", "integer", "", "Tabs left to hold the part (0: none), evenly round the outline.").opt(json!(0)).min(0.0).max(64.0),
+                p("tab_at", "numbers", "", "Tabs placed by hand (a click on the outline in the 3D view): each a fraction of the way round the outline as written, so it stays put when replanned or the model is replaced.").opt(json!([])),
+                p("tab_width", "number", "mm", "Length of each tab along the outline.").opt(json!(4.0)).min(0.1),
+                p("tab_height", "number", "mm", "Height of each tab above the bottom of the cut.").opt(json!(1.0)).min(0.05),
                 feed(),
                 plunge(),
                 smoothing(),
@@ -575,9 +580,10 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
                 });
                 pairs && a.len() >= if p.name == "path" { 3 } else { 1 }
             }),
+            // (an optional list may be empty: none placed)
             "numbers" => v
                 .as_array()
-                .is_some_and(|a| !a.is_empty() && a.iter().all(Value::is_number)),
+                .is_some_and(|a| (!a.is_empty() || !p.required) && a.iter().all(Value::is_number)),
             "integers" => v
                 .as_array()
                 .is_some_and(|a| !a.is_empty() && a.iter().all(|x| x.is_i64())),
@@ -1056,6 +1062,12 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                     v.insert("side".into(), json!("outside"));
                     v.insert("depth".into(), json!(nice((0.3 * hz).max(0.5), 0.05)));
                     v.insert("step_down".into(), json!(depth));
+                    // the machine's preference (climb unless its profile says otherwise)
+                    let dir = cx
+                        .machine
+                        .and_then(|m| m.cut_direction.clone())
+                        .unwrap_or_else(|| "climb".into());
+                    v.insert("direction".into(), json!(dir));
                 }
                 _ => {
                     // over the part mesh, or the block

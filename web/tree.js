@@ -333,6 +333,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   function renderEditor() {
     // (after the form is drawn)
     queueMicrotask(previewDraft);
+    // placing tabs is for the contour selected
+    if (t.tabMode && opById(t.selected)?.type !== "contour") t.tabMode = false;
     const ed = $("opEditor");
     const op = t.selected && opById(t.selected);
     if (!op) {
@@ -395,6 +397,13 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const faces = op.geometry?.find((g) => g.kind === "faces");
     const ax = op.geometry?.find((g) => g.kind === "axial_range");
     if (op.type === "raster3d") html += `<div class="muted small" id="rasterInfo">${esc(rasterInfo(op))}</div>`;
+    // tabs placed by hand: a click on the outline adds one there, a click on one removes it
+    if (op.type === "contour" && !(t.draft && t.draft.op.id === op.id)) {
+      const n = op.tab_at?.length || 0;
+      html += `<div class="row small"><button type="button" id="placeTabs" title="Click on the outline in the 3D view to add a tab there (on a tab: remove it)">${t.tabMode ? "Done placing tabs" : "Place tabs on the model"}</button>
+        <span id="tabInfo" class="muted">${n ? `${n} tab${n > 1 ? "s" : ""} placed` : "no tabs placed"}${op.tabs ? `, ${op.tabs} evenly round` : ""}${t.tabMode ? " · click the outline" : ""}</span>
+        ${n ? '<button type="button" id="clearTabs">Clear</button>' : ""}</div>`;
+    }
     const mode = pickModeOf(ty);
     if (mode) {
       const pk = t.picking ? t.pick : null;
@@ -912,6 +921,15 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (el.id === "geomClear") return removeUse(null);
     if (el.dataset?.ungeom != null) return removeUse(Number(el.dataset.ungeom));
     if (el.id === "pickFaces") return t.picking ? stopPicking() : startPicking();
+    if (el.id === "placeTabs") {
+      t.tabMode = !t.tabMode;
+      return renderEditor();
+    }
+    if (el.id === "clearTabs") {
+      const op = setup()?.operations.find((o) => o.id === t.selected);
+      if (op) delete op.tab_at;
+      return commit();
+    }
     if (el.id === "pickSimilar") return pickSimilar();
     if (el.id === "boreInstead") return boreInstead();
     if (el.dataset?.unpick && t.pick) {
@@ -1291,11 +1309,65 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     hoverAt(ev.clientX - r.left, ev.clientY - r.top);
   });
   host.addEventListener("click", (ev) => {
-    if (!t.picking) return;
+    if (!t.picking && !t.tabMode) return;
     if (down && Math.hypot(ev.clientX - down[0], ev.clientY - down[1]) > 4) return;
     const r = state.three.renderer.domElement.getBoundingClientRect();
+    if (t.tabMode) return tabAt(ev.clientX - r.left, ev.clientY - r.top);
     pickAt(ev.clientX - r.left, ev.clientY - r.top);
   });
+
+  /** A closed outline's length, and the fraction of the way round it nearest `q` (and how
+   *  far `q` is from it). */
+  function outlineFraction(path, q) {
+    const n = path.length;
+    let total = 0, best = Infinity, at = 0;
+    for (let i = 0; i < n; i++) {
+      const a = path[i], b = path[(i + 1) % n];
+      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy, l = Math.sqrt(l2);
+      const u = l2 > 0 ? Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2)) : 0;
+      const d = Math.hypot(a[0] + dx * u - q[0], a[1] + dy * u - q[1]);
+      if (d < best) {
+        best = d;
+        at = total + u * l;
+      }
+      total += l;
+    }
+    return { f: total > 0 ? at / total : 0, total, dist: best };
+  }
+
+  /** Tabs placed by hand: the click's point on the cut's top (a horizontal plane) to the
+   *  nearest place on the operation's outline; a tab there within 3 mm is removed, else one is
+   *  added (kept as a fraction of the way round the outline as written). */
+  async function tabAt(px, py) {
+    const v = state.three;
+    const op = setup()?.operations.find((o) => o.id === t.selected);
+    if (!v || v.failed || op?.type !== "contour") return null;
+    const path = op.regions?.length ? op.regions[0].path : op.path;
+    if (!path || path.length < 3) return null;
+    const el = v.renderer.domElement;
+    const ndc = new v.THREE.Vector2((px / el.clientWidth) * 2 - 1, -(py / el.clientHeight) * 2 + 1);
+    const ray = new v.THREE.Raycaster();
+    ray.setFromCamera(ndc, v.camera);
+    const sb = state.job?.stock_box || (setup()?.stock?.shape === "box" ? setup().stock : null);
+    const z = op.top ?? sb?.max?.[2] ?? 0;
+    const hit = new v.THREE.Vector3();
+    if (!ray.ray.intersectPlane(new v.THREE.Plane(new v.THREE.Vector3(0, 0, 1), -z), hit)) return null;
+    const { f, total, dist } = outlineFraction(path, [hit.x, hit.y]);
+    // too far from the outline: not a tab
+    if (dist > Math.max(5, 2 * (op.tab_width || 4))) {
+      t.tabNote = "not on the outline";
+      renderEditor();
+      return { f: null };
+    }
+    const tabs = [...(op.tab_at || [])];
+    const near = tabs.findIndex((g) => Math.min(Math.abs(g - f), 1 - Math.abs(g - f)) * total < 3);
+    if (near >= 0) tabs.splice(near, 1);
+    else tabs.push(Math.round(f * 1e5) / 1e5);
+    if (tabs.length) op.tab_at = tabs.sort((a, b) => a - b);
+    else delete op.tab_at;
+    await commit();
+    return { f, removed: near >= 0, tabs: op.tab_at || [] };
+  }
 
   /** A new project: stop picking without writing anything, drop the face regions and the
    *  pick highlight, and forget the selection and any unsaved new operation. */
@@ -1339,5 +1411,5 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
   }
 
-  return { refresh, pickAt, pickSimilar, reset, renderEyes, renderStates, changeType, moveOp, nudge, state: t };
+  return { refresh, pickAt, tabAt, pickSimilar, reset, renderEyes, renderStates, changeType, moveOp, nudge, state: t };
 }

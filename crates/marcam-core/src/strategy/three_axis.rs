@@ -365,25 +365,210 @@ pub fn contour(
     } {
         src.pop();
     }
-    let path = match op.side.as_str() {
+    // (the outline as written: where tabs placed by hand are measured along)
+    let src0 = src.clone();
+    let mut path = match op.side.as_str() {
         "outside" => offset_polygon(&src, r),
         "inside" => offset_polygon(&src, -r),
         _ => src,
     };
+    // Climb milling, spindle clockwise, keeps the material on the tool's right: round an
+    // outline (outside, or on it) counter-clockwise, round a hole clockwise. Conventional:
+    // the other way.
+    let area: f64 = (0..path.len())
+        .map(|i| {
+            let (a, b) = (path[i], path[(i + 1) % path.len()]);
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum();
+    let climb = op.direction.as_deref() != Some("conventional");
+    let want_ccw = (op.side != "inside") == climb;
+    if (area > 0.0) != want_ccw {
+        path.reverse();
+    }
     let top = op.top.unwrap_or(stock.max[2]);
-    b.comment("--- contour ---");
-    for z in levels(top, top - op.depth, op.step_down) {
+    let bottom = top - op.depth;
+    // tabs: the last levels go over them, at the tab's top, for the tab's length plus the tool
+    let tab_top = bottom + op.tab_height;
+    let mut tabs = tab_spans(&path, op.tabs, op.tab_width + d);
+    tabs.extend(placed_spans(&src0, &path, &op.tab_at, op.tab_width + d));
+    let mut zs = levels(top, bottom, op.step_down);
+    if !tabs.is_empty() && tab_top < top && !zs.iter().any(|z| (z - tab_top).abs() < 1e-6) {
+        // a level at the tabs' top, so the cut above them is a whole one
+        zs.push(tab_top);
+        zs.sort_by(|a, b| b.total_cmp(a));
+    }
+    b.comment(if tabs.is_empty() {
+        "--- contour ---"
+    } else {
+        "--- contour (with tabs) ---"
+    });
+    for z in zs {
         if crate::budget::over() {
             break;
         }
         let [x, y] = path[0];
         enter(b, safe, x, y, z + op.step_down.max(0.5), z, op.plunge_feed);
-        for p in path.iter().skip(1).chain(std::iter::once(&path[0])) {
-            b.line3(p[0], p[1], z, UP, op.feed);
+        if z >= tab_top - 1e-9 || tabs.is_empty() {
+            for p in path.iter().skip(1).chain(std::iter::once(&path[0])) {
+                b.line3(p[0], p[1], z, UP, op.feed);
+            }
+        } else {
+            contour_with_tabs(b, &path, &tabs, z, tab_top, op);
         }
         leave(b, safe);
     }
     Ok(())
+}
+
+/// Where tabs go along a closed path: `n` spans of `len` (arc length from the path's first
+/// point), evenly spaced, each centred half a spacing in (none when the path is too short).
+fn tab_spans(path: &[[f64; 2]], n: u32, len: f64) -> Vec<(f64, f64)> {
+    if n == 0 || path.len() < 2 {
+        return Vec::new();
+    }
+    let total: f64 = (0..path.len())
+        .map(|i| {
+            let (a, b) = (path[i], path[(i + 1) % path.len()]);
+            (b[0] - a[0]).hypot(b[1] - a[1])
+        })
+        .sum();
+    let gap = total / n as f64;
+    if len >= gap * 0.8 {
+        return Vec::new();
+    }
+    (0..n)
+        .map(|k| {
+            let c = gap * (k as f64 + 0.5);
+            (c - len / 2.0, c + len / 2.0)
+        })
+        .collect()
+}
+
+/// Arc length along a closed path to its point nearest `q`.
+fn arc_of(path: &[[f64; 2]], q: [f64; 2]) -> f64 {
+    let n = path.len();
+    let (mut best, mut at, mut s) = (f64::INFINITY, 0.0, 0.0);
+    for i in 0..n {
+        let (a, b) = (path[i], path[(i + 1) % n]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 > 0.0 {
+            (((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let p = [a[0] + dx * t, a[1] + dy * t];
+        let d = (p[0] - q[0]).hypot(p[1] - q[1]);
+        if d < best {
+            best = d;
+            at = s + t * l2.sqrt();
+        }
+        s += l2.sqrt();
+    }
+    at
+}
+
+/// The point a fraction `f` of the way round a closed path from its first point.
+fn point_at(path: &[[f64; 2]], f: f64) -> [f64; 2] {
+    let n = path.len();
+    let len = |i: usize| {
+        let (a, b) = (path[i], path[(i + 1) % n]);
+        (b[0] - a[0]).hypot(b[1] - a[1])
+    };
+    let total: f64 = (0..n).map(len).sum();
+    let mut want = f.rem_euclid(1.0) * total;
+    for i in 0..n {
+        let l = len(i);
+        if want <= l || i + 1 == n {
+            let (a, b) = (path[i], path[(i + 1) % n]);
+            let t = if l > 0.0 { (want / l).min(1.0) } else { 0.0 };
+            return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        }
+        want -= l;
+    }
+    path[0]
+}
+
+/// Tabs placed by hand (`at`: fractions of the outline `src` as written) as spans of `len`
+/// along the tool's `path`: each where the path passes nearest its point on the outline. A
+/// span across the path's start is split in two.
+fn placed_spans(src: &[[f64; 2]], path: &[[f64; 2]], at: &[f64], len: f64) -> Vec<(f64, f64)> {
+    if src.len() < 2 || path.len() < 2 {
+        return Vec::new();
+    }
+    let total: f64 = (0..path.len())
+        .map(|i| {
+            let (a, b) = (path[i], path[(i + 1) % path.len()]);
+            (b[0] - a[0]).hypot(b[1] - a[1])
+        })
+        .sum();
+    let mut out = Vec::new();
+    for &f in at {
+        let c = arc_of(path, point_at(src, f));
+        let (a, e) = (c - len / 2.0, c + len / 2.0);
+        if a < 0.0 {
+            out.push((a + total, total));
+            out.push((0.0, e));
+        } else if e > total {
+            out.push((a, total));
+            out.push((0.0, e - total));
+        } else {
+            out.push((a, e));
+        }
+    }
+    out
+}
+
+/// One pass round `path` at `z`, rising to `tab_top` over each tab span (straight up and
+/// down at the span's ends).
+fn contour_with_tabs(
+    b: &mut Builder,
+    path: &[[f64; 2]],
+    tabs: &[(f64, f64)],
+    z: f64,
+    tab_top: f64,
+    op: &Contour,
+) {
+    let n = path.len();
+    let mut s = 0.0;
+    let on_tab = |s: f64| tabs.iter().any(|&(a, e)| s > a + 1e-9 && s < e - 1e-9);
+    for i in 0..n {
+        let (a, c) = (path[i], path[(i + 1) % n]);
+        let l = (c[0] - a[0]).hypot(c[1] - a[1]);
+        if l < 1e-12 {
+            continue;
+        }
+        // the segment's breakpoints: its tab starts and ends
+        let mut cuts: Vec<f64> = tabs
+            .iter()
+            .flat_map(|&(t0, t1)| [t0, t1])
+            .filter(|&t| t > s && t < s + l)
+            .collect();
+        cuts.push(s + l);
+        let mut at = s;
+        for t in cuts {
+            let mid = 0.5 * (at + t);
+            let zz = if on_tab(mid) { tab_top } else { z };
+            let f = (t - s) / l;
+            let p = [a[0] + (c[0] - a[0]) * f, a[1] + (c[1] - a[1]) * f];
+            // up or down at a tab's end, where the height changes: straight
+            let fa = (at - s) / l;
+            let pa = [a[0] + (c[0] - a[0]) * fa, a[1] + (c[1] - a[1]) * fa];
+            b.line3(
+                pa[0],
+                pa[1],
+                zz,
+                UP,
+                if zz > z { op.feed } else { op.plunge_feed },
+            );
+            b.line3(p[0], p[1], zz, UP, op.feed);
+            at = t;
+        }
+        s += l;
+    }
+    // back down at the start, closed
+    b.line3(path[0][0], path[0][1], z, UP, op.plunge_feed);
 }
 
 /// Vertical drop-cutter over a mesh, with a simple XY bin index.

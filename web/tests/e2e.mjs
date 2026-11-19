@@ -440,7 +440,7 @@ try {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
     await waitFor(() => js(`!!document.getElementById('opForm') && !!window.__marcam.state.tree.draft && window.__marcam.state.tree.draft.op.type === '${kind}'`), `the ${kind} form`, 15000);
     // blank fields, but text whose registry default is "" (none: e.g. a V-carve's text)
-    const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '').map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
+    const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length)).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
     const before = await js("document.querySelectorAll('#tree .tree-op').length");
     await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${before + 1}`), `${kind} to be added`, 15000);
@@ -2284,6 +2284,51 @@ try {
       `mid ${mid}: ${JSON.stringify(withStock)}; ${JSON.stringify(remembered)}`);
     await js("document.getElementById('simClose').click(); true");
     await js("const s = document.getElementById('simSpeed'); s.value = '1'; s.dispatchEvent(new Event('input')); true");
+  }
+
+  // 8x. (Mar) contour tabs placed by hand: a click on the outline in the 3D view adds a tab
+  // there (kept as a fraction of the way round the outline), the toolpath leaves it; it
+  // stays put when the direction changes; a click on it removes it
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
+    const cid = (await doc()).setups[0].operations.find((o) => o.type === "contour").id;
+    await js(`document.querySelector('#tree .tree-op[data-op="${cid}"] [data-act="select"]').click(); true`);
+    await waitFor(() => js("!!document.getElementById('placeTabs')"), "the tab button", 15000);
+    await js("document.getElementById('placeTabs').click(); true");
+    await js("window.__marcam.setView('iso', {})");
+    // the outline's first side, 46 mm along its 184 (a quarter of the way round): (48, 2)
+    const at = await js(`(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(48, 1.5, -0.5).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
+    const added = await js(`await window.__marcam.tree.tabAt(${at[0]}, ${at[1]})`);
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate with a tab", 120000);
+    const gc = async () => js("window.__marcam.state.result.programs.map((p) => p.gcode).join('\\n')");
+    const g1 = await gc();
+    const placed = (await doc()).setups[0].operations.find((o) => o.id === cid).tab_at || [];
+    await shot("24a_contour_tab");
+    // conventional now: the tab where it was
+    await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); j.setups[0].operations.find((o) => o.id === '${cid}').direction = 'conventional'; t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate, conventional", 120000);
+    const kept = (await doc()).setups[0].operations.find((o) => o.id === cid).tab_at || [];
+    const g2 = await gc();
+    // the same click again: removed (the contour selected, if it is not still)
+    if ((await js("window.__marcam.state.tree.selected")) !== cid) await js(`document.querySelector('#tree .tree-op[data-op="${cid}"] [data-act="select"]').click(); true`);
+    await waitFor(() => js("!!document.getElementById('placeTabs')"), "the tab button again", 15000);
+    if (!(await js("window.__marcam.state.tree.tabMode"))) await js("document.getElementById('placeTabs').click(); true");
+    // (planning again refits the view: the point projected again)
+    await js("window.__marcam.setView('iso', {})");
+    const at2 = await js(`(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(48, 1.5, -0.5).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
+    const removed = await js(`await window.__marcam.tree.tabAt(${at2[0]}, ${at2[1]})`);
+    await settle();
+    const after = (await doc()).setups[0].operations.find((o) => o.id === cid).tab_at || [];
+    check("contour tabs placed by hand: a click on the outline adds one (a quarter of the way round), the toolpath leaves it, it stays put when the direction changes, a click on it removes it",
+      placed.length === 1 && Math.abs(placed[0] - 0.25) < 0.02 && /contour \(with tabs\)/.test(g1) && JSON.stringify(kept) === JSON.stringify(placed) && /contour \(with tabs\)/.test(g2) && g1 !== g2 && removed?.removed === true && after.length === 0,
+      `${JSON.stringify(added)} -> ${JSON.stringify(placed)}; kept ${JSON.stringify(kept)}; removed ${JSON.stringify(removed)} -> ${JSON.stringify(after)}`);
+    await js("window.__marcam.state.tree.tabMode = false; true");
   }
 
   // 9. phone width: layout stacks, no horizontal scroll

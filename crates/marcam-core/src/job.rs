@@ -507,6 +507,34 @@ pub struct Contour {
     /// Several outlines, each followed in turn (then `path`/`side`/`top`/`depth` are unused).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<Region>,
+    /// "climb" or "conventional" (spindle clockwise); None: climb. New operations take the
+    /// machine profile's `cut_direction`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    /// Tabs left holding the part (0: none): this many, evenly round the outline.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub tabs: u32,
+    /// Tabs placed by hand: where each one is, as a fraction (0 to 1) of the way round the
+    /// outline as written (`path`, from its first point), so it stays put when the operation
+    /// is planned again, its direction changes or the model is replaced. With `tabs` both.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tab_at: Vec<f64>,
+    /// Each tab's length along the outline (mm, the material left).
+    #[serde(default = "default_tab_width")]
+    pub tab_width: f64,
+    /// Each tab's height above the bottom of the cut (mm).
+    #[serde(default = "default_tab_height")]
+    pub tab_height: f64,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+fn default_tab_width() -> f64 {
+    4.0
+}
+fn default_tab_height() -> f64 {
+    1.0
 }
 
 /// 3-axis: drop-cutter raster over the part mesh (passes along X, stepping in Y), cut in
