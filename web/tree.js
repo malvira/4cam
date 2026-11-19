@@ -55,6 +55,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   /** Write the project back to the editor and refresh everything that depends on it. */
   async function commit(opts = {}) {
+    // (what Edit > Undo will say it undoes)
+    if (opts.label) window.__marcam.project?.nameEdit?.(opts.label);
     writeJob(t.doc, opts);
     await refresh();
     onChange?.();
@@ -839,7 +841,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (!out) s.outputs.push((out = { name: `${s.id}_${id}`, title: typeOf(type)?.title || type, operations: [] }));
       out.operations.push(id);
       t.selected = id;
-      await commit();
+      await commit({ label: `Added ${id}.` });
       if (filled.notes.length) showError(filled.notes.join("; "));
     } catch (e) {
       showError(`Cannot add ${type}: ${e.message}`);
@@ -912,7 +914,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         if (used.has("knob_1_profile") || used.has("knob_2_knurl")) Object.assign(params, { turn_output: `${s.id}_turn`, knurl_output: `${s.id}_knurl` });
         const { result } = await engine("wizardKnurl", doc, params, state.mesh);
         t.doc = result.project;
-        await commit();
+        await commit({ label: "Added the knurling." });
       } catch (e) {
         showError(e.message);
       }
@@ -978,7 +980,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       for (const o of s.outputs) o.operations = o.operations.filter((x) => x !== id);
       s.outputs = s.outputs.filter((o) => o.operations.length);
       if (t.selected === id) t.selected = null;
-      await commit();
+      await commit({ label: `Deleted ${id}.` });
     }
   });
   // ------------------------------------------------------------ reordering
@@ -1250,9 +1252,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       // a colour is for the eye only: saved, but the toolpaths stay as they are
       op.color = el.value;
       if (pend) pend.color = el.value;
-      return commit({ display: true });
+      return commit({ display: true, label: `Changed the colour of ${op.id}.` });
     }
-    await commit();
+    await commit({ label: el.dataset.act === "enable" ? `${el.checked ? "Enabled" : "Disabled"} ${op.id}.` : `Edited ${op.id}.` });
   });
   // a field of the operation being added: its preview again
   $("tree").addEventListener("input", (ev) => {
@@ -1263,6 +1265,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const op = readForm();
     const doc = structuredClone(t.doc);
     const s = doc.setups.find((x) => x.id === t.setup);
+    const isNew = !!(t.draft && t.draft.op.id === op.id);
     if (t.draft && t.draft.op.id === op.id) {
       s.operations.push(op);
       let outName = t.draft.out;
@@ -1290,7 +1293,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (t.picking) endPicking(false);
       const display = !!t.displayOnly;
       t.displayOnly = false;
-      await commit({ display });
+      await commit({ display, label: `${isNew ? "Added" : "Edited"} ${op.id}.` });
     } catch (e) {
       const box = $("opErrors");
       box.textContent = e.message.replace(/^project 0\.2: /, "");
@@ -1365,7 +1368,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     else tabs.push(Math.round(f * 1e5) / 1e5);
     if (tabs.length) op.tab_at = tabs.sort((a, b) => a - b);
     else delete op.tab_at;
-    await commit();
+    await commit({ label: `Changed the tabs of ${op.id}.` });
     return { f, removed: near >= 0, tabs: op.tab_at || [] };
   }
 

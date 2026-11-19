@@ -166,7 +166,9 @@ function readJob() {
  *  a project being opened or reset. */
 function writeJob(job, opts = {}) {
   $("job").value = JSON.stringify(job, null, 2);
-  if (!opts.load) window.__marcam.project?.changed({ stale: !opts.display });
+  // (an opened project: the undo history starts here)
+  if (opts.load) window.__marcam.project?.resetHistory?.();
+  else window.__marcam.project?.changed({ stale: !opts.display });
 }
 
 /** The Generate button asks for attention when the results are out of date or missing. */
@@ -600,6 +602,7 @@ function setMesh(bytes, name, source = null) {
   state.mesh = bytes;
   state.meshName = name;
   state.meshSource = source;
+  window.__marcam.project?.meshSet?.();
   $("meshInfo").textContent = bytes ? `${name}: ${(bytes.length / 1024).toFixed(0)} KiB` : "No mesh loaded";
 }
 
@@ -1548,7 +1551,22 @@ $("loadExample").addEventListener("click", () => {
     setStatus("Loading failed", "error");
   });
 });
-$("job").addEventListener("input", () => window.__marcam.project.changed());
+$("job").addEventListener("input", () => window.__marcam.project.changed({ typing: true }));
+// Edit > Undo / Redo, and their keys (not inside a field or an open dialog: those keep the
+// browser's own undo of the text being typed)
+$("menuUndo").addEventListener("click", () => window.__marcam.project.undo());
+$("menuRedo").addEventListener("click", () => window.__marcam.project.redo());
+document.addEventListener("keydown", (ev) => {
+  if (!(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
+  const k = ev.key.toLowerCase();
+  const which = k === "z" ? (ev.shiftKey ? "redo" : "undo") : k === "y" && !ev.shiftKey ? "redo" : null;
+  if (!which) return;
+  const t = ev.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  if (document.querySelector("dialog[open]")) return;
+  ev.preventDefault();
+  window.__marcam.project[which]();
+});
 $("summary").addEventListener("click", (ev) => {
   if (ev.target.id === "staleRegen") generate();
   if (ev.target.dataset?.empty === "import") $("importStl").click();

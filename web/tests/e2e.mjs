@@ -2464,6 +2464,60 @@ try {
       `${JSON.stringify(t1.cutting)}; library: ${lib}; pocket ${d}, face ${face}`);
   }
 
+  // 8y. (Mar) undo and redo for every edit: Edit > Undo / Redo and Ctrl+Z / Ctrl+Shift+Z
+  // (Ctrl+Y); typing in the JSON is one step; the keys in a field are the field's own
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const text = () => js("document.getElementById('job').value");
+    const base = await text();
+    const h0 = await js("({ undo: window.__marcam.state.history.undo.length, disabled: document.getElementById('menuUndo').disabled })");
+    // 1. typing: two changes in a row, one step
+    for (const f of [0.9, 0.8]) {
+      await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); const o = j.setups[0].operations[0]; o.feed = Math.round(o.feed * ${f}); t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+      await sleep(100);
+    }
+    await settle();
+    // 2. an operation switched off, 3. one deleted (in the tree)
+    const off = await js("(() => { const r = [...document.querySelectorAll('#tree .tree-op')].find((x) => x.querySelector('[data-act=\"enable\"]')); r.querySelector('[data-act=\"enable\"]').click(); return r.dataset.op; })()");
+    await settle();
+    cdp.dialogAnswer = true;
+    const del = await js("(() => { const r = [...document.querySelectorAll('#tree .tree-op')].reverse().find((x) => x.querySelector('[data-act=\"delete\"]')); r.querySelector('[data-act=\"delete\"]').click(); return r.dataset.op; })()");
+    await settle();
+    const final = await text();
+    const h1 = await js("({ undo: window.__marcam.state.history.undo.length, title: document.getElementById('menuUndo').title, ops: JSON.parse(document.getElementById('job').value).setups[0].operations.length })");
+    const key = (k, shift = false, target = "document.body") => js(`${target}.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', ctrlKey: true, shiftKey: ${shift}, bubbles: true, cancelable: true })); true`);
+    // the key in the JSON field: the field's own undo, not the project's
+    await key("z", false, "document.getElementById('job')");
+    await settle();
+    const inField = (await text()) === final;
+    const states = [];
+    for (let k = 0; k < 3; k++) {
+      await key("z");
+      await settle();
+      states.push(await text());
+    }
+    const back = { atBase: states[2] === base, distinct: new Set(states).size === 3, disabled: await js("document.getElementById('menuUndo').disabled"), status: await js("document.getElementById('status').textContent") };
+    await shot("27a_undone");
+    // redo: Ctrl+Shift+Z twice, Edit > Redo once
+    await key("z", true);
+    await settle();
+    await key("y");
+    await settle();
+    await js("document.getElementById('menuRedo').click(); true");
+    await settle();
+    const fwd = { atFinal: (await text()) === final, redoDisabled: await js("document.getElementById('menuRedo').disabled") };
+    // an edit after an undo: the redo is gone
+    await js("document.getElementById('menuUndo').click(); true");
+    await settle();
+    await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); j.setups[0].operations[0].feed += 1; t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await settle();
+    const redoGone = await js("document.getElementById('menuRedo').disabled");
+    check("undo and redo: every edit (typing as one step, an operation switched off, one deleted) undone by Ctrl+Z back to the project as opened, redone by Ctrl+Shift+Z, Ctrl+Y and Edit > Redo; not in a field; a new edit drops the redo",
+      h0.undo === 0 && h0.disabled && h1.undo === 3 && /Undo/.test(h1.title) && inField && back.atBase && back.distinct && back.disabled && /Undone/.test(back.status) && fwd.atFinal && fwd.redoDisabled && redoGone,
+      `${JSON.stringify(h0)} ${JSON.stringify(h1)} off ${off}, deleted ${del}; in field ${inField}; ${JSON.stringify(back)}; ${JSON.stringify(fwd)}; redo gone ${redoGone}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

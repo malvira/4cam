@@ -225,7 +225,7 @@ const slug = (s) => (String(s).toLowerCase().replace(/\.[a-z0-9]+$/, "").replace
 
 export function setupProject(ctx) {
   const { $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, resetProject, machineArg, currentMachine } = ctx;
-  const p = { name: "untitled", dirty: false, fileName: null, pending: null, undo: null };
+  const p = { name: "untitled", dirty: false, fileName: null, pending: null };
   state.project = p;
   const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS });
 
@@ -237,7 +237,8 @@ export function setupProject(ctx) {
   }
   /** Something in the project changed: unsaved, and (unless `stale: false`, a colour or a
    *  name) any results are out of date. Nothing is planned here (see auto-regenerate). */
-  function changed({ stale = true } = {}) {
+  function changed({ stale = true, typing = false } = {}) {
+    record({ typing });
     p.dirty = true;
     show();
     if (stale) ctx.markStale();
@@ -253,27 +254,115 @@ export function setupProject(ctx) {
   }
   const engineMachine = () => (typeof machineArg() === "string" && machineArg() !== "custom" ? machineArg() : null);
 
-  // ------------------------------------------------------------ undo (setup changes)
-  /** Offer to undo a setup change: `job` is the project text from before it. */
+  // ------------------------------------------------------------ undo and redo
+  // Every edit of the project (its text, and the part's mesh with it) is kept: Edit > Undo
+  // (Ctrl+Z) goes back one, Redo (Ctrl+Shift+Z, Ctrl+Y) forward again. A snapshot is taken
+  // as each change lands (typing in the JSON within a second is one step); what the view
+  // shows (the eyes, the camera, a selection) is not an edit. Opening or starting a project
+  // forgets the history.
+  const TYPING_MS = 1000;
+  const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const h = { undo: [], redo: [], cur: null, loading: true, restoring: false, typingAt: 0, label: null };
+  const snap = () => ({ text: $("job").value, mesh: state.mesh, meshName: state.meshName, meshSource: state.meshSource });
+  state.history = h;
+  /** A project opened, made or reset: no history, this is where it starts. */
+  function resetHistory() {
+    Object.assign(h, { undo: [], redo: [], cur: snap(), loading: true, typingAt: 0, label: null });
+    // (where it starts: what undoing everything comes back to)
+    h.base = h.cur;
+    renderHistory();
+  }
+  /** The mesh set while a project is being opened is part of where the history starts. */
+  function meshSet() {
+    if (h.loading && !h.restoring && h.cur) Object.assign(h.cur, { mesh: state.mesh, meshName: state.meshName, meshSource: state.meshSource });
+  }
+  /** An edit is about to change the mesh (before the text): the snapshot keeps the old one. */
+  function checkpoint() {
+    h.loading = false;
+  }
+  function record({ typing = false } = {}) {
+    if (h.restoring) return;
+    if (!h.cur) h.cur = snap();
+    h.loading = false;
+    const now = snap();
+    if (now.text === h.cur.text && now.mesh === h.cur.mesh) {
+      // (nothing changed: the name was for nothing)
+      h.label = null;
+      return;
+    }
+    const t = performance.now();
+    const merge = typing && h.typingAt && t - h.typingAt < TYPING_MS && h.undo.length && !h.redo.length;
+    if (!merge) h.undo.push({ ...h.cur, label: h.label || (typing ? "Edited the JSON." : "") });
+    h.label = null;
+    h.typingAt = typing ? t : 0;
+    h.redo = [];
+    h.cur = now;
+    renderHistory();
+  }
+  /** Name the change just made (or about to be): `job` is the project text from before it. */
   function keepUndo(label, job) {
-    p.undo = { label, job, mesh: state.mesh, meshName: state.meshName, meshSource: state.meshSource };
-    $("undoBar").innerHTML = `${label} <button type="button" id="undoSetup">Undo</button>`;
+    h.loading = false;
+    const top = h.undo[h.undo.length - 1];
+    if (job === h.cur?.text) h.label = label;
+    else if (top && top.text === job) top.label = label;
+    else {
+      h.undo.push({ ...h.cur, text: job, label });
+      h.redo = [];
+    }
+    $("undoBar").innerHTML = `${esc(label)} <button type="button" id="undoSetup">Undo</button>`;
     $("undoBar").classList.remove("hidden");
+    renderHistory();
+  }
+  /** Name the edit about to be written (Edit > Undo says it). */
+  function nameEdit(label) {
+    h.label = label;
   }
   function dropUndo() {
-    p.undo = null;
     $("undoBar").classList.add("hidden");
   }
-  async function undo() {
-    const u = p.undo;
-    if (!u) return;
-    setStatus(`Undoing: ${u.label}`, "busy");
-    dropUndo();
-    writeJob(JSON.parse(u.job));
-    setMesh(u.mesh, u.meshName, u.meshSource);
-    await refreshAll();
-    setStatus(`Undone: ${u.label} Generate to see it again.`, "ready");
+  function renderHistory() {
+    const u = h.undo[h.undo.length - 1];
+    const r = h.redo[h.redo.length - 1];
+    const set = (id, on, what) => {
+      const b = $(id);
+      if (!b) return;
+      b.disabled = !on;
+      b.title = on ? what : "Nothing to " + id.slice(4).toLowerCase();
+    };
+    set("menuUndo", !!u, `Undo${u?.label ? `: ${u.label}` : " the last edit"} (Ctrl+Z)`);
+    set("menuRedo", !!r, `Redo${r?.label ? `: ${r.label}` : " the edit undone"} (Ctrl+Shift+Z)`);
   }
+  /** The project as it was in `e` (text and mesh), without recording it as an edit. */
+  async function restore(e) {
+    h.restoring = true;
+    try {
+      $("job").value = e.text;
+      setMesh(e.mesh, e.meshName, e.meshSource);
+      changed();
+    } finally {
+      h.restoring = false;
+    }
+    h.cur = snap();
+    h.typingAt = 0;
+    renderHistory();
+    await refreshAll();
+  }
+  async function step(from, to, verb) {
+    // (an edit not seen yet, such as typing: kept first)
+    if (h.cur && $("job").value !== h.cur.text) record();
+    const e = from.pop();
+    if (!e) return false;
+    to.push({ ...h.cur, label: e.label });
+    dropUndo();
+    await restore(e);
+    const auto = $("autoGen")?.checked;
+    setStatus(`${verb}${e.label ? `: ${e.label}` : "."}${auto ? "" : " Generate to see it again."}`, "ready");
+    return true;
+  }
+  /** Back one edit (false: nothing to undo). */
+  const undo = () => step(h.undo, h.redo, "Undone");
+  /** Forward one undone edit. */
+  const redo = () => step(h.redo, h.undo, "Redone");
 
   // ------------------------------------------------------------ new, open, save
   async function newProject() {
@@ -581,6 +670,7 @@ export function setupProject(ctx) {
     const meshFile = `${slug(cfg.file.name)}.${step ? "step" : "stl"}`;
     const bytes = step ? step.stl : encodeStl(tris, `marcam: ${cfg.file.name}`);
     const what = step ? partSummary({ tris, step }) : `${cfg.ascii ? "ASCII" : "binary"} STL${cfg.units === "inch" ? ", inch" : ""}, ${tris.length / 9} triangles`;
+    checkpoint();
     setMesh(bytes, `${cfg.file.name} (${what})`, step ? { name: meshFile, bytes: step.bytes } : null);
     let report;
     if (fresh) {
@@ -865,5 +955,5 @@ export function setupProject(ctx) {
     if (f) await replaceModel(f);
   });
 
-  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, dropUndo, keepUndo, dialog, state: p };
+  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, redo, dropUndo, keepUndo, nameEdit, resetHistory, meshSet, history: h, dialog, state: p };
 }

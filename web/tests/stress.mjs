@@ -454,6 +454,41 @@ const A = {
     await settle(400);
     return "undo";
   },
+  // Edit > Undo / Redo by their keys (on the page, not in a field)
+  async histUndo() {
+    if (!(await js("window.__marcam.state.history.undo.length > 0 && !document.querySelector('dialog[open]')"))) return null;
+    await js("document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true })); true");
+    await settle(400);
+    return "Ctrl+Z";
+  },
+  async histRedo() {
+    if (!(await js("window.__marcam.state.history.redo.length > 0 && !document.querySelector('dialog[open]')"))) return null;
+    await js("document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true })); true");
+    await settle(400);
+    return "Ctrl+Shift+Z";
+  },
+  /** Undo everything: the project as it was opened (its text and its mesh); redo
+   *  everything: the newest project the history holds. */
+  async historyRoundTrip() {
+    const r = await js(`await (async () => {
+      const pr = window.__marcam.project, h = window.__marcam.state.history, st = window.__marcam.state;
+      // (redone first, what is still to redo: the newest state the history holds)
+      while (await pr.redo());
+      const final = { text: document.getElementById('job').value, mesh: st.mesh };
+      let n = 0, m = 0;
+      while (await pr.undo()) n++;
+      const back = { text: document.getElementById('job').value === h.base.text, mesh: st.mesh === h.base.mesh };
+      while (await pr.redo()) m++;
+      const fwd = { text: document.getElementById('job').value === final.text, mesh: st.mesh === final.mesh };
+      return { n, m, back, fwd };
+    })()`);
+    await settle(400);
+    const extra = [];
+    if (!r.back.text || !r.back.mesh) extra.push(`undo all (${r.n}): not the project as opened (text ${r.back.text}, mesh ${r.back.mesh})`);
+    if (!r.fwd.text || !r.fwd.mesh) extra.push(`redo all (${r.m}): not the final project (text ${r.fwd.text}, mesh ${r.fwd.mesh})`);
+    if (r.n !== r.m) extra.push(`${r.n} undone but ${r.m} redone`);
+    return { log: `undo all (${r.n}), redo all (${r.m})`, extra };
+  },
   async generate() {
     // (disabled while an update after the edits plans: waited for, a while)
     await waitFor(() => js("!document.getElementById('generate').disabled || document.body.dataset.state !== 'busy'"), "Replan all", 120000).catch(() => {});
@@ -481,7 +516,7 @@ const A = {
 // the monkey's choice of action, weighted
 const WEIGHTS = [
   ["loadExample", 3], ["importStl", 2], ["addOp", 8], ["apply", 8], ["changeType", 6], ["editParam", 6], ["changeTool", 3], ["addLibraryTool", 1],
-  ["pick", 5], ["ungeom", 2], ["select", 6], ["move", 2], ["nudge", 2], ["enable", 3], ["eye", 2], ["delete", 3], ["cancel", 2], ["undo", 1],
+  ["pick", 5], ["ungeom", 2], ["select", 6], ["move", 2], ["nudge", 2], ["enable", 3], ["eye", 2], ["delete", 3], ["cancel", 2], ["undo", 1], ["histUndo", 3], ["histRedo", 2],
   ["generate", 4], ["saveReopen", 2], ["replaceModel", 2],
 ];
 function rng(seed) {
@@ -763,6 +798,8 @@ try {
       const r = rng(seed);
       const steps = [() => A.loadExample(r)];
       for (let k = 0; k < STEPS; k++) steps.push(() => act(r.pick(table), r));
+      // the history: undo all gives the project as opened, redo all the final one
+      steps.push(() => A.historyRoundTrip());
       try {
         const log = await run(`monkey seed ${seed}`, steps);
         report(`monkey seed ${seed}`, true, `${log.length} actions`);
