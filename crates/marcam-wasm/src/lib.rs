@@ -424,7 +424,14 @@ pub mod api {
     /// Simulate all programs in order. `opts`: `{"dx": mm, "na": cells}` (default 0.1, 360).
     /// Returns the grid, the part map and the stock map after each program (radii, f32).
     pub fn simulate(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
-        let job = match job_any_mesh(job_json, &profiles::builtin_libraries(), mesh) {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        // (the person's libraries too: a project with one of their tools)
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match job_any_mesh(job_json, &libs, mesh) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -432,8 +439,6 @@ pub mod api {
             Ok(m) => m,
             Err(e) => return err(e),
         };
-        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
-            .unwrap_or(Value::Null);
         let (dx, na) = rotary_res(&opts);
         let tps = match plan_for_sim(&job, mesh.as_ref(), &opts) {
             Ok(t) => t,
@@ -484,7 +489,14 @@ pub mod api {
     /// Oriented mesh triangles (flattened xyz, f32) for display, thinned to about
     /// `max_triangles` (`opts`, default 200000).
     pub fn mesh_triangles(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
-        let job = match job_any_mesh(job_json, &profiles::builtin_libraries(), mesh) {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        // (a project with one of the person's tools reads only with their libraries)
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match job_any_mesh(job_json, &libs, mesh) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -493,8 +505,6 @@ pub mod api {
             Ok(None) => return err("no mesh given"),
             Err(e) => return err(e),
         };
-        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
-            .unwrap_or(Value::Null);
         let max = opts["max_triangles"].as_u64().unwrap_or(200_000).max(1) as usize;
         let stride = m.triangles.len().div_ceil(max).max(1);
         let tri: Vec<f32> = m

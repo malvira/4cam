@@ -23,14 +23,18 @@ try {
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------- engine (worker RPC)
-let worker = null;
+// Two workers, each with the engine: one plans and answers the editor (forms, picks, the
+// part), the other simulates (the batch simulation, the playback), so a simulation running
+// in the background never holds up an edit. A cancel ends the simulating one only.
+const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simClose", "gpuOpen", "gpuStats"]);
+const workers = { main: null, sim: null };
 let nextId = 1;
 const pending = new Map();
-/** The engine's worker: started at load, and again after a cancel (which ends the old one,
+/** A worker: started at load, and the simulating one again after a cancel (which ends it,
  *  with whatever it was doing: the only way to stop a call in WebAssembly). */
-function startWorker() {
-  worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
-  worker.onmessage = (ev) => {
+function startWorker(which = "main") {
+  const w = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+  w.onmessage = (ev) => {
     const { id, ok, result, error, ms } = ev.data;
     const p = pending.get(id);
     if (!p) return;
@@ -38,23 +42,25 @@ function startWorker() {
     simCallDone(p.cmd);
     ok ? p.resolve({ result, ms }) : p.reject(new Error(error));
   };
-  worker.onerror = (ev) => setStatus(`Engine failed to start: ${ev.message || "see console"}`, "error");
+  w.onerror = (ev) => setStatus(`Engine failed to start: ${ev.message || "see console"}`, "error");
+  workers[which] = w;
 }
-startWorker();
-/** Stop what the engine is doing (a long simulation): its worker is ended and a new one
- *  started; every call waiting on it fails with "cancelled". Its playback and plan cache go
- *  with it (they are made again when next needed). */
+startWorker("main");
+startWorker("sim");
+/** Stop what the engine is simulating (a long simulation): its worker is ended and a new
+ *  one started; every simulation call waiting on it fails with "cancelled". Its playback
+ *  goes with it (made again when next needed); planning goes on in the other. */
 function cancelEngine() {
   simLock.drop();
-  worker.terminate();
-  const waiting = [...pending.values()];
-  pending.clear();
+  workers.sim.terminate();
+  const waiting = [...pending.entries()].filter(([, p]) => p.worker === "sim");
+  for (const [id] of waiting) pending.delete(id);
   simRing.active = 0;
   showSimRing();
-  startWorker();
+  startWorker("sim");
   state.epoch = (state.epoch || 0) + 1;
   window.__marcam.machining?.lost?.();
-  for (const p of waiting) p.reject(new Error("cancelled"));
+  for (const [, p] of waiting) p.reject(new Error("cancelled"));
 }
 
 // ---- the simulation's progress: a ring in a corner of the 3D view while the engine
@@ -106,15 +112,18 @@ function showSimRing() {
 }
 /** Engine calls by command, since the page loaded (window.__marcam.calls). */
 const calls = {};
+const WITH_LIBRARIES = new Set(["opDefaults", "setMaterial", "simulate", "meshTriangles", "simGrid", "simOpen", "gpuOpen"]);
 function engine(cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
   // the person's tool libraries: their tools' cutting data for new operations' defaults
-  if ((cmd === "opDefaults" || cmd === "setMaterial") && args[1] && !args[1].libraries) args[1] = { ...args[1], libraries: libraries() };
+  // (and every command that reads the project: one of their tools is found in them)
+  if (WITH_LIBRARIES.has(cmd) && args[1] && typeof args[1] === "object" && !args[1].libraries) args[1] = { ...args[1], libraries: libraries() };
   const id = nextId++;
   simCallStart(cmd);
+  const which = SIM_WORKER.has(cmd) ? "sim" : "main";
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject, cmd });
-    worker.postMessage({ id, cmd, args });
+    pending.set(id, { resolve, reject, cmd, worker: which });
+    workers[which].postMessage({ id, cmd, args });
   });
 }
 
@@ -375,6 +384,9 @@ const NO_OPS = "No operations: add one in the project tree (or use a detected fe
  * undo and the mesh are cleared; the camera refits on the next project.
  */
 async function resetProject(msg, actions) {
+  // a simulation of the project going (the background one after a plan) is stopped: the
+  // engine works for the new one at once (its part drawn, its plan) instead of after it
+  if (simRing.active) cancelEngine();
   state.genRun = (state.genRun || 0) + 1;
   state.epoch = (state.epoch || 0) + 1;
   clearTimeout(autoTimer);
@@ -1354,8 +1366,16 @@ async function drawModel() {
       meshMat.side = THREE.DoubleSide; // a user's mesh may have inconsistent winding
       groups.part.add(new THREE.Mesh(g, meshMat));
       bounds = result.bounds;
-    } catch {
+    } catch (e) {
+      // the engine restarted under the draw (a cancel, a project opened meanwhile): drawn
+      // again once it is back, not left without its part
+      if (e?.message === "cancelled") {
+        if (v.modelKey === key) v.modelKey = null;
+        setTimeout(drawModel, 50);
+        return;
+      }
       // a mesh the engine cannot read: the stock alone
+      console.warn(`the part is not drawn: ${e?.message}`);
     }
   } else if (prof && prof.length > 1) {
     groups.part.add(new THREE.Mesh(toGeometry(THREE, revolveProfile(prof, 120)), partMat));
