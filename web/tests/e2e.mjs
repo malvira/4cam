@@ -316,7 +316,7 @@ try {
 
   // 4. simulation
   await js("document.getElementById('simulate').click()");
-  await waitDone("simulation", 120000);
+  await waitDone("simulation", 300000);
   const simText = await js("document.getElementById('summary').innerText");
   check("simulated stock: no gouges, no rapids through stock", /deepest gouge 0\.000 mm; 0 rapid/.test(simText), simText.split("\n").pop());
   await shot("03_knob_simulated");

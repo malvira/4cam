@@ -922,6 +922,16 @@ async function simulateLocked(opts = {}) {
     return;
   }
   // (in the background: the buttons and the status line are left to what the person does)
+  // the same simulation already done (in the background, after the plan): shown, not run again
+  const simKey = JSON.stringify([simOpts(), $("simGpu")?.checked]);
+  if (!opts.quiet && state.sim && state.simKey === simKey) {
+    selectTab(state.tab);
+    const s = state.sim.stocks[state.tab];
+    setStatus("Simulated (done in the background after the plan)", "done");
+    const hits = state.sim.stocks.reduce((n, st) => n + (st.collisions?.count || 0), 0);
+    if (s && (s.rapid_hits || s.gouge_cells || hits)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s), ${hits} holder/shank collision(s)`);
+    return;
+  }
   if (!opts.quiet) $("generate").disabled = $("simulate").disabled = true;
   const say = opts.quiet ? () => {} : setStatus;
   say("Simulating stock...", "busy");
@@ -948,6 +958,7 @@ async function simulateLocked(opts = {}) {
     showBackend(backend);
     result.stocks.forEach((st) => (st.hidden = hiddenPlanned().length));
     state.sim = result;
+    state.simKey = simKey;
     selectTab(state.tab);
     const s = result.stocks[state.tab];
     say(`Simulated in ${(ms / 1000).toFixed(1)} s`, "done");
