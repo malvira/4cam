@@ -200,7 +200,7 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
 }
 
 /// Operation fields the plugin does not offer: marcam's defaults apply.
-pub const LEFT_AT_DEFAULT: [&str; 2] = ["ramp_angle", "smoothing"];
+pub const LEFT_AT_DEFAULT: [&str; 3] = ["ramp_angle", "smoothing", "regions"];
 
 /// The package manifest (`plugin.json`), generated from the operation registry.
 pub fn manifest() -> Value {
