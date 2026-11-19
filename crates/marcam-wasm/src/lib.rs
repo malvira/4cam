@@ -90,7 +90,14 @@ pub mod api {
     /// The project's operations (ids, colours) the simulation plays: those not hidden
     /// (`opts.hide`, planning numbers), in order, so they line up with its operation list.
     fn visible_ops(ids: Vec<String>, colors: Vec<Option<String>>, opts: &Value) -> Value {
-        let hide: Vec<usize> = opts["hide"].as_array().map(|a| a.iter().filter_map(|v| v.as_u64().map(|x| x as usize)).collect()).unwrap_or_default();
+        let hide: Vec<usize> = opts["hide"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_u64().map(|x| x as usize))
+                    .collect()
+            })
+            .unwrap_or_default();
         let keep = |k: &usize| !hide.contains(k);
         json!({
             "ids": ids.into_iter().enumerate().filter(|(k, _)| keep(k)).map(|(_, v)| v).collect::<Vec<_>>(),
