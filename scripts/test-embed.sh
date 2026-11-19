@@ -22,6 +22,8 @@ echo "$OUT"
 want "$OUT" "knob_1_profile: 21787 lines, 0 issue(s)"
 
 sh scripts/build-npm.sh >/dev/null
+# a fresh install (the same version number would keep an old copy)
+rm -rf examples/embed/node/node_modules
 (cd examples/embed/node && npm install --no-save --offline --silent >/dev/null)
 OUT=$(node examples/embed/node/plan.mjs $KNOB)
 echo "$OUT"
