@@ -255,9 +255,11 @@ pub fn read_bundle(bytes: &[u8]) -> Result<(String, Vec<(String, Vec<u8>)>), Str
                     .map_err(|e| format!("{name}: {e}"))?;
                 out
             }
-            m => return Err(format!(
+            m => {
+                return Err(format!(
                 "{name}: compressed with method {m}, which marcam does not read (store or deflate)"
-            )),
+            ))
+            }
         };
         if name.ends_with('/') {
             continue;
