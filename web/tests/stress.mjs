@@ -200,7 +200,7 @@ const INVARIANTS = `(async () => {
   } else if (t.pickMesh) bad.push('the pick highlight stayed after picking ended');
   // Generate: enabled exactly when there is an enabled operation (not while busy)
   if (document.body.dataset.state !== 'busy' && st.registry) {
-    const ops = doc.setups.some((x) => x.operations.some((o) => o.enabled !== false && !o.error));
+    const ops = doc.setups.some((x) => x.operations.some((o) => o.enabled !== false && !o.error && (doc.tools || []).some((t) => t.number === o.tool)));
     if (document.getElementById('generate').disabled === ops) bad.push('Generate ' + (ops ? 'disabled with operations' : 'enabled with none'));
   }
   if (st.stale && !st.result) bad.push('out of date without results');

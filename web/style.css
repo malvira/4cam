@@ -166,3 +166,11 @@ body.stale #gcode, body.stale #view3d, body.stale #side { opacity: 0.45; }
 
 /* the playback legend: an operation hidden in the tree */
 .oprow.op-hidden span { opacity: 0.55; text-decoration: line-through; }
+
+/* the view cube's home button, by the cube (upper right of the 3D view) */
+#view3d { position: relative; }
+.view-home { position: absolute; top: 8px; right: 110px; width: 24px; height: 24px; padding: 0; border-radius: 4px; border: 1px solid var(--line); background: var(--bg); color: var(--fg, #e5edf7); cursor: pointer; font-size: 14px; line-height: 1; z-index: 2; }
+
+/* the program tabs and Download .nc on one row above the results */
+.tabs-row { align-items: center; gap: 8px; flex-wrap: wrap; }
+.tabs-row #tabs { flex: 1; }

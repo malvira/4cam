@@ -155,6 +155,15 @@ impl ProjectOp {
     }
 }
 
+impl Project {
+    /// Whether an operation is planned in this project: [`ProjectOp::plans`], and its tool is
+    /// one of the project's (an operation whose tool was removed is left out, like one in
+    /// error).
+    pub fn op_plans(&self, o: &ProjectOp) -> bool {
+        o.plans() && self.tools.iter().any(|t| t.number() == o.op.tool())
+    }
+}
+
 fn yes() -> bool {
     true
 }
@@ -522,7 +531,7 @@ impl Project {
         for o in setup
             .operations
             .iter()
-            .filter(|o| o.plans() && !o.geometry.is_empty())
+            .filter(|o| self.op_plans(o) && !o.geometry.is_empty())
         {
             let radius = job
                 .tool(o.op.tool())
@@ -649,7 +658,7 @@ impl Project {
                     .operations
                     .iter()
                     .filter_map(|id| setup.operations.iter().find(|o| &o.id == id))
-                    .filter(|o| o.plans())
+                    .filter(|o| self.op_plans(o))
                     .map(|o| &o.op)
                     .collect();
                 if ops.is_empty() {
@@ -687,7 +696,12 @@ impl Project {
             .outputs
             .iter()
             .flat_map(|out| out.operations.iter())
-            .filter(|id| setup.operations.iter().any(|o| &o.id == *id && o.plans()))
+            .filter(|id| {
+                setup
+                    .operations
+                    .iter()
+                    .any(|o| &o.id == *id && self.op_plans(o))
+            })
             .cloned()
             .collect()
     }

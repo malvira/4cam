@@ -62,6 +62,22 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   const opById = (id) =>
     t.draft && t.draft.op.id === id ? t.draft.op : t.retype && t.retype.op.id === id ? t.retype.op : setup()?.operations.find((o) => o.id === id);
   const typeOf = (kind) => t.types.find((x) => x.kind === kind);
+  /** A project tool: "T1 flat 3.175" (library tools by their reference). */
+  function toolLabel(x) {
+    const d = x.diameter ?? x.tip_diameter;
+    return `T${x.number} ${x.kind || x.tool || "tool"}${d != null ? ` ${d}` : ""}`;
+  }
+  /** Why tool `x` does not suit type `ty` ("" when it does). */
+  function toolMisfit(ty, x) {
+    if (!ty?.tool_shapes?.length || !x?.kind || ty.tool_shapes.includes(x.kind)) return "";
+    return `${ty.title} takes ${ty.tool_shapes.join(" or ")} tools`;
+  }
+  /** Why an operation cannot be planned: its error, or its tool missing from the project. */
+  function opProblem(op) {
+    if (op.error) return op.error;
+    if (op.tool != null && !(t.doc?.tools || []).some((x) => x.number === op.tool)) return `tool T${op.tool} is not in the project`;
+    return "";
+  }
   const colorOf = (op, i) => op.color || PALETTE[i % PALETTE.length];
   // a vise setup (box stock) takes the 3-axis types; a rotary setup takes everything, the
   // 3-axis types indexed to a fixed A (3+1)
@@ -132,7 +148,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
           <input type="checkbox" data-act="enable" ${op.enabled === false ? "" : "checked"} aria-label="Enable ${esc(id)}">
           <input type="color" data-act="color" value="${colorOf(op, i)}" aria-label="Colour of ${esc(id)}">
           <button type="button" data-act="eye" class="eye ${isHidden(id) ? "off" : ""}" aria-pressed="${!isHidden(id)}" aria-label="Show the toolpath of ${esc(id)}" title="Show or hide this toolpath (view only; Alt-click: show only this)">${isHidden(id) ? "◌" : "◉"}</button>
-          <span class="tree-label" data-act="select">${op.error ? `<span class="op-error" title="${esc(op.error)}">⚠</span> ` : ""}${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}${ot != null ? ` · <span class="tree-time">${fmt(ot)}</span>` : ""}</span></span>
+          <span class="tree-label" data-act="select">${opProblem(op) ? `<span class="op-error" title="${esc(opProblem(op))}">⚠</span> ` : ""}${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}${ot != null ? ` · <span class="tree-time">${fmt(ot)}</span>` : ""}</span></span>
           <button type="button" data-act="up" ${k === 0 ? "disabled" : ""} aria-label="Move ${esc(id)} up">▲</button>
           <button type="button" data-act="down" ${k === out.operations.length - 1 ? "disabled" : ""} aria-label="Move ${esc(id)} down">▼</button>
           <button type="button" data-act="delete" aria-label="Delete ${esc(id)}">✕</button></div>`;
@@ -181,16 +197,15 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     const ty = typeOf(op.type);
-    const tools = (t.doc.tools || []).map((x) => x.number);
     const typeOpts = t.types
       .filter((x) => fits(x, setup()) || x.kind === op.type)
       .map((x) => `<option value="${x.kind}" ${x.kind === op.type ? "selected" : ""}>${esc(x.title)}</option>`)
       .join("");
     let html = `<form class="opform" id="opForm"><div class="tree-outname">${esc(ty?.title || op.type)} <span class="muted">${esc(op.id)}</span></div>
-      ${op.error ? `<div class="error small" id="opError">Not planned: ${esc(op.error)}. Pick it again or change its type.</div>` : ""}
+      ${opProblem(op) ? `<div class="error small" id="opError">Not planned: ${esc(opProblem(op))}. ${op.error ? "Pick it again or change its type." : "Choose another tool."}</div>` : ""}
       <label>Type <select name="__type" aria-label="Operation type of ${esc(op.id)}">${typeOpts}</select></label>
       ${t.typeNote && t.typeNote.id === op.id ? `<div class="muted small" id="typeNote">${esc(t.typeNote.text)}</div>` : ""}
-      ${t.retype && t.retype.op.id === op.id ? `<div class="muted small">Type changed from ${esc(typeOf(t.retype.from)?.title || t.retype.from)}: not saved until Apply</div>` : ""}
+      ${t.retype && t.retype.op.id === op.id ? `<div class="muted small">${t.retype.from !== op.type ? `Type changed from ${esc(typeOf(t.retype.from)?.title || t.retype.from)}: ` : "Changed: "}not saved until Apply</div>` : ""}
       <label>Name <input name="__name" value="${esc(op.name || "")}"></label>`;
     for (const p of ty.params) {
       const v = op[p.name];
@@ -201,7 +216,15 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (p.name === "index_a" && isBox(setup())) continue;
       const label = `${p.name.replace(/_/g, " ")}${p.unit ? ` (${p.unit})` : ""}`;
       if (p.name === "tool") {
-        html += `<label>${label}<select name="tool">${tools.map((n) => `<option ${n === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>`;
+        // the project's tools, those the type cannot use greyed with the reason; a tool the
+        // project no longer has stays listed, as missing
+        const list = t.doc.tools || [];
+        const opts = list.map((x) => {
+          const why = toolMisfit(ty, x);
+          return `<option value="${x.number}" ${x.number === v ? "selected" : ""} ${why ? `disabled title="${esc(why)}"` : ""}>${esc(toolLabel(x))}${why ? ` (${esc(why)})` : ""}</option>`;
+        });
+        if (v != null && !list.some((x) => x.number === v)) opts.unshift(`<option value="${v}" selected>T${v} (not in the project)</option>`);
+        html += `<label>${label}<select name="tool">${opts.join("")}</select></label>`;
       } else if (p.kind === "choice") {
         html += `<label>${label}<select name="${p.name}">${p.choices.map((c) => `<option ${c === v ? "selected" : ""}>${c}</option>`).join("")}</select></label>`;
       } else if (p.kind === "boolean") {
@@ -847,6 +870,29 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     renderEditor();
   }
 
+  /**
+   * An applied operation's tool changed in its editor: the values that were the old tool's
+   * defaults (stepover, depths, feeds ... derived from the tool) become the new tool's; the
+   * values the person set stay. Applied with Apply, like any edit.
+   */
+  async function retool(tool) {
+    const cur = readForm();
+    const old = opById(t.selected);
+    if (!old || old.tool === tool) return;
+    const ask = (n) => engine("opDefaults", t.doc, { type: cur.type, setup: t.setup, tool: n, geometry: cur.geometry || [], machine: machineArg?.() ?? null }, state.mesh).then((r) => r.result);
+    try {
+      const [was, now] = await Promise.all([ask(old.tool), ask(tool)]);
+      const next = { ...cur, tool };
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+      for (const [k, v] of Object.entries(now)) if (k !== "tool" && k in cur && same(cur[k], was[k])) next[k] = v;
+      t.retype = { op: next, from: t.retype?.from || cur.type };
+      t.typeNote = { id: cur.id, text: `Now T${tool}: the values that came from the old tool follow it; the ones you set stay. Apply to keep it.` };
+      renderEditor();
+    } catch (e) {
+      showError(`Tool T${tool}: ${e.message}`);
+    }
+  }
+
   /** Re-derive the draft's defaults (tool or geometry changed), keeping edited fields. */
   async function refreshDefaults() {
     if (!t.draft) return;
@@ -897,10 +943,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     if (el.closest("#opForm") && el.name === "__type") return changeType(el.value);
-    if (el.closest("#opForm") && el.name === "tool" && t.draft) {
+    if (el.closest("#opForm") && el.name === "tool" && t.draft && t.draft.op.id === t.selected) {
       t.edited.delete("tool");
       return refreshDefaults();
     }
+    if (el.closest("#opForm") && el.name === "tool") return retool(parseInt(el.value, 10));
     if (el.closest("#opForm") && el.name === "__axial" && t.draft) return refreshDefaults();
     if (el.id === "treeSetup") {
       // another setup: what was being edited here is dropped

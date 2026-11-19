@@ -234,7 +234,7 @@ try {
     await js(`document.querySelectorAll('#tabs button')[${i}].click()`);
     lines.push(await js("document.getElementById('lineCount').textContent"));
     const name = i ? "knob_2_knurl" : "knob_1_profile";
-    const text = await js("document.getElementById('gcode').value");
+    const text = await js("window.__marcam.state.result.programs[window.__marcam.state.tab].gcode");
     check(`${name}: G-code view matches the golden file byte for byte`, text === golden(name), `${text.length} chars`);
     const issues = await js("document.querySelector('#summary .issues').textContent");
     check(`${name}: verifier reports 0 issues`, issues.includes("0 issues"), issues.slice(0, 60));
@@ -334,7 +334,7 @@ try {
   // 5. LinuxCNC machine (G93)
   await js("document.getElementById('machine').value = 'linuxcnc-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
   await waitDone("LinuxCNC generation", 60000);
-  const g93 = await js("document.getElementById('gcode').value.includes('\\nG93 ')");
+  const g93 = await js("window.__marcam.state.result.programs[window.__marcam.state.tab].gcode.includes('\\nG93 ')");
   check("LinuxCNC post uses G93 inverse time", g93);
 
   // 5b. machine profiles: the Carvera, with its limits checked
@@ -358,7 +358,7 @@ try {
   await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
   await waitDone("generation with the library tool", 60000);
   await js("document.querySelectorAll('#tabs button')[0].click()");
-  const head = await js("document.getElementById('gcode').value.split('\\n').slice(0, 3).join(' | ')");
+  const head = await js("window.__marcam.state.result.programs[window.__marcam.state.tab].gcode.split('\\n').slice(0, 3).join(' | ')");
   const issues0 = await js("document.querySelector('#summary .issues').textContent");
   check("generates with the edited tool", head.includes("(T1 Edited Flat 3.0)") && issues0.includes("0 issues"), head);
   // a tapered ball: edited in the form, then added to the job as a new tool number
@@ -804,13 +804,12 @@ try {
   await drag("splitLeft", 120, 0);
   const L1 = (await rect("left"))[2], R1 = (await rect("right"))[2];
   check("dragging the left bar resizes both panes", Math.abs(L1 - L0 - 120) <= 3 && Math.abs(R0 - R1 - 120) <= 3, `left ${L0}->${L1}, right ${R0}->${R1}`);
-  const c0 = await js("window.__marcam.state.three.renderer.domElement.clientWidth");
-  const code0 = (await rect("codeWrap"))[2];
-  await drag("splitCode", 100, 0);
-  const code1 = (await rect("codeWrap"))[2];
+  // (Mar) no G-code pane: the viewer takes the results' whole width; Download .nc stays
   const c1 = await js("window.__marcam.state.three.renderer.domElement.clientWidth");
-  const v3 = (await rect("view3d"))[2];
-  check("dragging the G-code bar resizes the 3D canvas with it", Math.abs(code0 - code1 - 100) <= 3 && Math.abs(c1 - c0 - 100) <= 3 && Math.abs(c1 - v3) <= 2, `G-code ${code0}->${code1}, canvas ${c0}->${c1} (view ${v3})`);
+  const v3 = (await rect("view3d"))[2], views = (await rect("views"))[2];
+  const dlShown = await js("(() => { const b = document.getElementById('download'); return !!b && b.checkVisibility(); })()");
+  check("no G-code pane: the 3D view has the results' width, its canvas follows, Download .nc is on show",
+    Math.abs(c1 - v3) <= 2 && v3 >= views - 4 && !(await js("document.getElementById('codeWrap').checkVisibility()")) && dlShown, `canvas ${c1}, view ${v3}, views ${views}, download ${dlShown}`);
   const s0 = (await rect("side"))[3];
   await drag("split3d", 0, -100);
   const s1 = (await rect("side"))[3];
@@ -830,14 +829,14 @@ try {
   await S("Page.reload");
   await waitFor(async () => (await state()) === "ready", "reload", 30000);
   await sleep(500);
-  const sizes = [(await rect("left"))[2], (await rect("codeWrap"))[2], (await rect("side"))[3]];
-  check("pane sizes survive a reload", sizes[0] === L2 && Math.abs(sizes[1] - code1) <= 3 && sizes[2] === s1, `left ${sizes[0]}, G-code ${sizes[1]}, side ${sizes[2]}`);
+  const sizes = [(await rect("left"))[2], (await rect("side"))[3]];
+  check("pane sizes survive a reload", sizes[0] === L2 && sizes[1] === s1, `left ${sizes[0]}, side ${sizes[1]}`);
   await drag("splitLeft", -2000, 0);
   await drag("split3d", 0, 2000);
   const mins = [(await rect("left"))[2], (await rect("side"))[3], (await rect("view3d"))[3]];
   check("minimum sizes hold", mins[0] === 300 && mins[1] === 80 && mins[2] >= 250, `left ${mins[0]}, side ${mins[1]}, 3D ${mins[2]}`);
   await shot("12_resized_panes");
-  for (const id of ["splitLeft", "splitCode", "split3d", "splitTools"]) {
+  for (const id of ["splitLeft", "split3d", "splitTools"]) {
     const [x, y, w, h] = await rect(id);
     await S("Input.dispatchMouseEvent", { type: "mousePressed", x: x + w / 2, y: y + h / 2, button: "left", buttons: 1, clickCount: 1 });
     await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: x + w / 2, y: y + h / 2, button: "left", buttons: 0, clickCount: 1 });
@@ -917,7 +916,7 @@ try {
     const choices = await js("[...document.querySelectorAll('.sd-kind')].map((k) => k.querySelector('b').textContent + ': ' + k.querySelector('small').textContent.slice(0, 30))");
     await inDialog({ name: "bracket", kind: "vise", shot: "15a_new_dialog" });
     await emptyReady();
-    const empty = await js("({ name: document.getElementById('projectName').textContent, ops: document.querySelectorAll('#tree .tree-op').length, tabs: document.querySelectorAll('#tabs button').length, gcode: document.getElementById('gcode').value.length, cta: document.getElementById('emptyState').textContent })");
+    const empty = await js("({ name: document.getElementById('projectName').textContent, ops: document.querySelectorAll('#tree .tree-op').length, tabs: document.querySelectorAll('#tabs button').length, gcode: (window.__marcam.state.result?.programs || []).length, cta: document.getElementById('emptyState').textContent })");
     // nothing to plan: Generate is disabled and says why
     const nothing = await js("document.getElementById('generate').disabled ? document.getElementById('generate').title : 'enabled'");
     check("New: a dialog with the three setup types; without an STL, an empty project with a call to action",
@@ -1107,7 +1106,7 @@ try {
         return { objs, tris, part: kids('part'), stock: kids('stock'), path: kids('path'), sim: kids('sim'), tool: kids('tool'), machining: !!g.machining, pickMesh: !!window.__marcam.state.tree.pickMesh,
           geometries: v.renderer.info.memory.geometries, textures: v.renderer.info.memory.textures,
           partTris: g.part.children.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3, 0),
-          gcode: document.getElementById('gcode').value.length, tabs: document.querySelectorAll('#tabs button').length, ops: document.querySelectorAll('#tree .tree-op').length,
+          gcode: (window.__marcam.state.result?.programs || []).length, tabs: document.querySelectorAll('#tabs button').length, ops: document.querySelectorAll('#tree .tree-op').length,
           mesh: !!window.__marcam.state.mesh, meshInfo: document.getElementById('meshInfo').textContent, result: !!window.__marcam.state.result, sim: !!window.__marcam.state.sim,
           playback: !!window.__marcam.state.machining.open, session: !!window.__marcam.state.machining.session, undo: !document.getElementById('undoBar').classList.contains('hidden'),
           error: document.getElementById('error').textContent, side: (() => { const c = document.getElementById('side'); const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++; return ink; })() }; })()`);
@@ -1721,6 +1720,84 @@ try {
     await waitDone("the repaired project", 240000);
     const r4 = await js("(() => { const d = JSON.parse(document.getElementById('job').value); return { err: d.setups[0].operations.filter((o) => o.error).length, programs: window.__marcam.state.result.programs.map((p) => p.name) }; })()");
     check("picked again, the pocket is planned again", r4.err === 0 && r4.programs.length === 3, JSON.stringify(r4));
+  }
+
+  // 8q. (Mar) the view cube: each face turns the camera to look from that side (machine
+  // directions), home goes back to the iso view; view only, nothing planned
+  for (const ex of ["plate", "knob"]) {
+    await js(`document.getElementById('example').value = '${ex}'; document.getElementById('loadExample').click(); true`);
+    await settle();
+    const p0 = await js("window.__marcam.calls.planAndPost || 0");
+    const dirs = {};
+    const camDir = () => js("(() => { const v = window.__marcam.state.three; const d = v.camera.position.clone().sub(v.controls.target).normalize(); return [d.x, d.y, d.z].map((c) => Math.round(c * 100) / 100); })()");
+    const clickAt = async (x, y) => {
+      await S("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+      await S("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+      await sleep(600);
+    };
+    for (const name of ["top", "front", "right", "back", "left", "bottom"]) {
+      // look from near that side first (its face toward the camera), then click the face
+      await js(`(() => { const d = { top: [0.4, -0.5, 1], bottom: [0.4, -0.5, -1], front: [0.4, -1, 0.5], back: [-0.4, 1, 0.5], right: [1, -0.4, 0.5], left: [-1, -0.4, 0.5] }['${name}']; window.__marcam.viewCube.goTo(d, 1); return true; })()`);
+      await sleep(200);
+      const at = await js(`window.__marcam.viewCube.screenOf('${name}')`);
+      await clickAt(at[0], at[1]);
+      dirs[name] = (await camDir()).join(",");
+    }
+    const hb = await js("(() => { const b = document.getElementById('viewHome').getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()");
+    await clickAt(hb[0], hb[1]);
+    const home = await camDir();
+    const want = { top: "0,0,1", front: "0,-1,0", right: "1,0,0", back: "0,1,0", left: "-1,0,0", bottom: "0,0,-1" };
+    const ok = Object.entries(want).every(([k, d]) => dirs[k].split(",").map(Number).every((c, i) => Math.abs(c - Number(d.split(",")[i])) < 0.02));
+    check(`view cube (${ex}): each face looks from its side (Top +Z, Front -Y, Right +X ...), home back to iso; nothing planned`,
+      ok && home[1] < -0.5 && home[2] > 0.3 && (await js("window.__marcam.calls.planAndPost || 0")) === p0, `${JSON.stringify(dirs)} home ${home}`);
+    await shot(`20_view_cube_${ex}`);
+  }
+
+  // 8r. (Mar) the Tool field lists the project's tools by name, type and size, those the type
+  // cannot use greyed with the reason; a new tool replans; a tool removed from the project
+  // puts its operations in error (named) and out of the G-code
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
+    const d0 = await doc();
+    const s0 = d0.setups[0];
+    const face = s0.operations.find((o) => o.type === "face");
+    await js(`document.querySelector('#tree .tree-op[data-op="${face.id}"] [data-act="select"]').click(); true`);
+    await waitFor(() => js("!!document.getElementById('opForm')?.elements.tool"), "the facing's editor", 15000);
+    const opts = await js("[...document.getElementById('opForm').elements.tool.options].map((o) => ({ v: o.value, t: o.textContent, off: o.disabled }))");
+    const ball = opts.find((o) => /ball/.test(o.t));
+    const flats = opts.filter((o) => /flat/.test(o.t) && !o.off);
+    check("the Tool field names each tool (T1 flat 3.175); facing cannot use a ball: greyed with the reason",
+      opts.every((o) => /^T\d+ \w+/.test(o.t)) && (!ball || (ball.off && /takes flat/.test(ball.t))) && flats.length >= 1, JSON.stringify(opts));
+    // another flat tool (a copy of T1 with another number, if the project has one flat only)
+    let other = flats.find((o) => Number(o.v) !== face.tool);
+    if (!other) {
+      const t1 = d0.tools.find((t) => t.number === face.tool);
+      const n = Math.max(...d0.tools.map((t) => t.number)) + 1;
+      await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); j.tools.push({ ...${JSON.stringify(t1)}, number: ${n}, description: "copy" }); t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); t.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+      await settle();
+      if (!(await js("!!document.getElementById('opForm')"))) await js(`document.querySelector('#tree .tree-op[data-op="${face.id}"] [data-act="select"]').click(); true`);
+      await waitFor(() => js("!!document.getElementById('opForm')?.elements.tool"), "the facing's editor again", 15000);
+      other = { v: String(n) };
+    }
+    await js(`(() => { const e = document.getElementById('opForm').elements.tool; e.value = '${other.v}'; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await sleep(800);
+    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await waitFor(async () => (await doc()).setups[0].operations.find((o) => o.id === face.id).tool === Number(other.v), "the new tool applied", 15000);
+    await clickGenerate();
+    await waitDone("the plate with the new tool", 240000);
+    const g = await js(`window.__marcam.state.result.programs.map((p) => p.gcode).join('\\n')`);
+    check("a new tool for an operation: applied and planned with it", new RegExp(`T${other.v}\\b`).test(g), `T${other.v}`);
+    // the tool removed from the project: the operation in error, named, not planned
+    await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); j.tools = j.tools.filter((x) => x.number !== ${other.v}); t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); t.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await settle();
+    const row = await js(`(() => { const r = document.querySelector('#tree .tree-op[data-op="${face.id}"] .op-error'); return r ? r.title : ''; })()`);
+    await clickGenerate();
+    await waitDone("the plate without that tool", 240000);
+    const g2 = await js(`window.__marcam.state.result.programs.map((p) => p.gcode).join('\\n')`);
+    check("its tool removed from the project: the operation is marked in error (naming the tool) and left out of the G-code",
+      new RegExp(`tool T${other.v} is not in the project`).test(row) && !new RegExp(`T${other.v}\\b`).test(g2), row);
   }
 
   // 9. phone width: layout stacks, no horizontal scroll

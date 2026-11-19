@@ -3,6 +3,7 @@
 import { blockSolid, cylinder, heightmapSolid, revolveProfile, stockObject, STOCK_LEFT } from "./meshes.js";
 import { gpuDevice, simulateOnGpu } from "./gpu/gpusim.js";
 import { setupMachining } from "./machining.js";
+import { addViewCube } from "./viewcube.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
 import { setupProject } from "./project.js";
@@ -85,7 +86,8 @@ function writeJob(job, opts = {}) {
 /** Whether the project has an operation to plan (one that is enabled). */
 function hasEnabledOps(j) {
   // (an operation in error is not planned: its picked features are gone)
-  return j.schema_version === "0.2" ? !!j.setups?.some((s) => s.operations?.some((o) => o.enabled !== false && !o.error)) : !!j.programs?.some((p) => p.operations?.length);
+  // (nor one whose tool the project no longer has)
+  return j.schema_version === "0.2" ? !!j.setups?.some((s) => s.operations?.some((o) => o.enabled !== false && !o.error && (j.tools || []).some((x) => x.number === o.tool))) : !!j.programs?.some((p) => p.operations?.length);
 }
 
 /** Whether the project has a part (a model, a mesh or a profile). */
@@ -527,7 +529,7 @@ function loadSimRes() {
       $("simDx").value = s.dx;
       $("simDeg").value = s.deg;
       $("simCell").value = s.cell;
-      if (s.gpu != null) $("simGpu").checked = s.gpu;
+      // (the GPU is not a saved setting: it is used when there is one; see ?gpu=off)
     }
   } catch {}
 }
@@ -818,13 +820,17 @@ async function getThree() {
     };
     new ResizeObserver(resize).observe(host);
     resize();
+    // the view cube (upper right): view only, it turns the camera
+    const cube = addViewCube({ THREE, renderer, camera, controls }, host);
     const loop = () => {
       controls.update();
       renderer.render(scene, camera);
+      cube.render();
       requestAnimationFrame(loop);
     };
     loop();
-    state.three = { THREE, renderer, scene, camera, controls, groups, axes, fitted: null };
+    state.three = { THREE, renderer, scene, camera, controls, groups, axes, fitted: null, cube };
+    window.__marcam.viewCube = cube;
     $("viewNote").textContent = "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. The part turns, so the path is drawn around it (A rotates about X).";
   } catch (e) {
     state.three = { failed: true };
@@ -1497,3 +1503,18 @@ window.__marcam.pixelAt = (fx, fy) => {
   gl.readPixels(Math.floor(fx * w), Math.floor((1 - fy) * h), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
   return `${buf[0]},${buf[1]},${buf[2]}`;
 };
+
+// ---------------------------------------------------------------- developer switches
+// ?gpu=off: simulate on the CPU (the GPU is used automatically otherwise); ?json or
+// Ctrl+Shift+J: show the project as text
+{
+  const q = new URLSearchParams(location.search);
+  if (q.get("gpu") === "off") $("simGpu").checked = false;
+  if (q.has("json")) $("jsonPanel").classList.remove("hidden");
+  document.addEventListener("keydown", (ev) => {
+    if (ev.ctrlKey && ev.shiftKey && (ev.key === "J" || ev.key === "j")) {
+      ev.preventDefault();
+      $("jsonPanel").classList.toggle("hidden");
+    }
+  });
+}

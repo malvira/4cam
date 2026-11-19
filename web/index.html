@@ -101,9 +101,10 @@
       <summary>Quick settings</summary>
       <div id="quick" class="quick"></div>
     </details>
-    <details open>
-      <summary>Job JSON</summary>
-      <textarea id="job" class="code" rows="18" spellcheck="false" aria-label="Job JSON"></textarea>
+    <!-- the project as text: the app's store, shown only for debugging (?json, or Ctrl+Shift+J) -->
+    <details open id="jsonPanel" class="hidden">
+      <summary>Project JSON (developer)</summary>
+      <textarea id="job" class="code" rows="18" spellcheck="false" aria-label="Project JSON"></textarea>
     </details>
     <div class="row">
       <button id="generate" type="button" class="primary" disabled>Generate</button>
@@ -126,7 +127,8 @@
       </span>
     </div>
     <div class="row small">
-      <label><input id="simGpu" type="checkbox" checked> use the GPU (WebGPU) when there is one</label>
+      <!-- the GPU is used when there is one; ?gpu=off turns it off (debugging) -->
+      <label class="hidden"><input id="simGpu" type="checkbox" checked> use the GPU (WebGPU) when there is one</label>
       <span id="simBackend" class="muted" title="where the last simulation ran"></span>
     </div>
     <div id="simResInfo" class="small muted"></div>
@@ -135,7 +137,9 @@
   <div id="splitLeft" class="splitter v" aria-label="Resize the settings panel"></div>
   <section id="right">
     <div id="undoBar" class="undo-banner hidden" role="status"></div>
-    <div id="tabs" role="tablist"></div>
+    <div class="row tabs-row"><div id="tabs" role="tablist"></div>
+      <button id="download" type="button" disabled title="Save the selected program's G-code">Download .nc</button>
+      <span id="codeInfo" class="small muted"></span></div>
     <div id="summary"></div>
     <div id="views">
       <div id="viewWrap">
@@ -178,12 +182,9 @@
         </div>
         <canvas id="side" width="900" height="220" aria-label="Side view: X against radius"></canvas>
       </div>
-      <div id="splitCode" class="splitter v" aria-label="Resize the 3D view and the G-code"></div>
-      <div id="codeWrap">
-        <div class="row">
-          <button id="download" type="button" disabled>Download .nc</button>
-          <span id="codeInfo" class="small muted"></span>
-        </div>
+      <!-- (the G-code is not shown: Download .nc saves it; the viewer has the room) -->
+      <div id="splitCode" class="splitter v hidden" aria-hidden="true"></div>
+      <div id="codeWrap" class="hidden">
         <textarea id="gcode" class="code" readonly spellcheck="false" aria-label="G-code"></textarea>
       </div>
     </div>
