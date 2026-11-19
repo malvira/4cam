@@ -169,6 +169,9 @@ function consoleErrors() {
     .map((e) => e.params.args.map((a) => a.value ?? a.description ?? "").join(" "))
     .filter((t) => !EXPECTED_CONSOLE.some((r) => r.test(t)));
 }
+// the playback open and nothing more coming for it (no seek, no simulation running or waiting:
+// a reopen after an eye change is one)
+const PLAYBACK_SETTLED = "!!window.__marcam.state.machining?.open && !window.__marcam.state.machining.busy && !window.__marcam.simLock.busy && !window.__marcam.simLock.waiting && document.body.dataset.state !== 'busy'";
 // The operation types the tree offers (the tree renders after a plan: waited for)
 async function addTypes() {
   await waitFor(() => js("!!document.getElementById('treeAddType')"), "the tree's operation types", 30000);
@@ -304,7 +307,10 @@ try {
 
   // 3. download
   await js("document.getElementById('download').click()");
-  const file = await waitFor(() => readdirSync(downloads).find((f) => f.endsWith(".nc")), "the .nc download", 15000);
+  const file = await waitFor(() => readdirSync(downloads).find((f) => f.endsWith(".nc")), "the .nc download", 60000).catch(async (e) => {
+    const why = await js("JSON.stringify({ idle: window.__marcam.planIdle?.(), state: document.body.dataset.state, status: document.getElementById('status').textContent, programs: window.__marcam.state.result?.programs?.length, tab: window.__marcam.state.tab })").catch(() => "?");
+    throw new Error(`${e.message}: ${why}; downloads: ${readdirSync(downloads).join(", ") || "none"}`);
+  });
   const dl = readFileSync(join(downloads, file), "utf8");
   check("Download .nc saves the program", file === "knob_1_profile.nc" && dl === golden("knob_1_profile"), file);
 
@@ -558,7 +564,9 @@ try {
   const minX = Math.min(...xs);
   check("picking the taper face limits the finish to it", /^cone -15\.0\.\.-0\.8/.test(region) && minX >= -16.588, `picked ${region}; finish min X ${minX}`);
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
-  await sleep(800);
+  // (the knob loaded, its quick fields drawn: a slow machine takes longer than a moment)
+  await settle();
+  await waitFor(() => js("(() => { try { return JSON.parse(document.getElementById('job').value).stock?.radius !== undefined && !!document.getElementById('q_stock_radius'); } catch { return false; } })()"), "the knob's quick settings", 30000);
 
   // 6. quick settings edit the JSON
   await js("const i = document.getElementById('q_stock_radius'); i.value = 13; i.dispatchEvent(new Event('change')); true");
@@ -566,8 +574,9 @@ try {
   check("quick setting writes into the job JSON", r === 13, `stock.radius = ${r}`);
 
   // 7. errors are shown, not thrown
-  await js("document.getElementById('job').value = '{ not json'; document.getElementById('generate').click(); true");
-  const err = await waitFor(() => js("document.getElementById('error').textContent"), "an error message", 5000);
+  await settle();
+  await js("document.getElementById('error').textContent = ''; document.getElementById('job').value = '{ not json'; document.getElementById('generate').click(); true");
+  const err = await waitFor(async () => { const t = await js("document.getElementById('error').textContent"); return /not valid/.test(t) ? t : null; }, "the invalid JSON error", 15000).catch(async () => js("document.getElementById('error').textContent"));
   check("invalid JSON shows an error", /not valid/.test(err), err.slice(0, 60));
 
   // 8. mesh example: rough + two finishes against knob.stl
@@ -1689,14 +1698,14 @@ try {
         await setHide(hide || []);
         await sleep(400);
         await js("document.getElementById('simOpen').click(); true");
-        await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), `the playback (${label} hidden)`, 120000);
+        await waitFor(() => js(PLAYBACK_SETTLED), `the playback (${label} hidden)`, 120000);
         if (!hide) {
           // the op playing at the middle: hidden now, with the playback open (it reopens)
           const mid = await js("(() => { const m = window.__marcam.state.machining; const k = Math.floor(m.session.segments / 2); const tag = m.session.path[7 * k + 6]; return m.session.ops.find((o) => o.tag === tag)?.project_id; })()");
           await js(`await window.__marcam.machining.seek(Math.floor(window.__marcam.state.machining.session.segments / 2))`);
           await setHide([mid]);
           await sleep(1500);
-          await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the playback reopened", 120000);
+          await waitFor(() => js(PLAYBACK_SETTLED), "the playback reopened", 120000);
         }
         const r = await js(`await (async () => { const m = window.__marcam.state.machining, mc = window.__marcam.machining, v = window.__marcam.state.three; const n = m.session.segments; const out = [];
           for (const f of [0.1, 0.5, 0.9]) { const k = Math.max(1, Math.floor(n * f)); await mc.seek(k); await new Promise((r) => setTimeout(r, 120));
@@ -2145,7 +2154,9 @@ try {
     await js("const g = document.getElementById('simGpu'); g.checked = false; g.dispatchEvent(new Event('change')); true");
     await sel("ultra");
     // (the background simulation after the plan finishes first: this one is the person's)
-    await waitFor(() => js("!window.__marcam.simLock.busy && !window.__marcam.simLock.waiting && document.getElementById('simRing').classList.contains('hidden')"), "the background simulation to finish", 120000);
+    // (stopped rather than waited for: on a slow machine it takes minutes)
+    await js("if (window.__marcam.simRing.active || window.__marcam.simLock.busy) window.__marcam.cancelEngine(); true");
+    await waitFor(() => js("!window.__marcam.simLock.busy && !window.__marcam.simLock.waiting && document.getElementById('simRing').classList.contains('hidden')"), "the background simulation to stop", 30000);
     const nDialogs = cdp.dialogs.length;
     cdp.dialogAnswer = true;
     await js("document.getElementById('simulate').click(); true");
@@ -2301,14 +2312,16 @@ try {
     await clickGenerate();
     await waitDone("the knob for the playback", 120000);
     await js("const s = document.getElementById('simStock'); s.checked = false; s.dispatchEvent(new Event('change')); true");
+    // (the background simulation after the plan stopped first: on a slow machine it takes minutes)
+    await js("if (window.__marcam.simRing.active || window.__marcam.simLock.busy) window.__marcam.cancelEngine(); true");
+    await waitFor(() => js("!window.__marcam.simLock.busy && !window.__marcam.simLock.waiting"), "the background simulation to stop", 30000);
     await js("document.getElementById('simOpen').click(); true");
     await waitFor(() => js("window.__marcam.state.machining.open && window.__marcam.state.machining.session?.path_only === true"), "the playback without stock", 60000);
     const noStock = await js(`(() => { const m = window.__marcam.state.machining, v = window.__marcam.state.three; return { stockMesh: !!m.stockMesh, path: !!m.pathLine, part: v.groups.work.children.filter((c) => c.userData.shared).length, tool: v.groups.toolModel.visible, times: m.session.times?.length || 0, segs: m.session.segments, label: document.getElementById('simLabel').textContent }; })()`);
     // ×1000: a second of play is about a thousand seconds of machining
     await js("const s = document.getElementById('simSpeed'); s.value = '3'; s.dispatchEvent(new Event('input')); true");
     const speedLabel = await js("document.getElementById('simSpeedLabel').textContent");
-    // (from the start, once the background work after the plan is done)
-    await waitFor(() => js("!window.__marcam.simLock.busy && !window.__marcam.simLock.waiting"), "the background simulation to finish", 120000);
+    // (from the start)
     await js("const s = document.getElementById('simScrub'); s.value = '0'; s.dispatchEvent(new Event('input')); true");
     await waitFor(() => js("window.__marcam.state.machining.pos === 0"), "the playback at its start", 10000);
     await js("document.getElementById('simPlay').click(); true");
