@@ -23,7 +23,7 @@ const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 2
 const DISPLAY_MAX = 1_000_000;
 const PLAY_MAX = 250_000;
 
-export function setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock }) {
+export function setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock, machineArg }) {
   const m = {
     open: false,
     session: null, // sim_open result (+ decoded arrays)
@@ -45,9 +45,55 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** Dispose an object tree's geometries and materials. */
   const disposeTree = (o) =>
     o.traverse((c) => {
+      // (the part's copies share the main view's geometry)
+      if (c.userData.shared) return;
       c.geometry?.dispose();
       for (const mat of [].concat(c.material || [])) mat.dispose();
     });
+
+  // ---- the playback's controls: speed in machine time (×1 to ×1000, a log slider), the
+  // stock toggle; both remembered
+  const remember = (k, v) => {
+    try {
+      localStorage.setItem(k, String(v));
+    } catch {}
+  };
+  const recall = (k) => {
+    try {
+      return localStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  };
+  const speedFactor = () => Math.pow(10, Math.max(0, Math.min(3, +$("simSpeed").value || 0)));
+  function showSpeed() {
+    const f = speedFactor();
+    $("simSpeedLabel").textContent = `×${f < 10 ? f.toFixed(1).replace(/\.0$/, "") : Math.round(f)}`;
+  }
+  {
+    const sp = recall("marcam.playSpeed");
+    if (sp !== null && Number.isFinite(+sp)) $("simSpeed").value = sp;
+    const st = recall("marcam.playStock");
+    if (st !== null) $("simStock").checked = st === "1";
+    showSpeed();
+  }
+  /** Machine time (s) when `n` segments have been played. */
+  const timeAt = (n) => (n > 0 && m.session?.times ? m.session.times[Math.min(n, m.session.times.length) - 1] : 0);
+  /** Segments played by machine time `t`. */
+  function segmentsBy(t) {
+    const ts = m.session.times;
+    let lo = 0, hi = ts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (ts[mid] <= t) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+  const fmtClock = (t) => {
+    const h = Math.floor(t / 3600), mi = Math.floor((t % 3600) / 60), se = Math.floor(t % 60);
+    return h ? `${h}:${String(mi).padStart(2, "0")}:${String(se).padStart(2, "0")}` : `${mi}:${String(se).padStart(2, "0")}`;
+  };
 
   const opKey = (o) => `${o.program}#${o.id}#${o.kind}`;
   const savedColors = () => {
@@ -172,6 +218,22 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       disposeTree(c);
     }
     const s = m.session;
+    // the toolpath played so far, on the part (it turns with A)
+    buildPath(THREE, work);
+    if (!m.stock) {
+      // no stock: the part itself turns under the tool
+      for (const c of v.groups.part.children) {
+        const k = c.clone(true);
+        k.traverse((x) => (x.userData.shared = true));
+        work.add(k);
+      }
+      m.stockMesh = null;
+      m.ghost = null;
+      m.toolNumber = null;
+      showMachining(true);
+      placeTool();
+      return;
+    }
     const { R, C } = dims();
     m.dgrid = displayGrid(m.stride);
     m.dr = new Float32Array(Math.ceil(R / m.stride) * Math.ceil(C / m.stride));
@@ -201,6 +263,35 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.toolNumber = null;
     showMachining(true);
     placeTool();
+  }
+
+  /** The played toolpath as lines in the part's frame (machine tip turned back by A), each
+   *  cut in its operation's colour, rapids red; drawn up to the playback's position. */
+  function buildPath(THREE, work) {
+    const p = m.session.path;
+    const n = m.session.segments;
+    const pos = new Float32Array(n * 6);
+    const col = new Float32Array(n * 6);
+    let prev = null;
+    for (let k = 0; k < n; k++) {
+      const [x, y, z, a, rapid, , tag] = p.subarray(7 * k, 7 * k + 7);
+      const r = (a * Math.PI) / 180;
+      const c = Math.cos(r), sn = Math.sin(r);
+      const q = [x, y * c + z * sn, -y * sn + z * c];
+      const from = prev || q;
+      pos.set(from, 6 * k);
+      pos.set(q, 6 * k + 3);
+      const rgb = rapid ? [0.86, 0.15, 0.15] : m.colors[tag] || [0.15, 0.39, 0.92];
+      col.set(rgb, 6 * k);
+      col.set(rgb, 6 * k + 3);
+      prev = q;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    m.pathLine = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9 }));
+    m.pathLine.geometry.setDrawRange(0, 2 * m.pos);
+    work.add(m.pathLine);
   }
 
   /** Only the machining view while it is open. */
@@ -269,7 +360,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     v.groups.toolModel.position.set(x, y, z);
     // the tool is always drawn: what is played is what is shown
     v.groups.toolModel.visible = true;
-    $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.gpu ? "GPU" : "CPU"}`;
+    m.pathLine?.geometry.setDrawRange(0, 2 * Math.min(m.pos, s.segments));
+    const clock = s.times?.length ? ` · ${fmtClock(timeAt(m.pos))} / ${fmtClock(s.times[s.times.length - 1])}` : "";
+    $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${clock}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.stock ? (m.gpu ? "GPU" : "CPU") : "no stock"}`;
   }
 
   /** Apply a sim_seek result: rows changed -> update vertices and colours in place. */
@@ -329,6 +422,13 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
 
   async function seek(n) {
     if (!m.session) return;
+    // no stock: only the tool and the path move
+    if (!m.stock) {
+      m.pos = Math.max(0, Math.min(n, m.session.segments));
+      $("simScrub").value = String(m.pos);
+      placeTool();
+      return;
+    }
     m.target = n;
     if (m.busy) return;
     m.busy = true;
@@ -380,25 +480,46 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   }
 
   async function openLocked(job) {
-    if (confirmSimRes && !(await confirmSimRes())) {
+    // the stock simulated along (Stock on), or only the tool and the path
+    const stock = !!$("simStock").checked;
+    if (stock && confirmSimRes && !(await confirmSimRes())) {
       setStatus("Machining simulation not started", "done");
       return;
     }
     const mine = epoch;
+    const keep = m.open ? m.pos : 0;
     try {
       const setup = job.schema_version === "0.2" ? state.tree?.setup : undefined;
-      const { result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup }, state.mesh);
+      const machine = machineArg?.() ?? null;
+      const { result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup, machine: typeof machine === "string" ? machine : null, path_only: !stock }, state.mesh);
       result.path = f32(result.path);
+      result.times = result.times ? f32(result.times) : null;
       m.session = result;
+      m.stock = stock;
       m.xyz = result.kind === "xyz";
+      m.pos = 0;
+      m.clock = null;
+      m.gpu?.destroy();
+      m.gpu = null;
+      if (!stock) {
+        if (mine !== epoch) return void (m.session = null);
+        m.backend = "";
+        renderLegend();
+        await buildScene();
+        $("simScrub").max = String(result.segments);
+        $("simScrub").value = "0";
+        $("simControls").classList.remove("hidden");
+        m.open = true;
+        document.body.dataset.machining = "open";
+        if (keep) await seek(Math.min(keep, result.segments));
+        setStatus(`Playback: ${result.segments.toLocaleString("en")} moves, ${result.ops.length} operations, ${fmtClock(result.times?.[result.times.length - 1] || 0)} of machining (no stock)`, "done");
+        return;
+      }
       const n = m.xyz ? result.grid.nx * result.grid.ny : result.grid.nx * result.grid.na;
       m.r = new Float32Array(n).fill(m.xyz ? result.stock_box.max[2] : result.stock_radius);
       m.op = new Uint16Array(n);
-      m.pos = 0;
       m.stride = strideFor(DISPLAY_MAX);
       // the stock on the GPU when there is one and the engine offers the job to it
-      m.gpu?.destroy();
-      m.gpu = null;
       const { gpu, why } = simGpu ? await simGpu() : { gpu: null, why: "" };
       let backend = `CPU (${why})`;
       if (gpu) {
@@ -433,6 +554,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       $("simControls").classList.remove("hidden");
       m.open = true;
       document.body.dataset.machining = "open";
+      if (keep) await seek(Math.min(keep, result.segments));
       setStatus(`Machining simulation: ${result.segments.toLocaleString("en")} moves, ${result.ops.length} operations`, "done");
     } catch (e) {
       if (e.message === "cancelled") return setStatus("Machining simulation cancelled", "done");
@@ -470,7 +592,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
 
   /** Rebuild the display at the stride for the current state (playing or at rest). */
   async function restride() {
-    if (!m.session) return;
+    // (without stock there is no grid to show coarser while playing)
+    if (!m.session || !m.stock) return;
     const want = strideFor(m.playing ? PLAY_MAX : DISPLAY_MAX);
     if (want !== m.stride) {
       m.stride = want;
@@ -485,8 +608,16 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
     const dt = Math.min(0.1, (t - (m.last || t)) / 1000);
     m.last = t;
-    const speed = +$("simSpeed").value;
-    const next = Math.min(m.session.segments, Math.round(m.pos + Math.max(1, speed * dt)));
+    let next;
+    if (m.session.times?.length) {
+      // machine time runs `speed` times faster than the clock
+      if (m.clock == null) m.clock = timeAt(m.pos);
+      m.clock += dt * speedFactor();
+      next = Math.max(m.pos + 1, segmentsBy(m.clock));
+    } else {
+      next = Math.round(m.pos + Math.max(1, 300 * speedFactor() * dt));
+    }
+    next = Math.min(m.session.segments, next);
     if (!m.busy) seek(next);
     if (m.pos >= m.session.segments) {
       m.playing = false;
@@ -511,8 +642,31 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       restride().then(() => requestAnimationFrame(frame));
     }
   });
-  $("simStep").addEventListener("click", () => m.session && seek(Math.min(m.session.segments, m.pos + 1)));
-  $("simScrub").addEventListener("input", () => seek(+$("simScrub").value));
+  $("simStep").addEventListener("click", () => {
+    m.clock = null;
+    if (m.session) seek(Math.min(m.session.segments, m.pos + 1));
+  });
+  $("simScrub").addEventListener("input", () => {
+    m.clock = null;
+    seek(+$("simScrub").value);
+  });
+  $("simEnd").addEventListener("click", () => {
+    m.clock = null;
+    if (m.session) seek(m.session.segments);
+  });
+  $("simSpeed").addEventListener("input", () => {
+    showSpeed();
+    remember("marcam.playSpeed", $("simSpeed").value);
+  });
+  // stock on or off: the playback again, at the same place
+  $("simStock").addEventListener("change", async () => {
+    remember("marcam.playStock", $("simStock").checked ? "1" : "0");
+    if (!m.open) return;
+    const playing = m.playing;
+    m.playing = false;
+    await open();
+    if (playing && m.session) $("simPlay").click();
+  });
   $("simGhost").addEventListener("change", () => m.ghost && (m.ghost.visible = $("simGhost").checked));
   $("opLegend").addEventListener("input", (ev) => {
     const inp = ev.target.closest("input[type=color]");

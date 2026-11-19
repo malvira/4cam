@@ -197,6 +197,12 @@ browser.
   - a 2D side view.
 - **Simulate stock:** runs the material-removal simulation and shows the stock surface,
   coloured by the material left on the part.
+- **Playback:** the job played back in one view: the tool at its place, the toolpath drawn on
+  the part as it is played (each operation in its colour), and with **stock** on, the stock
+  simulated along (off: the part turns under the tool, nothing simulated). The speed slider is
+  in machine time, ×1 (real time) to ×1000 on a log scale; ⇥ jumps to the end; the label shows
+  the machining time reached of the total. Switching the stock on keeps the place. Hidden
+  operations are left out of everything. Speed and stock are remembered.
 
 `node web/tests/e2e.mjs` drives the page in an installed Chrome or Edge in headless mode,
 over the DevTools protocol, with no npm packages. It checks:

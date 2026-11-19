@@ -800,6 +800,57 @@ pub mod api {
         ]
     }
 
+    /// Machine time (seconds, from the start of the job) at the end of each segment: each
+    /// program posted for `machine` and estimated line by line (the post's line of each move),
+    /// the programs one after the other. Tool changes, dwells and the like go with the move
+    /// after them.
+    fn segment_times(
+        tps: &[Toolpath],
+        segs: &[sim::Segment],
+        machine: &MachineProfile,
+    ) -> Vec<f32> {
+        let dy = marcam::estimate::Dynamics::from_profile(machine);
+        let mut offset = 0.0;
+        // per program: the time up to and including each move, and its total
+        let mut upto: Vec<Vec<f64>> = Vec::with_capacity(tps.len());
+        let mut start: Vec<f64> = Vec::with_capacity(tps.len());
+        for tp in tps {
+            let (text, _, lines) = marcam::post::post_lines(tp, &machine.post);
+            let est = marcam::estimate::estimate_gcode(&text, &dy);
+            let mut cum = vec![0.0; est.per_line.len() + 1];
+            for (i, t) in est.per_line.iter().enumerate() {
+                cum[i + 1] = cum[i] + t;
+            }
+            upto.push(lines.iter().map(|&l| cum[l.min(cum.len() - 1)]).collect());
+            start.push(offset);
+            offset += est.total_s;
+        }
+        segs.iter()
+            .map(|sg| {
+                let p = sg.program as usize;
+                let t = upto
+                    .get(p)
+                    .and_then(|u| u.get(sg.move_index))
+                    .copied()
+                    .unwrap_or(0.0);
+                (start.get(p).copied().unwrap_or(0.0) + t) as f32
+            })
+            .collect()
+    }
+
+    /// The machine a playback is timed for: `opts.machine` (an id or a profile), else the
+    /// job's, else the Z1.
+    fn playback_machine(opts: &Value, job: &Job) -> MachineProfile {
+        let text = match &opts["machine"] {
+            Value::String(s) => s.clone(),
+            Value::Object(_) => opts["machine"].to_string(),
+            _ => String::new(),
+        };
+        parse_machine(&text, Some(job))
+            .or_else(|_| parse_machine("", Some(job)))
+            .unwrap_or_else(|_| profiles::builtin_machine("makera-z1-4axis").expect("built in"))
+    }
+
     /// Open a 3-axis playback: like [`sim_open`], on the block.
     fn sim_open_xyz(
         job: &Job,
@@ -807,6 +858,7 @@ pub mod api {
         sb: &StockBox,
         opts: &Value,
         job_json: &str,
+        machine: &MachineProfile,
     ) -> Value {
         let hm = sim3::Heightmap3::new(sb, cell_for(sb, opts));
         if hm.z.len() > sim::MAX_CELLS {
@@ -838,6 +890,7 @@ pub mod api {
             "segments": pb.len(),
             "program_starts": first_seg_of_program,
             "path": f32s(&path),
+            "times": f32s(&segment_times(tps, &pb.segments, machine)),
             "ops": ops_of(tps),
             "project_ops": with_setup(opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, opts)),
             "tools": job.tools,
@@ -1099,11 +1152,46 @@ pub mod api {
             Ok(t) => t,
             Err(e) => return err(e),
         };
+        let machine = playback_machine(&opts, &job);
+        // `path_only`: the moves and their times, no stock (a playback of the toolpath alone)
+        if opts["path_only"] == true {
+            // (a stock playback open before is not needed any more)
+            SESSION.with(|s| *s.borrow_mut() = None);
+            let segs = if job.stock_box.is_some() {
+                sim3::segments3(&tps)
+            } else {
+                sim::segments(&tps)
+            };
+            let mut path = Vec::with_capacity(segs.len() * 7);
+            for sg in &segs {
+                path.extend_from_slice(&path_point(sg));
+            }
+            let starts: Vec<usize> = (0..tps.len())
+                .map(|p| {
+                    segs.iter()
+                        .position(|s| s.program as usize == p)
+                        .unwrap_or(segs.len())
+                })
+                .collect();
+            return json!({
+                "kind": if job.stock_box.is_some() { "xyz" } else { "rotary" },
+                "path_only": true,
+                "stock_radius": job.stock.radius,
+                "stock_box": job.stock_box,
+                "segments": segs.len(),
+                "program_starts": starts,
+                "path": f32s(&path),
+                "times": f32s(&segment_times(&tps, &segs, &machine)),
+                "ops": ops_of(&tps),
+                "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, &opts)),
+                "tools": job.tools,
+            });
+        }
         if let Some(why) = too_slow(&job, &tps, mesh.as_ref(), &opts, PLAYBACK) {
             return json!({"error": why, "too_slow": true});
         }
         if let Some(sb) = job.stock_box {
-            return sim_open_xyz(&job, &tps, &sb, &opts, job_json);
+            return sim_open_xyz(&job, &tps, &sb, &opts, job_json, &machine);
         }
         // grid and part map exactly as the batch simulation builds them
         let res = match simulate_job(&job, &[], mesh.as_ref(), dx, na, 0.02) {
@@ -1148,6 +1236,7 @@ pub mod api {
             "segments": pb.len(),
             "program_starts": first_seg_of_program,
             "path": f32s(&path),
+            "times": f32s(&segment_times(&tps, &pb.segments, &machine)),
             "ops": ops,
             "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, &opts)),
             "tools": job.tools,

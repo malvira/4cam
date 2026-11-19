@@ -1917,7 +1917,7 @@ window.__marcam.project = setupProject({
 });
 
 // ---------------------------------------------------------------- machining simulation
-window.__marcam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock });
+window.__marcam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock, machineArg });
 window.__marcam.updateSimResInfo = updateSimResInfo;
 window.__marcam.simLock = simLock;
 

@@ -178,19 +178,17 @@
 
         </div>
         <div class="row small">
-          <button id="simOpen" type="button">Machining simulation</button>
+          <button id="simOpen" type="button" title="Play the job: the tool along its toolpath, with the stock simulated (Stock) or not">Playback</button>
         </div>
         <div id="simControls" class="hidden">
           <div class="row scrub">
             <button id="simPlay" type="button">Play</button>
             <button id="simStep" type="button">Step</button>
-            <label for="simSpeed" class="small">speed</label>
-            <select id="simSpeed" aria-label="Playback speed (moves per second)">
-              <option value="30">30 moves/s</option>
-              <option value="300" selected>300 moves/s</option>
-              <option value="3000">3000 moves/s</option>
-              <option value="30000">30000 moves/s</option>
-            </select>
+            <button id="simEnd" type="button" title="Jump to the end">⇥</button>
+            <label for="simSpeed" class="small" title="Playback speed in machine time: ×1 is real time, ×1000 a thousand times faster">speed</label>
+            <input id="simSpeed" type="range" min="0" max="3" step="0.05" value="1" aria-label="Playback speed, times machine time (log scale)">
+            <span id="simSpeedLabel" class="small">×10</span>
+            <label class="small" title="Simulate the stock along with the playback (off: the tool and the toolpath on the part only)"><input id="simStock" type="checkbox" checked> stock</label>
             <label class="small"><input id="simGhost" type="checkbox"> removed material</label>
             <button id="simClose" type="button">Close</button>
           </div>

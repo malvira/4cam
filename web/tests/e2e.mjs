@@ -2243,6 +2243,49 @@ try {
     await js("const a = document.getElementById('autoGen'); a.checked = false; a.dispatchEvent(new Event('change')); true");
   }
 
+  // 8w. (Mar) one viewer: the playback plays the toolpath with the tool at its place, the
+  // stock simulated along or not (Stock), at a speed in machine time (×1 to ×1000, a log
+  // slider, remembered) with a jump to the end; Stock switched on mid-way keeps the place
+  {
+    await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await clickGenerate();
+    await waitDone("the knob for the playback", 120000);
+    await js("const s = document.getElementById('simStock'); s.checked = false; s.dispatchEvent(new Event('change')); true");
+    await js("document.getElementById('simOpen').click(); true");
+    await waitFor(() => js("window.__marcam.state.machining.open && window.__marcam.state.machining.session?.path_only === true"), "the playback without stock", 60000);
+    const noStock = await js(`(() => { const m = window.__marcam.state.machining, v = window.__marcam.state.three; return { stockMesh: !!m.stockMesh, path: !!m.pathLine, part: v.groups.work.children.filter((c) => c.userData.shared).length, tool: v.groups.toolModel.visible, times: m.session.times?.length || 0, segs: m.session.segments, label: document.getElementById('simLabel').textContent }; })()`);
+    // ×1000: a second of play is about a thousand seconds of machining
+    await js("const s = document.getElementById('simSpeed'); s.value = '3'; s.dispatchEvent(new Event('input')); true");
+    const speedLabel = await js("document.getElementById('simSpeedLabel').textContent");
+    await js("document.getElementById('simPlay').click(); true");
+    await sleep(1500);
+    await js("document.getElementById('simPlay').click(); true");
+    const played = await js("(() => { const m = window.__marcam.state.machining; return { pos: m.pos, t: m.pos ? m.session.times[m.pos - 1] : 0 }; })()");
+    await shot("23a_playback_no_stock");
+    await js("document.getElementById('simEnd').click(); true");
+    await sleep(200);
+    const atEnd = await js("(() => { const m = window.__marcam.state.machining; return { pos: m.pos, segs: m.session.segments, drawn: m.pathLine.geometry.drawRange.count / 2, label: document.getElementById('simLabel').textContent }; })()");
+    check("one viewer, no stock: the playback turns the part with its toolpath under the tool, at ×1000 machine time, and jumps to the end",
+      !noStock.stockMesh && noStock.path && noStock.part > 0 && noStock.tool && noStock.times === noStock.segs && /no stock/.test(noStock.label) &&
+      speedLabel === "×1000" && played.t > 200 && played.t < 3000 && atEnd.pos === atEnd.segs && atEnd.drawn === atEnd.segs && /\d+:\d\d \/ [\d:]+/.test(atEnd.label),
+      `${JSON.stringify(noStock)}; ${speedLabel}: ${JSON.stringify(played)} after 1.5 s; end ${JSON.stringify(atEnd)}`);
+    // Stock on mid-way: the stock simulated to the same place
+    await js("const s = document.getElementById('simScrub'); s.value = String(Math.floor(+s.max / 2)); s.dispatchEvent(new Event('input')); true");
+    const mid = await js("window.__marcam.state.machining.pos");
+    await js("const s = document.getElementById('simStock'); s.checked = true; s.dispatchEvent(new Event('change')); true");
+    await waitFor(() => js("window.__marcam.state.machining.open && !window.__marcam.state.machining.session?.path_only && !!window.__marcam.state.machining.stockMesh"), "the playback with stock", 120000);
+    await waitFor(() => js(`window.__marcam.state.machining.pos === ${mid}`), "the same place with the stock", 60000).catch(() => {});
+    const withStock = await js("(() => { const m = window.__marcam.state.machining; return { pos: m.pos, cut: [...m.op].some((t) => t > 0), path: !!m.pathLine, label: document.getElementById('simLabel').textContent }; })()");
+    const remembered = await js("({ speed: localStorage.getItem('marcam.playSpeed'), stock: localStorage.getItem('marcam.playStock') })");
+    await shot("23b_playback_stock");
+    check("Stock on mid-way: the stock simulated to the same place, the path still drawn; speed and stock remembered",
+      withStock.pos === mid && withStock.cut && withStock.path && !/no stock/.test(withStock.label) && remembered.speed === "3" && remembered.stock === "1",
+      `mid ${mid}: ${JSON.stringify(withStock)}; ${JSON.stringify(remembered)}`);
+    await js("document.getElementById('simClose').click(); true");
+    await js("const s = document.getElementById('simSpeed'); s.value = '1'; s.dispatchEvent(new Event('input')); true");
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);
