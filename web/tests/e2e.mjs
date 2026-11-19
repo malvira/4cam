@@ -1866,7 +1866,7 @@ try {
     // the tool picked joins the project without a T number and becomes the operation's; the
     // G-code then uses the next free number and warns; given a number (Tools > Tool numbers),
     // the warning goes
-    await js(`document.querySelector('#tree .tree-op[data-op="${face.id}"] [data-act="select"]').click(); true`);
+    if ((await js("window.__marcam.state.tree.selected")) !== face.id) await js(`document.querySelector('#tree .tree-op[data-op="${face.id}"] [data-act="select"]').click(); true`);
     await waitFor(() => js("!!document.getElementById('opForm')?.elements.tool"), "the facing's editor (3)", 15000);
     await js("(() => { const e = document.getElementById('opForm').elements.tool; e.value = '__add'; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await waitFor(() => js("document.getElementById('toolPick').open"), "the tool library", 10000);
