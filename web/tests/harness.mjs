@@ -7,6 +7,24 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { get as nodeHttpGet } from "node:http";
+// a GET over node:http, the body read to its end (Node's fetch has crashed on Windows CI in
+// undici, `assert(!this.paused)`, on a response whose body was left unread)
+function httpGet(u) {
+  return new Promise((resolve, reject) => {
+    const q = nodeHttpGet(u, (r) => {
+      let body = "";
+      r.setEncoding("utf8");
+      r.on("data", (c) => (body += c));
+      r.on("end", () => resolve({ ok: r.statusCode >= 200 && r.statusCode < 300, json: () => JSON.parse(body) }));
+      r.on("error", reject);
+    });
+    q.on("error", reject);
+    q.setTimeout(5000, () => q.destroy(new Error("timeout")));
+  });
+}
+const httpOk = (u) => (u.startsWith("http:") ? httpGet(u) : fetch(u).then(async (r) => (await r.arrayBuffer(), r))).then((r) => r.ok);
+
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -50,7 +68,7 @@ export async function startApp(opts = {}) {
   const port = await freePort();
   children.push(spawn(process.platform === "win32" ? "python" : "python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", serveRoot], { stdio: "ignore" }));
   const url = `http://127.0.0.1:${port}/web/`;
-  await waitFor(() => fetch(url).then((r) => r.ok), "the web server", 15000);
+  await waitFor(() => httpOk(url), "the web server", 15000);
   const profile = mkdtempSync(join(tmpdir(), "marcam-web-"));
   const dport = await freePort();
   children.push(spawn(findBrowser(), [
@@ -58,7 +76,7 @@ export async function startApp(opts = {}) {
     "--disable-extensions", "--window-size=1400,900",
     ...(process.env.MARCAM_E2E_SOFTWARE_GL ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : []), "about:blank",
   ], { stdio: "ignore" }));
-  const version = await waitFor(() => fetch(`http://127.0.0.1:${dport}/json/version`).then((r) => r.json()), "the browser", 20000);
+  const version = await waitFor(() => httpGet(`http://127.0.0.1:${dport}/json/version`).then((r) => r.json()), "the browser", 20000);
   const ws = new WebSocket(version.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error("CDP connect failed")); });
   let id = 0;
