@@ -1124,6 +1124,26 @@ fn nice(span: f64) -> f64 {
     10.0 * p
 }
 
+/// Leave the operations `hidden` (their planning numbers, as in [`crate::Move::Operation`]) out
+/// of `tps`: their moves go (their tool changes stay, so the operations after them have their
+/// tool), so a simulation shows what the others do. The material they would remove stays.
+pub fn without_ops(tps: &mut [crate::Toolpath], hidden: &[u32]) {
+    use crate::Move;
+    if hidden.is_empty() {
+        return;
+    }
+    for tp in tps {
+        let mut skip = false;
+        tp.moves.retain(|m| {
+            if let Move::Operation { id, .. } = m {
+                skip = hidden.contains(id);
+                return !skip;
+            }
+            !skip || matches!(m, Move::ToolChange { .. })
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1268,25 +1288,5 @@ mod tests {
         };
         let st = simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1);
         assert_eq!(st.rapid_hits, vec![2]);
-    }
-}
-
-/// Leave the operations `hidden` (their planning numbers, as in [`crate::Move::Operation`]) out
-/// of `tps`: their moves go (their tool changes stay, so the operations after them have their
-/// tool), so a simulation shows what the others do. The material they would remove stays.
-pub fn without_ops(tps: &mut [crate::Toolpath], hidden: &[u32]) {
-    use crate::Move;
-    if hidden.is_empty() {
-        return;
-    }
-    for tp in tps {
-        let mut skip = false;
-        tp.moves.retain(|m| {
-            if let Move::Operation { id, .. } = m {
-                skip = hidden.contains(id);
-                return !skip;
-            }
-            !skip || matches!(m, Move::ToolChange { .. })
-        });
     }
 }
