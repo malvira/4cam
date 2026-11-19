@@ -100,18 +100,76 @@ export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries })
   num.id = "toolNumbers";
   num.className = "tool-dialog";
   document.body.appendChild(num);
+  num.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    if (b.classList.contains("tn-cut")) num.querySelector(`.tn-cutrow[data-i="${b.dataset.i}"]`)?.classList.toggle("hidden");
+    if (b.classList.contains("pc-add")) num.querySelector(`.pc-table[data-i="${b.dataset.i}"]`).insertAdjacentHTML("beforeend", cutRow({}));
+    if (b.classList.contains("pc-del")) b.closest("tr").remove();
+  });
+
+  // ---- a library tool's cutting data for this project only (the project's `cutting`, picked
+  // before the library's; the library's rows shown, read only)
+  const CUT = [
+    ["rpm", "rpm"],
+    ["feed", "feed"],
+    ["plunge", "plunge"],
+    ["stepdown", "depth"],
+    ["stepover", "stepover"],
+    ["ramp_angle", "ramp °"],
+  ];
+  function libraryRows(t) {
+    const lib = [...(state.registry?.libraries || []), ...(userLibraries() || [])].find((l) => l.id === t.library);
+    return lib?.tools?.find((x) => x.id === t.tool)?.presets || [];
+  }
+  function cutRow(p = {}) {
+    const types = state.tree?.types || [];
+    const val = (k) => (p[k] == null || (["rpm", "feed", "plunge"].includes(k) && !p[k]) ? "" : p[k]);
+    return `<tr class="pc-row"><td><input class="pc-material" list="sdMaterials" placeholder="any material" value="${esc(p.material)}" aria-label="Material"></td>
+      <td><select class="pc-op" aria-label="Operation type"><option value="">any operation</option>${types.map((ty) => `<option value="${ty.kind}" ${p.op === ty.kind ? "selected" : ""}>${esc(ty.title)}</option>`).join("")}</select></td>
+      ${CUT.map(([k, l]) => `<td><input class="pc-${k}" type="number" step="any" min="0" value="${val(k)}" aria-label="${l}" size="5"></td>`).join("")}
+      <td><button type="button" class="pc-del" aria-label="Remove this row">✕</button></td></tr>`;
+  }
+  function readRows(box) {
+    const out = [];
+    for (const tr of box.querySelectorAll("tr.pc-row")) {
+      const p = { material: tr.querySelector(".pc-material").value.trim() };
+      const op = tr.querySelector(".pc-op").value;
+      if (op) p.op = op;
+      let any = false;
+      for (const [k] of CUT) {
+        const v = tr.querySelector(`.pc-${k}`).value;
+        if (v === "" || !(+v >= 0) || (["stepdown", "stepover"].includes(k) && !(+v > 0))) {
+          if (["rpm", "feed", "plunge"].includes(k)) p[k] = 0;
+          continue;
+        }
+        p[k] = +v;
+        any = true;
+      }
+      if (any) out.push(p);
+    }
+    return out;
+  }
 
   function openNumbers() {
     const doc = readJob();
     const un = new Set(doc.unindexed || []);
     const label = (t) => t.description || (t.library ? `${t.library}/${t.tool}` : `${t.kind} ${t.diameter}`);
+    const libRowsText = (t) => libraryRows(t).map((p) => `${p.material || "any material"}${p.op ? ` · ${p.op.replace(/_/g, " ")}` : ""}: ${p.feed || "-"} mm/min`).join("; ");
     num.innerHTML = `<form method="dialog" id="toolNumbersForm"><h3>Tool numbers</h3>
       <div class="muted small">The T number each tool has in the machine's tool changer. A tool without one is written as the next free number, with a warning.</div>
-      <table class="tn-table"><thead><tr><th>Tool</th><th>T number</th><th>Has one</th></tr></thead><tbody>
-      ${(doc.tools || []).map((t, i) => `<tr><td>${esc(label(t))}</td><td><input type="number" min="1" step="1" data-i="${i}" class="tn-num" value="${t.number}" size="4"></td><td><input type="checkbox" data-i="${i}" class="tn-has" ${un.has(t.number) ? "" : "checked"}></td></tr>`).join("")}
+      <table class="tn-table"><thead><tr><th>Tool</th><th>T number</th><th>Has one</th><th></th></tr></thead><tbody>
+      ${(doc.tools || []).map((t, i) => `<tr><td>${esc(label(t))}</td><td><input type="number" min="1" step="1" data-i="${i}" class="tn-num" value="${t.number}" size="4"></td><td><input type="checkbox" data-i="${i}" class="tn-has" ${un.has(t.number) ? "" : "checked"}></td>
+        <td>${t.library ? `<button type="button" class="tn-cut" data-i="${i}" title="This project's own cutting data for the tool (before the library's)">Cutting data${t.cutting?.length ? ` (${t.cutting.length})` : ""}</button>` : ""}</td></tr>
+        ${t.library ? `<tr class="tn-cutrow hidden" data-i="${i}"><td colspan="4"><div class="small muted">For this project, picked before the library's${libRowsText(t) ? ` (the library's: ${esc(libRowsText(t))})` : ""}. Blank: not given.</div>
+          <div class="tablewrap cut-wrap"><table class="tools small cut-table pc-table" data-i="${i}"><tr><th>Material</th><th>Operation</th>${CUT.map(([, l]) => `<th>${l}</th>`).join("")}<th></th></tr>${(t.cutting || []).map(cutRow).join("")}</table></div>
+          <button type="button" class="pc-add" data-i="${i}">Add a row</button></td></tr>` : ""}`).join("")}
       </tbody></table>
       <div id="tnError" class="error small hidden"></div>
       <div class="row"><button type="button" id="tnApply" class="primary">Apply</button> <button value="cancel" type="submit">Cancel</button></div></form>`;
+    // the materials offered (the setup dialog's list)
+    const dl = document.getElementById("sdMaterials");
+    if (dl && !dl.children.length) dl.innerHTML = (state.registry?.materials || []).map((m) => `<option value="${esc(m)}">`).join("");
     num.showModal();
     num.querySelector("#tnApply").addEventListener("click", () => {
       const nums = [...num.querySelectorAll(".tn-num")].map((e) => Math.round(Number(e.value)));
@@ -128,6 +186,13 @@ export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries })
       for (const s of doc.setups || []) for (const o of s.operations || []) if (map.has(o.tool)) o.tool = map.get(o.tool);
       doc.unindexed = doc.tools.filter((t, i) => !has[i]).map((t) => t.number);
       if (!doc.unindexed.length) delete doc.unindexed;
+      // each library tool's own cutting data
+      for (const box of num.querySelectorAll(".pc-table")) {
+        const t = doc.tools[+box.dataset.i];
+        const rows = readRows(box);
+        if (rows.length) t.cutting = rows;
+        else delete t.cutting;
+      }
       writeJob(doc);
       num.close();
       window.__marcam.tree?.refresh();

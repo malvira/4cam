@@ -11,8 +11,8 @@ to install, and no change to FreeCAD.
   3. plans and posts it.
 
   It returns the programs (G-code, issues, gouge and holder/shank checks, time). With
-  `out_dir` it also writes `<name>.nc`, `<name>.project.json` and the body as `<name>.stl`,
-  and `marcam run <name>.project.json` reproduces the G-code exactly.
+  `out_dir` it also writes `<name>.nc`, `<name>.marcam.toml` and the body as `<name>.stl`,
+  and `marcam run <name>.marcam.toml` reproduces the G-code exactly.
 - `marcam_plan.FCMacro`: a FreeCAD macro that plans the selected body. It asks for the
   operation and the output folder, and prints the summary in the report view.
 - The inputs and defaults are the engine's (`marcam::body`), so they are the same as the

@@ -7,10 +7,12 @@
 
 import { blockSolid, heightmapSolid, stockObject, STOCK_LEFT } from "./meshes.js";
 import { GpuStock } from "./gpu/gpusim.js";
+import { colorNum, colorRgb } from "./colors.js";
 
 const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"];
 // stock not cut yet: the stock's tint (distinct from cuts and from the part)
-const UNCUT = STOCK_LEFT;
+// (View > Colours: the uncut stock's colour)
+const uncut = () => colorRgb("uncut") || STOCK_LEFT;
 
 const b64ToBytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const f32 = (s) => new Float32Array(b64ToBytes(s).buffer);
@@ -127,13 +129,13 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     });
     const un = document.createElement("div");
     un.className = "oprow small muted";
-    un.innerHTML = `<span class="swatch" style="background: rgb(${UNCUT.map((c) => Math.round(c * 255)).join(",")})"></span> uncut stock`;
+    un.innerHTML = `<span class="swatch" style="background: rgb(${uncut().map((c) => Math.round(c * 255)).join(",")})"></span> uncut stock`;
     box.appendChild(un);
   }
 
   // a hidden operation's cuts: grey (the material is still gone; it is just not highlighted)
   const HIDDEN_CUT = [0.5, 0.52, 0.56];
-  const colorOf = (tag) => (tag ? (m.hiddenTags.has(tag) ? HIDDEN_CUT : m.colors[tag] || [1, 0, 1]) : UNCUT);
+  const colorOf = (tag) => (tag ? (m.hiddenTags.has(tag) ? HIDDEN_CUT : m.colors[tag] || [1, 0, 1]) : uncut());
 
   /** Which playback operations the tree's eyes hide (by project id, or a 0.1 job's planning
    *  order). */
@@ -281,7 +283,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       const from = prev || q;
       pos.set(from, 6 * k);
       pos.set(q, 6 * k + 3);
-      const rgb = rapid ? [0.86, 0.15, 0.15] : m.colors[tag] || [0.15, 0.39, 0.92];
+      const rgb = rapid ? colorRgb("rapid") : m.colors[tag] || colorRgb("cut");
       col.set(rgb, 6 * k);
       col.set(rgb, 6 * k + 3);
       prev = q;
@@ -309,7 +311,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** Tool model: shank + cutting end, tip at the origin, axis +Z (the spindle). */
   function toolModel(THREE, t) {
     const grp = new THREE.Group();
-    const mat = new THREE.MeshStandardMaterial({ color: 0xe5b94e, metalness: 0.6, roughness: 0.35 });
+    const mat = new THREE.MeshStandardMaterial({ color: colorNum("tool"), metalness: 0.6, roughness: 0.35 });
     const d = t?.diameter ?? 3.175;
     const R = d / 2;
     const flute = Math.max(t?.flute_length ?? 8, 2);
@@ -703,5 +705,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.session = null;
   }
 
-  return { open, close, seek, reset, applyHidden, colorOf, lost, state: m };
+  /** The colours changed (View > Colours): the open playback drawn again. */
+  async function recolor() {
+    if (!m.open || !m.session) return;
+    m.toolNumber = null;
+    await buildScene();
+  }
+
+  return { open, close, seek, reset, applyHidden, colorOf, lost, recolor, state: m };
 }

@@ -12,11 +12,11 @@ front at X0), bar stock, tool, machine and the operation's own fields. These are
 rules as the SolidCraft plugin (`marcam.body_project`). Pass any of them as keywords:
 `machine="makera-carvera-4axis"`, `tool_kind="ball"`, `stepover_mm=0.3`, ...
 
-With `out_dir`, it writes `<name>.nc` per program, `<name>.project.json` and the body as
-`<name>.stl`; `marcam run <name>.project.json` reproduces the G-code exactly.
+With `out_dir`, it writes `<name>.nc` per program, the project as `<name>.marcam.toml` (the
+format marcam writes) and the body as `<name>.stl`; `marcam run <name>.marcam.toml` reproduces
+the G-code exactly.
 """
 
-import json
 import os
 import struct
 
@@ -66,7 +66,7 @@ def plan(obj, operation, out_dir=None, tolerance=DEFAULT_TOLERANCE, **inputs):
     files = []
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-        writes = [(f"{name}.stl", stl), (f"{name}.project.json", json.dumps(project, indent=2).encode())]
+        writes = [(f"{name}.stl", stl), (f"{name}.marcam.toml", marcam.to_toml(project).encode())]
         writes += [(f'{p["name"]}.nc', p["gcode"].encode()) for p in result["programs"]]
         for fname, data in writes:
             with open(os.path.join(out_dir, fname), "wb") as f:

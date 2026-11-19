@@ -186,8 +186,10 @@ export function checkClosed({ positions, indices }) {
 }
 
 // ---------------------------------------------------------------- the stock's look
+import { colorNum } from "./colors.js";
 /** Stock colours: a light blue tint (readable on the dark background and over the grey part)
- *  and a brighter edge outline. Remaining stock in simulations uses STOCK_LEFT. */
+ *  and a brighter edge outline (the defaults: View > Colours changes them, see colors.js).
+ *  Remaining stock in simulations uses STOCK_LEFT. */
 export const STOCK_TINT = 0x7fb2e5;
 export const STOCK_EDGE = 0xa5d0ff;
 export const STOCK_LEFT = [0.58, 0.7, 0.86];
@@ -195,8 +197,8 @@ export const STOCK_LEFT = [0.58, 0.7, 0.86];
 /** The stock as it is shown: the tinted solid (see-through) with its edges drawn. */
 export function stockObject(THREE, geometry, opacity = 0.32) {
   const grp = new THREE.Group();
-  grp.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: STOCK_TINT, transparent: true, opacity, depthWrite: false, roughness: 0.6 })));
+  grp.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: colorNum("stock"), transparent: true, opacity, depthWrite: false, roughness: 0.6 })));
   // outline: the box's edges, a bar's two end circles and its silhouette seams
-  grp.add(new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 25), new THREE.LineBasicMaterial({ color: STOCK_EDGE, transparent: true, opacity: 0.85 })));
+  grp.add(new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 25), new THREE.LineBasicMaterial({ color: colorNum("stockEdge"), transparent: true, opacity: 0.85 })));
   return grp;
 }

@@ -24,7 +24,7 @@ runtime is itself marked experimental. A minor version of `craft:plugin` 0.x may
      with any operation fields the user typed on top.
 4. It plans and posts the project with marcam (the same calls as `marcam run`), and checks the
    machine limits, the G-code and gouges.
-5. It writes three files to the granted folder: `<name>.nc`, `<name>.project.json` and the
+5. It writes three files to the granted folder: `<name>.nc`, `<name>.marcam.toml` and the
    body as `<name>.stl`. SolidCraft refuses any single plugin file write over 1 MiB, so a
    longer program is written gzipped as `<name>.nc.gz` (in the knob test, `raster3d`:
    131,760 lines). Unzip it before sending it to the machine. It returns a JSON summary: the files, line counts, the time
@@ -34,7 +34,7 @@ Every entry has `effect: read`: it changes nothing in the design and can call on
 `model.mesh`. Its only other reach is writing to the one named folder, and SolidCraft
 stages those writes until the call succeeds.
 
-`marcam run <name>.project.json` reproduces the program exactly. The project names the STL
+`marcam run <name>.marcam.toml` reproduces the program exactly. The project names the STL
 and the machine, and marcam reads the STL the same way the plugin did.
 
 ## Entries

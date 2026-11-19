@@ -8,6 +8,7 @@ import { setupToolDialogs } from "./tooldialog.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
 import { setupProject } from "./project.js";
+import { color, colorNum, colorRgb, COLOR_DEFAULTS, COLOR_LABELS, onColorsChange, resetColors, setColor } from "./colors.js";
 
 // Settings saved before the rename (4cam -> marcam) carry over once: "4cam.x" -> "marcam.x".
 try {
@@ -118,6 +119,8 @@ function engine(cmd, ...args) {
 }
 
 // ---------------------------------------------------------------- state
+// (bumped when a colour changes: see View > Colours)
+let colorsGen = 0;
 const state = {
   mesh: null, // Uint8Array
   meshName: "",
@@ -1164,6 +1167,63 @@ function pointXYZ(pts, i) {
   return pts[4 * i + 3] >= 2 ? [pts[4 * i], pts[4 * i + 1], pts[4 * i + 2]] : toXYZ(pts[4 * i], pts[4 * i + 1], pts[4 * i + 2]);
 }
 
+// ---------------------------------------------------------------- colours (View > Colours)
+// Every colour the views draw with (colors.js), changed here and kept in this browser.
+function applyBackground() {
+  const bg = color("background");
+  $("view3d").style.background = bg || "";
+}
+function openColors() {
+  let dlg = $("colorsDialog");
+  if (!dlg) {
+    dlg = document.createElement("dialog");
+    dlg.id = "colorsDialog";
+    dlg.className = "tool-dialog";
+    document.body.appendChild(dlg);
+    dlg.addEventListener("input", (ev) => {
+      const k = ev.target.dataset?.color;
+      if (k) setColor(k, ev.target.value);
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target.id === "colorsReset") {
+        resetColors();
+        fill();
+      }
+      if (ev.target.dataset?.reset) {
+        resetColors(ev.target.dataset.reset);
+        fill();
+      }
+      if (ev.target.id === "colorsClose") dlg.close();
+    });
+  }
+  const fill = () => {
+    const bgDefault = getComputedStyle(document.body).getPropertyValue("--panel").trim() || "#1e2430";
+    dlg.innerHTML = `<h3>Colours</h3><div class="muted small">Kept in this browser.</div><table class="tn-table">${Object.keys(COLOR_DEFAULTS)
+      .map((k) => {
+        const v = color(k) || (/^#[0-9a-f]{6}$/i.test(bgDefault) ? bgDefault : "#1e2430");
+        return `<tr><td>${COLOR_LABELS[k]}</td><td><input type="color" data-color="${k}" value="${v}" aria-label="${COLOR_LABELS[k]}"></td><td><button type="button" data-reset="${k}" aria-label="${COLOR_LABELS[k]}: default">default</button></td></tr>`;
+      })
+      .join("")}</table><div class="row"><button type="button" id="colorsReset">Reset all</button> <button type="button" id="colorsClose" class="primary">Close</button></div>`;
+  };
+  fill();
+  dlg.showModal();
+}
+onColorsChange(async () => {
+  colorsGen++;
+  applyBackground();
+  const v = state.three;
+  if (v && !v.failed) {
+    v.key = null;
+    v.modelKey = null;
+    v.simKey = null;
+  }
+  await drawModel();
+  if (state.result) await updateView();
+  window.__marcam.machining?.recolor?.();
+});
+applyBackground();
+window.__marcam.colors = { color, setColor, resetColors, open: openColors };
+
 // ---------------------------------------------------------------- the draft's live preview
 // An operation being set up (added, not applied yet) is planned in the background as it is
 // picked and edited, and its toolpath drawn in amber over the others: what Apply would give.
@@ -1213,7 +1273,7 @@ async function drawDraft(pts) {
   for (let i = 1; i < pts.length / 4; i++) cut.push(...pointXYZ(pts, i - 1), ...pointXYZ(pts, i));
   const geo = new v.THREE.BufferGeometry();
   geo.setAttribute("position", new v.THREE.Float32BufferAttribute(cut, 3));
-  g.add(new v.THREE.LineSegments(geo, new v.THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.95 })));
+  g.add(new v.THREE.LineSegments(geo, new v.THREE.LineBasicMaterial({ color: colorNum("draft"), transparent: true, opacity: 0.95 })));
 }
 window.__marcam.previewDraft = previewDraft;
 
@@ -1241,13 +1301,14 @@ async function drawModel() {
   const setup = v2 ? doc.setups?.find((s) => s.id === state.tree?.setup) || doc.setups?.[0] : null;
   const ids = v2 ? (setup?.part?.length ? setup.part : doc.models?.map((m) => m.id) || []) : [];
   const models = v2 ? (doc.models || []).filter((m) => ids.includes(m.id)) : [];
-  const key = JSON.stringify([setup?.id, setup?.stock, models, v2 ? null : [doc.stock, doc.part], state.mesh?.length || 0]);
+  // (with the colours' generation: a draw begun before a colour changed is dropped)
+  const key = JSON.stringify([setup?.id, setup?.stock, models, v2 ? null : [doc.stock, doc.part], state.mesh?.length || 0, colorsGen]);
   if (v.modelKey === key) return;
   v.modelKey = key;
   clear(groups.stock);
   clear(groups.part);
   // the part: a mesh model (as the engine places it) or a revolved profile
-  const partMat = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.3, roughness: 0.5 });
+  const partMat = new THREE.MeshStandardMaterial({ color: colorNum("part"), metalness: 0.3, roughness: 0.5 });
   const mesh = v2 ? models.find((m) => m.kind === "mesh") : doc.part?.mesh;
   const prof = v2 ? models.find((m) => m.kind === "profile")?.points : doc.part?.profile?.points;
   let bounds = null;
@@ -1346,8 +1407,8 @@ async function updateView() {
       g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
       return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
     };
-    v.cutLines = lines(cut, 0x2563eb, 0.85);
-    v.rapLines = lines(rap, 0xdc2626, 0.5);
+    v.cutLines = lines(cut, colorNum("cut"), 0.85);
+    v.rapLines = lines(rap, colorNum("rapid"), 0.5);
     v.cutUpTo = cutUpTo;
     v.rapUpTo = rapUpTo;
     groups.path.add(v.cutLines, v.rapLines);
@@ -1408,7 +1469,8 @@ function simMesh(THREE, sim, s) {
   const r = sim.kind === "xyz" ? s.z : s.r;
   const has = (k) => (sim.kind === "xyz" ? sim.part[k] != null : sim.part[k] > 0);
   // where there is no part: remaining stock, tinted (not the part's grey)
-  const color = (k) => (has(k) ? ramp((r[k] - sim.part[k]) / 0.5) : STOCK_LEFT);
+  const uncut = colorRgb("uncut");
+  const color = (k) => (has(k) ? ramp((r[k] - sim.part[k]) / 0.5) : uncut);
   const m = sim.kind === "xyz" ? blockSolid(sim.grid, r, sim.stock_box.min[2], color) : heightmapSolid(sim.grid, r, color);
   return new THREE.Mesh(toGeometry(THREE, m), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }));
 }
@@ -1995,6 +2057,7 @@ window.__marcam.pixelAt = (fx, fy) => {
 $("menuImport").addEventListener("click", () => $("importStl").click());
 $("menuReplace").addEventListener("click", () => $("replaceModelFile").click());
 $("menuDownload").addEventListener("click", () => $("download").click());
+$("menuColors").addEventListener("click", () => openColors());
 for (const d of document.querySelectorAll("details.menu")) {
   d.addEventListener("click", (ev) => {
     if (ev.target.closest("button")) d.open = false;

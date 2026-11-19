@@ -235,7 +235,7 @@ fn every_entry_matches_the_cli() {
             out.result
         );
         let Some(exe) = &exe else { continue };
-        let project = dir.join(format!("knob_{}.project.json", t.kind));
+        let project = dir.join(format!("knob_{}.marcam.toml", t.kind));
         let cli_out = dir.join("cli");
         let status = std::process::Command::new(exe)
             .arg("run")

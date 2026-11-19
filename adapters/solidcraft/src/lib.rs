@@ -204,8 +204,17 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
     json!({"type": "object", "required": ["bodies"], "properties": props})
 }
 
-/// Operation fields the plugin does not offer: marcam's defaults apply.
-pub const LEFT_AT_DEFAULT: [&str; 3] = ["ramp_angle", "smoothing", "regions"];
+/// Operation fields the plugin does not offer: marcam's defaults apply (tabs placed by hand,
+/// their size and a contour's direction are set in the app or a project; climb by default).
+pub const LEFT_AT_DEFAULT: [&str; 7] = [
+    "ramp_angle",
+    "smoothing",
+    "regions",
+    "tab_at",
+    "tab_width",
+    "tab_height",
+    "direction",
+];
 
 /// The package manifest (`plugin.json`), generated from the operation registry.
 pub fn manifest() -> Value {
@@ -444,9 +453,12 @@ pub fn run_entry(entry: &str, params: &Value, mesh_result: &Value) -> Result<Out
             path: format!("{name}.stl"),
             data: stl,
         },
+        // the project as marcam writes it (TOML): `marcam run` reads it back
         OutFile {
-            path: format!("{name}.project.json"),
-            data: serde_json::to_vec_pretty(&project).map_err(|e| Error::Engine(e.to_string()))?,
+            path: format!("{name}.marcam.toml"),
+            data: marcam::project_file::convert_to_toml(&project.to_string())
+                .map_err(Error::Engine)?
+                .into_bytes(),
         },
     ];
     for (prog, gcode) in programs {

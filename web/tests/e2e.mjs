@@ -2331,6 +2331,58 @@ try {
     await js("window.__marcam.state.tree.tabMode = false; true");
   }
 
+  // 8y. (Mar) the colours menu: every viewer colour, changed in View > Colours, used at once
+  // (toolpaths, part, background), kept in the browser, and reset
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate for the colours", 120000);
+    await js("document.getElementById('menuColors').click(); true");
+    await waitFor(() => js("document.getElementById('colorsDialog')?.open"), "the colours dialog", 10000);
+    const keys = await js("[...document.querySelectorAll('#colorsDialog input[type=color]')].map((i) => i.dataset.color)");
+    const set = (k, v) => js(`const i = document.querySelector('#colorsDialog input[data-color="${k}"]'); i.value = '${v}'; i.dispatchEvent(new Event('input', { bubbles: true })); true`);
+    await set("cut", "#00ff00");
+    await set("part", "#ff8800");
+    await set("background", "#112233");
+    await sleep(500);
+    const got = await js(`(() => { const v = window.__marcam.state.three; let part = null; v.groups.part.traverse((c) => { if (!part && c.material?.color) part = c.material.color.getHexString(); });
+      return { cut: v.cutLines.material.color.getHexString(), part, bg: document.getElementById('view3d').style.background, stored: JSON.parse(localStorage.getItem('marcam.colors') || '{}') }; })()`);
+    await shot("25a_colours");
+    await js("document.getElementById('colorsReset').click(); true");
+    await sleep(500);
+    const reset = await js(`(() => { const v = window.__marcam.state.three; return { cut: v.cutLines.material.color.getHexString(), bg: document.getElementById('view3d').style.background, stored: localStorage.getItem('marcam.colors') }; })()`);
+    await js("document.getElementById('colorsClose').click(); true");
+    check("the colours menu: every viewer colour listed; a change is used at once (cuts, part, background) and kept in the browser; Reset all goes back",
+      keys.length >= 9 && got.cut === "00ff00" && got.part === "ff8800" && /17, 34, 51|#112233/.test(got.bg) && got.stored.cut === "#00ff00" &&
+      reset.cut === "2563eb" && !reset.bg && (reset.stored === "{}" || reset.stored === null),
+      `${keys.join(",")}; ${JSON.stringify(got)}; reset ${JSON.stringify(reset)}`);
+  }
+
+  // 8z. (Mar) a project's own cutting data for a library tool (Tools > Tool numbers): kept in
+  // the project, picked before the library's for a new operation
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); j.setups[0].material = 'aluminium'; t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await settle();
+    await js("document.getElementById('menuToolNumbers').click(); true");
+    await waitFor(() => js("document.getElementById('toolNumbers')?.open"), "the tool numbers dialog", 10000);
+    const i1 = await js("JSON.parse(document.getElementById('job').value).tools.findIndex((t) => t.number === 1)");
+    await js(`document.querySelector('.tn-cut[data-i="${i1}"]').click(); document.querySelector('.pc-add[data-i="${i1}"]').click(); true`);
+    const lib = await js(`document.querySelector('.tn-cutrow[data-i="${i1}"] .muted').textContent`);
+    await js(`(() => { const r = [...document.querySelectorAll('.pc-table[data-i="${i1}"] tr.pc-row')].pop(); r.querySelector('.pc-material').value = 'aluminium'; r.querySelector('.pc-op').value = 'pocket'; r.querySelector('.pc-feed').value = '222'; return true; })()`);
+    await shot("26a_project_cutting_data");
+    await js("document.getElementById('tnApply').click(); true");
+    await settle();
+    const t1 = await js("JSON.parse(document.getElementById('job').value).tools.find((t) => t.number === 1)");
+    const d = await js(`await (async () => { const j = JSON.parse(document.getElementById('job').value); return (await window.__marcam.engine('opDefaults', j, { type: 'pocket', setup: j.setups[0].id, tool: 1 })).result.feed; })()`);
+    const face = await js(`await (async () => { const j = JSON.parse(document.getElementById('job').value); return (await window.__marcam.engine('opDefaults', j, { type: 'face', setup: j.setups[0].id, tool: 1 })).result.feed; })()`);
+    check("a project's own cutting data for a library tool: edited in Tool numbers (the library's shown), kept in the project, used before the library's",
+      t1.cutting?.length === 1 && t1.cutting[0].op === "pocket" && t1.cutting[0].feed === 222 && /aluminium/.test(lib) && d === 222 && face === 500,
+      `${JSON.stringify(t1.cutting)}; library: ${lib}; pocket ${d}, face ${face}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

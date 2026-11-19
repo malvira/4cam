@@ -85,13 +85,13 @@ def test_plans_match_the_cli():
             res = fc.plan(obj, op, out_dir=out, **inputs)
             assert obj.Shape.asked == fc.DEFAULT_TOLERANCE
             assert res["name"] == f"knob_{op}", res["name"]
-            assert sorted(res["files"]) == sorted([f"knob_{op}.stl", f"knob_{op}.project.json", f"knob_{op}.nc"])
+            assert sorted(res["files"]) == sorted([f"knob_{op}.stl", f"knob_{op}.marcam.toml", f"knob_{op}.nc"])
             prog = res["programs"][0]
             assert not prog["issues"], prog["issues"][:3]
             assert prog["collisions"]["count"] == 0
             got = open(os.path.join(out, f"knob_{op}.nc"), encoding="utf-8").read()
             assert got == prog["gcode"]
-            want = cli_gcode(os.path.join(out, f"knob_{op}.project.json"), f"knob_{op}", os.path.join(out, "cli"))
+            want = cli_gcode(os.path.join(out, f"knob_{op}.marcam.toml"), f"knob_{op}", os.path.join(out, "cli"))
             assert got == want, f"{op}: the plugin's G-code differs from marcam run"
             for k, v in inputs.items():
                 if k not in ("tool_kind", "tip_diameter", "taper_angle"):

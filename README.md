@@ -66,6 +66,18 @@ program.
   one full turn at the foot of each wall (`clean_walls`, on by default), because a helix only
   reaches a wall's foot at one angle per turn. If the job has
   no `part.mesh`, `rotary_finish` uses `part.profile`, revolved into a 720-facet mesh.
+- 3-axis (vise, or indexed on the bar): `face`, `pocket`, `drill`, `bore`, `contour`,
+  `raster3d`, `rough3d`, `engrave`, `vcarve`. A `contour` is cut `climb` (the default, or the
+  machine profile's `cut_direction`) or `conventional`, and can leave tabs holding the part:
+  `tabs` evenly round the outline, or placed by hand (`tab_at`, a click on the outline in the
+  app: a fraction of the way round the outline as written, so it stays put when the operation
+  is planned again, its direction changes or the model is replaced), each `tab_width` long
+  and `tab_height` high.
+
+Each library tool can carry cutting data per stock material and operation type (the tool
+library's form); a setup's `material` picks it for new operations, and a project can give a
+library tool rows of its own (Tools > Tool numbers > Cutting data), picked before the
+library's. See [docs/profiles.md](docs/profiles.md).
 
 ## Usage
 
@@ -203,6 +215,9 @@ browser.
   in machine time, ×1 (real time) to ×1000 on a log scale; ⇥ jumps to the end; the label shows
   the machining time reached of the total. Switching the stock on keeps the place. Hidden
   operations are left out of everything. Speed and stock are remembered.
+- **View > Colours:** every colour the 3D view draws with (toolpath cuts and rapids, part,
+  stock and its outline, uncut stock, tool, a new operation's preview, the background), kept
+  in this browser, with Reset.
 
 `node web/tests/e2e.mjs` drives the page in an installed Chrome or Edge in headless mode,
 over the DevTools protocol, with no npm packages. It checks:
