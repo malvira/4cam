@@ -10,7 +10,7 @@ function libraryTools(state, userLibraries) {
   const out = [];
   for (const lib of [...(state.registry?.libraries || []), ...(userLibraries() || [])]) {
     for (const t of lib.tools || []) {
-      out.push({ library: lib.id, libraryName: lib.name || lib.id, id: t.id, name: t.name || t.id, kind: t.shape?.kind, diameter: t.shape?.diameter ?? t.shape?.tip_diameter, flute: t.flute_length });
+      out.push({ library: lib.id, libraryName: lib.name || lib.id, id: t.id, name: t.name || t.id, kind: t.shape?.kind, diameter: t.shape?.diameter ?? t.shape?.tip_diameter, flute: t.flute_length, materials: [...new Set((t.presets || []).map((p) => p.material || "any material"))] });
     }
   }
   return out;
@@ -42,9 +42,9 @@ export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries })
   function renderList() {
     const q = $("tpSearch").value.trim().toLowerCase();
     const kind = $("tpKind").value;
-    const tools = libraryTools(state, userLibraries).filter((t) => (!kind || t.kind === kind) && (!q || `${t.name} ${t.diameter} ${t.kind} ${t.libraryName}`.toLowerCase().includes(q)));
+    const tools = libraryTools(state, userLibraries).filter((t) => (!kind || t.kind === kind) && (!q || `${t.name} ${t.diameter} ${t.kind} ${t.libraryName} ${t.materials.join(" ")}`.toLowerCase().includes(q)));
     $("tpList").innerHTML = tools.length
-      ? tools.map((t, i) => `<button type="button" class="tp-row" data-i="${i}" role="option"><strong>${esc(t.name)}</strong> <span class="muted">${esc(t.kind || "")} ${t.diameter ?? ""} mm · ${esc(t.libraryName)}</span></button>`).join("")
+      ? tools.map((t, i) => `<button type="button" class="tp-row" data-i="${i}" role="option"><strong>${esc(t.name)}</strong> <span class="muted">${esc(t.kind || "")} ${t.diameter ?? ""} mm · ${esc(t.libraryName)}${t.materials.length ? ` · data for ${esc(t.materials.join(", "))}` : ""}</span></button>`).join("")
       : `<div class="muted small">No tool matches.</div>`;
     $("tpList").dataset.tools = JSON.stringify(tools);
   }

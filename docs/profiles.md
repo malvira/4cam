@@ -112,6 +112,29 @@ toolpaths:
 }
 ```
 
+### Cutting data (`presets`)
+
+Each row is a tool's starting values for one stock material and, optionally, one operation
+type. A new operation in a setup whose `material` is set takes the row that fits best: its
+type in that material, then any type in that material, then its type in any material, then a
+row with neither; with none, the computed defaults stand (0.025 mm per tooth at the setup's
+spindle speed, depths and stepovers from the tool size). A project can give a library tool
+rows of its own (`cutting` on the tool entry), which win over the library's when equally
+specific. Materials match ignoring case, spaces, `-` and `_` ("aluminum" is "aluminium").
+
+| Field | Meaning |
+| --- | --- |
+| `material` | stock material (`""` or absent: any) |
+| `op` | operation type (`"pocket"`, `"rotary_turning"` ...; absent: any) |
+| `rpm` | the spindle speed the feeds are for: they are scaled to the setup's speed (same chip load) |
+| `feed`, `plunge` | mm/min (a roughing+finishing operation finishes at 85% of the feed) |
+| `stepdown` | depth per pass, mm |
+| `stepover` | mm (an operation that takes its stepover as a fraction of the tool gets it divided by the diameter) |
+| `ramp_angle` | degrees |
+
+Changing a setup's material later changes only the values its operations still have from the
+old material; values typed over are kept.
+
 These are the shapes a tool can have, and how the strategies use each:
 
 | Shape | Fields | Used by the strategies as |

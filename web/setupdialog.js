@@ -173,6 +173,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       // (the setup's own axis; a change of type resets it to that type's, unless set here)
       $("sdAxis").value = preset.axis ?? (bar(k) ? "x" : "z");
       $("sdTail").checked = !!preset.tailstock;
+      $("sdMaterials").innerHTML = (state.registry?.materials ?? []).map((m) => `<option value="${m}">`).join("");
+      $("sdMaterial").value = preset.material ?? "";
       const st = preset.stock;
       const ex = preset.explicit;
       dlg.querySelector(`input[name="sdStock"][value="${ex ? "explicit" : "auto"}"]`).checked = true;
@@ -215,6 +217,9 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         margin: num("sdMargin"),
         explicit: ex,
         tailstock: bar(k) && $("sdTail").checked,
+        material: $("sdMaterial").value.trim() || null,
+        // the placement fields typed in (others are the type's defaults)
+        edited: ["sdMargin", "sdOrigin", "sdAxis"].filter((id) => $(id).dataset.edited),
         file: c.parsed?.file ?? null,
         tris: c.parsed?.tris ?? null,
         ascii: !!c.parsed?.ascii,

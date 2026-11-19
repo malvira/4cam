@@ -413,20 +413,113 @@ impl LibShape {
     }
 }
 
-/// Starting speeds and feeds for one material.
+/// Cutting data for a tool: starting speeds, feeds and depths for one stock material and
+/// (optionally) one operation type. Picked by [`pick_preset`]; laid over the computed
+/// defaults of a new operation by [`crate::ops::apply_cutting`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Preset {
+    /// Stock material (see [`MATERIALS`]; any other name may be used). Empty: any material.
+    #[serde(default)]
     pub material: String,
+    /// Operation type it is for (`"pocket"`, `"rotary_turning"` ...). Absent: any operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<String>,
+    /// Spindle speed the feeds are for; the feeds are scaled to the setup's speed (same chip
+    /// load). 0: not given.
+    #[serde(default)]
     pub rpm: f64,
-    /// mm/min
+    /// mm/min (0: not given)
+    #[serde(default)]
     pub feed: f64,
-    /// mm/min
+    /// mm/min (0: not given)
     #[serde(default)]
     pub plunge: f64,
+    /// Depth per pass, mm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stepdown: Option<f64>,
+    /// Stepover, mm (operations that take it as a fraction of the tool get it divided by
+    /// the diameter).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stepover: Option<f64>,
+    /// Ramp angle, degrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp_angle: Option<f64>,
+}
+
+/// Stock materials offered for a setup. Any other name may be typed; cutting data matches
+/// materials by name (ignoring case, spaces, `-` and `_`).
+pub const MATERIALS: [&str; 19] = [
+    "aluminium",
+    "brass",
+    "copper",
+    "mild steel",
+    "stainless steel",
+    "titanium",
+    "hardwood",
+    "softwood",
+    "plywood",
+    "mdf",
+    "acrylic",
+    "polycarbonate",
+    "pom",
+    "nylon",
+    "hdpe",
+    "pvc",
+    "pcb/fr4",
+    "machining wax",
+    "foam",
+];
+
+/// A material name for matching: lower case, without spaces, `-` or `_`; "aluminum" is
+/// "aluminium".
+pub fn material_key(m: &str) -> String {
+    let k: String = m
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    if k == "aluminum" {
+        "aluminium".into()
+    } else {
+        k
+    }
+}
+
+/// The cutting data for operation type `op` in `material` (None: not set) among `presets`,
+/// the most specific first: this operation in this material; any operation in this
+/// material; this operation in any material; any operation in any material. Among equally
+/// specific ones the first wins (put a project's overrides before the library's).
+pub fn pick_preset<'a>(
+    presets: &[&'a Preset],
+    op: &str,
+    material: Option<&str>,
+) -> Option<&'a Preset> {
+    let want = material.map(material_key).filter(|m| !m.is_empty());
+    let score = |p: &Preset| -> Option<u8> {
+        let op_s = match p.op.as_deref() {
+            None | Some("") => 0,
+            Some(o) if o == op => 1,
+            _ => return None,
+        };
+        let mat = material_key(&p.material);
+        let mat_s = if mat.is_empty() {
+            0
+        } else if want.as_deref() == Some(mat.as_str()) {
+            2
+        } else {
+            return None;
+        };
+        Some(mat_s + op_s)
+    };
+    let mut best: Option<(u8, &'a Preset)> = None;
+    for p in presets {
+        if let Some(s) = score(p) {
+            if best.is_none_or(|(b, _)| s > b) {
+                best = Some((s, p));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -600,6 +693,18 @@ impl ToolLibrary {
             for p in &t.presets {
                 if !(p.rpm >= 0.0 && p.feed >= 0.0 && p.plunge >= 0.0) {
                     return e("preset speeds and feeds must not be negative");
+                }
+                if p.stepdown.is_some_and(|x| !(x > 0.0)) || p.stepover.is_some_and(|x| !(x > 0.0))
+                {
+                    return e("preset stepdown and stepover must be > 0");
+                }
+                if p.ramp_angle.is_some_and(|x| !(0.0..=89.0).contains(&x)) {
+                    return e("preset ramp angle must be 0 to 89 degrees");
+                }
+                if let Some(o) = p.op.as_deref().filter(|o| !o.is_empty()) {
+                    if crate::ops::find(o).is_none() {
+                        return e(&format!("preset for unknown operation type {o:?}"));
+                    }
                 }
             }
         }
@@ -1287,6 +1392,8 @@ fn fusion_tools(v: &Value, stem: &str) -> Result<Import, String> {
                     plunge: (num(p, "v_f_plunge").unwrap_or(0.0) * k).round(),
                     stepdown: num(p, "stepdown").map(|x| x * k),
                     stepover: num(p, "stepover").map(|x| x * k),
+                    op: None,
+                    ramp_angle: None,
                 })
             })
             .collect();

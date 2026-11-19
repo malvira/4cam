@@ -493,6 +493,11 @@ export function setupProject(ctx) {
   async function applySetup(doc, s, cfg, tris) {
     const kind = cfg.kind;
     s.kind = kind;
+    // the material first: the operations' defaults below are for it
+    if ("material" in cfg) {
+      if (cfg.material) s.material = cfg.material;
+      else delete s.material;
+    }
     if (cfg.machine) s.machine = cfg.machine;
     if (cfg.setupName) s.name = cfg.setupName;
     s.holding = { kind: kind === "vise" ? "vise" : "rotary_chuck", tailstock: kind !== "vise" && !!cfg.tailstock };
@@ -742,10 +747,28 @@ export function setupProject(ctx) {
     const kind = kindOf(s);
     const axis = kind === "vise" ? Object.entries(UP_AXIS).find(([, v]) => v === (m?.axis ?? "x"))?.[0] ?? "z" : m?.axis ?? "x";
     const cfg = await dialog.open("edit", {
-      kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock,
+      kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
       stock: s.stock, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null,
     });
     if (!cfg) return false;
+    // nothing about the placement changed (only the name or the material): the operations
+    // keep their values; a new material changes only the ones not typed over
+    const machine0 = s.machine ?? currentMachine()?.id;
+    if (cfg.kind === kind && cfg.axis === axis && !!cfg.tailstock === !!s.holding?.tailstock && !cfg.explicit && !cfg.edited?.length && (cfg.machine ?? null) === (machine0 ?? null)) {
+      const before = $("job").value;
+      let changed = [];
+      if ((cfg.material ?? null) !== (s.material ?? null)) {
+        const { result } = await engine("setMaterial", doc, { setup: s.id, material: cfg.material, machine: engineMachine() });
+        doc = result.project;
+        changed = result.changed;
+      }
+      const s1 = doc.setups.find((x) => x.id === s.id);
+      if (cfg.setupName) s1.name = cfg.setupName;
+      const what = (cfg.material ?? null) !== (s.material ?? null) ? `material ${cfg.material ?? "not set"}` : "renamed";
+      await commitSetupChange(doc, { removed: [], added: [] }, { label: `Setup "${s1.name || s1.id}": ${what}.`, job: before });
+      if (changed.length) setStatus(`Material ${cfg.material ?? "not set"}: ${changed.length} cutting value${changed.length > 1 ? "s" : ""} updated (typed ones kept). Generate to plan it again`, "ready");
+      return { removed: [], added: [], recomputed: [], material: changed };
+    }
     setStatus(`Changing the setup to ${KINDS[cfg.kind]}...`, "busy");
     const before = $("job").value;
     const probe = structuredClone(doc);

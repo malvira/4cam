@@ -37,6 +37,12 @@ table.tools td, table.tools th { border-bottom: 1px solid var(--line); padding: 
 table.tools button { padding: 1px 6px; font-size: 11px; }
 .toolform { display: grid; grid-template-columns: 1fr; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 4px; }
 .toolform label { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.tf-cutting { border: 1px solid var(--line); border-radius: 4px; padding: 4px; margin: 0; min-width: 0; }
+.tablewrap.cut-wrap { height: auto; min-height: 0; max-height: 240px; overflow: auto; max-width: 100%; }
+.cut-table td { padding: 1px 2px; }
+.toolform .cut-table input, .toolform .cut-table select { width: 64px; }
+.toolform .cut-table input.cut-material { width: 96px; }
+.toolform .cut-table select { width: 110px; }
 .toolform input, .toolform select { width: 150px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
 #importUrl { flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
 #summary .limits { margin: 4px 0; padding: 6px 10px; border-radius: 4px; background: var(--warn-bg); color: var(--warn); }

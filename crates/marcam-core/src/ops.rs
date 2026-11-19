@@ -638,6 +638,82 @@ fn nice(v: f64, step: f64) -> f64 {
     ((v / step).round() * step * 1e6).round() / 1e6
 }
 
+/// The parameters cutting data sets (see [`apply_cutting`]).
+pub const CUTTING_KEYS: [&str; 11] = [
+    "feed",
+    "rough_feed",
+    "finish_feed",
+    "plunge_feed",
+    "step_down",
+    "rough_depth",
+    "stepover",
+    "stepover_mm",
+    "step_x",
+    "rough_step",
+    "ramp_angle",
+];
+
+/// Lay a tool's cutting data over an operation's computed defaults `v` (from [`defaults`]):
+/// feeds (scaled from the preset's spindle speed to `spindle_rpm`, so the chip load is the
+/// same, and capped at `feed_cap`), plunge, depth per pass, stepover (in mm, or as a
+/// fraction of the tool diameter `tool_d` where the operation takes one) and ramp angle,
+/// each where the operation has that parameter and the preset gives it.
+pub fn apply_cutting(
+    v: &mut Value,
+    p: &crate::profiles::Preset,
+    spindle_rpm: f64,
+    tool_d: f64,
+    feed_cap: f64,
+) {
+    let Some(kind) = v.get("type").and_then(Value::as_str).map(str::to_string) else {
+        return;
+    };
+    let Some(t) = find(&kind) else { return };
+    let has = |k: &str| t.params.iter().any(|x| x.name == k);
+    let unit = |k: &str| t.params.iter().find(|x| x.name == k).map_or("", |x| x.unit);
+    let scale = if p.rpm > 0.0 && spindle_rpm > 0.0 {
+        spindle_rpm / p.rpm
+    } else {
+        1.0
+    };
+    let feed_of = |f: f64| nice((f * scale).min(feed_cap).max(1.0), 1.0);
+    let Some(m) = v.as_object_mut() else { return };
+    let mut set = |k: &str, x: f64| {
+        if has(k) {
+            m.insert(k.into(), json!(x));
+        }
+    };
+    if p.feed > 0.0 {
+        if kind != "drill" {
+            set("feed", feed_of(p.feed));
+        }
+        set("rough_feed", feed_of(p.feed));
+        set("finish_feed", feed_of(0.85 * p.feed));
+    }
+    if p.plunge > 0.0 {
+        set("plunge_feed", feed_of(p.plunge));
+        if kind == "drill" {
+            set("feed", feed_of(p.plunge));
+        }
+    }
+    if let Some(d) = p.stepdown {
+        set("step_down", nice(d, 0.001));
+        set("rough_depth", nice(d, 0.001));
+    }
+    if let Some(s) = p.stepover {
+        for k in ["stepover", "stepover_mm", "step_x", "rough_step"] {
+            if unit(k).starts_with("mm") {
+                set(k, nice(s, 0.001));
+            } else if tool_d > 0.0 {
+                set(k, nice((s / tool_d).clamp(0.05, 1.0), 0.01));
+            }
+        }
+    }
+    if let Some(a) = p.ramp_angle {
+        set("ramp_angle", a);
+    }
+}
+
 /// A complete, valid operation of `kind` with every parameter filled in from the context:
 /// tool size (depths, stepovers), spindle speed and the machine's feed cap (feeds), and the
 /// part / selected geometry (ranges, knurl body, chamfer edge). Every host gets the same

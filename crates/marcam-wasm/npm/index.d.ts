@@ -18,6 +18,7 @@ export interface Marcam {
   faceRegions(doc: Doc, model: string, mesh?: Bytes): Json;
   wizardKnurl(doc: Doc, params: object, mesh?: Bytes): Json;
   opDefaults(doc: Doc, request: object, mesh?: Bytes): Json;
+  setMaterial(doc: Doc, request: { setup?: string; material: string | null; machine?: string | object; libraries?: object[] }): Json;
   pickables(doc: Doc, request?: { setup?: string; model?: string; index_a?: number }, mesh?: Bytes): Json;
   applyPicks(doc: Doc, request: { type: string; ids: string[]; setup?: string; model?: string; index_a?: number; tool?: number }, mesh?: Bytes): Json;
   importProfile(bytes: Bytes, name: string): Json;

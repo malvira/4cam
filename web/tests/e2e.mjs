@@ -1983,6 +1983,65 @@ try {
     check("Tool numbers: every tool given its number, the warning goes", !warn2 && un2.length === 0, `${warn2} | ${JSON.stringify(un2)}`);
   }
 
+  // 8s. (Mar) cutting data by tool × operation type × stock material: a row added in the
+  // tool library's form is kept in the library; giving the setup that material (Edit setup)
+  // updates the values not typed over and keeps the typed ones; a new
+  // operation takes the row's values
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const lib = () => js("JSON.parse(localStorage.getItem('marcam.libraries')).find((l) => l.id === 'my-tools').tools.find((t) => t.id === 'spiral-o-metal-3.175x12')");
+    await js("document.getElementById('libraryPanel').open = true; const l = document.getElementById('library'); l.value = 'my-tools'; l.dispatchEvent(new Event('change')); true");
+    const ti = await js("JSON.parse(localStorage.getItem('marcam.libraries')).find((l) => l.id === 'my-tools').tools.findIndex((t) => t.id === 'spiral-o-metal-3.175x12')");
+    await js(`document.querySelector('#toolTable button[data-edit="${ti}"]').click(); true`);
+    await waitFor(() => js("document.querySelectorAll('#tfCutTable .cut-op option').length > 5"), "the operation types in the cutting data", 15000);
+    const rows0 = await js("[...document.querySelectorAll('#tfCutTable tr.cut-row')].map((r) => r.querySelector('.cut-material').value + ' ' + (r.querySelector('.cut-op').value || 'any') + ' ' + r.querySelector('.cut-feed').value)");
+    await js(`document.getElementById('tfCutAdd').click(); const r = [...document.querySelectorAll('#tfCutTable tr.cut-row')].pop();
+      r.querySelector('.cut-material').value = 'aluminium'; r.querySelector('.cut-op').value = 'pocket'; r.querySelector('.cut-feed').value = '450';
+      r.querySelector('.cut-plunge').value = '150'; r.querySelector('.cut-stepdown').value = '0.4'; true`);
+    await js("document.getElementById('tfCutTable').scrollIntoView(); true");
+    await shot("21a_cutting_data");
+    await js("document.getElementById('tfSave').click(); true");
+    const saved = (await lib()).presets;
+    check("the tool library's form edits a tool's cutting data by material and operation type, kept in the library",
+      JSON.stringify(rows0) === JSON.stringify(["aluminium any 500"]) && saved.length === 2 && saved[1].material === "aluminium" && saved[1].op === "pocket" && saved[1].feed === 450 && saved[1].plunge === 150 && saved[1].stepdown === 0.4,
+      `${rows0.join(" | ")} -> ${JSON.stringify(saved)}`);
+    // the project's T1 from "My tools"; two pockets with the computed values (no material),
+    // the second one's feed typed over
+    await js(`await (async () => { const d = JSON.parse(document.getElementById('job').value); d.tools.find((t) => t.number === 1).library = 'my-tools';
+      const s = d.setups[0];
+      const { result } = await window.__marcam.engine('opDefaults', d, { type: 'pocket', setup: s.id, tool: 1 });
+      s.operations.push({ ...result, id: 'auto' }, { ...result, id: 'typed', feed: 777 });
+      const j = document.getElementById('job'); j.value = JSON.stringify(d, null, 2); j.dispatchEvent(new Event('input')); return true; })()`);
+    await settle();
+    const before = await js("(() => { const o = JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.id === 'auto'); return { feed: o.feed, step_down: o.step_down }; })()");
+    const plans0 = await js("window.__marcam.calls.planAndPost || 0");
+    await js("document.getElementById('treeEditSetup').click(); true");
+    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 15000);
+    const listed = await js("[...document.querySelectorAll('#sdMaterials option')].map((o) => o.value)");
+    await js("document.getElementById('sdMaterial').value = 'aluminium'; document.getElementById('sdOk').click(); true");
+    await waitFor(() => js("!document.getElementById('setupDialog').open && JSON.parse(document.getElementById('job').value).setups[0].material === 'aluminium'"), "the material set", 30000);
+    await settle();
+    const after = await js("(() => { const d = JSON.parse(document.getElementById('job').value); const g = (id) => d.setups[0].operations.find((o) => o.id === id); return { auto: { feed: g('auto').feed, plunge: g('auto').plunge_feed, step_down: g('auto').step_down }, typed: { feed: g('typed').feed, step_down: g('typed').step_down }, n: d.setups[0].operations.length, status: document.getElementById('status').textContent }; })()");
+    const plans1 = await js("window.__marcam.calls.planAndPost || 0");
+    check("the setup's material (offered from a list) updates the cutting values not typed over and keeps the typed ones",
+      listed.includes("aluminium") && listed.includes("hardwood") && before.feed === 300 && after.auto.feed === 450 && after.auto.plunge === 150 && after.auto.step_down === 0.4 &&
+      after.typed.feed === 777 && after.typed.step_down === 0.4 && after.n === 8 && /updated/.test(after.status),
+      `${JSON.stringify(before)} -> ${JSON.stringify(after)}; plans ${plans1 - plans0}`);
+    // a new pocket with T1 takes the row; a face (no row for it) the tool's aluminium data
+    const fresh = await js(`await (async () => { const d = JSON.parse(document.getElementById('job').value); const s = d.setups[0];
+      const p = (await window.__marcam.engine('opDefaults', d, { type: 'pocket', setup: s.id, tool: 1 })).result;
+      const f = (await window.__marcam.engine('opDefaults', d, { type: 'face', setup: s.id, tool: 1 })).result;
+      return { pocket: p.feed, depth: p.step_down, face: f.feed }; })()`);
+    // reopened, the dialog shows the material
+    await js("document.getElementById('treeEditSetup').click(); true");
+    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 15000);
+    const shown = await js("document.getElementById('sdMaterial').value");
+    await js("document.getElementById('sdCancel').click(); true");
+    check("a new operation takes the tool's data for its type in the setup's material, else the tool's for the material; the dialog shows the material",
+      fresh.pocket === 450 && fresh.depth === 0.4 && fresh.face === 500 && shown === "aluminium", `${JSON.stringify(fresh)} ${shown}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

@@ -59,6 +59,10 @@ pub enum ToolEntry {
         tool: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        /// This project's own cutting data for the tool, picked before the library's (see
+        /// [`crate::profiles::pick_preset`]).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        cutting: Vec<crate::profiles::Preset>,
     },
     Inline(Tool),
 }
@@ -203,6 +207,10 @@ pub struct Setup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     pub stock: StockDef,
+    /// Stock material (see [`crate::profiles::MATERIALS`]): picks the tools' cutting data
+    /// for new operations. Absent: not set (computed defaults).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
     #[serde(default = "default_clearance")]
     pub clearance: f64,
     #[serde(default)]
@@ -298,6 +306,7 @@ impl Project {
                     radius: job.stock.radius,
                     length: job.stock.length,
                 },
+                material: None,
                 clearance: job.clearance,
                 holding: Holding::default(),
                 part,
@@ -493,10 +502,117 @@ impl Project {
                 }),
             },
         )?;
+        // the tool's cutting data for this operation in the setup's material
+        let n = v["tool"].as_u64().map_or(0, |n| n as u32);
+        if let Some(p) = self.cutting_preset(kind, n, s.material.as_deref(), libraries) {
+            let d = job.tool(n).map_or(0.0, |t| match t.shape {
+                job::ToolShape::Flat { diameter } | job::ToolShape::Ball { diameter } => diameter,
+                job::ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0),
+                job::ToolShape::TaperedBall { tip_diameter, .. } => tip_diameter,
+            });
+            let cap = machine
+                .and_then(|m| m.max_feed)
+                .map_or(f64::INFINITY, |c| 0.75 * c);
+            crate::ops::apply_cutting(&mut v, &p, s.spindle_rpm as f64, d, cap);
+        }
         if !geometry.is_empty() {
             v["geometry"] = serde_json::to_value(geometry).map_err(|e| e.to_string())?;
         }
         Ok(v)
+    }
+
+    /// The cutting data tool `tool` has for operation type `kind` in `material`, from the
+    /// project's own (the tool entry's `cutting`) and its library's, the most specific first
+    /// (see [`profiles::pick_preset`]; the project's win a tie). None: an inline tool, or no
+    /// data fits (the computed defaults stand).
+    pub fn cutting_preset(
+        &self,
+        kind: &str,
+        tool: u32,
+        material: Option<&str>,
+        libraries: &[ToolLibrary],
+    ) -> Option<profiles::Preset> {
+        let Some(ToolEntry::Library {
+            library,
+            tool: id,
+            cutting,
+            ..
+        }) = self.tools.iter().find(|t| t.number() == tool)
+        else {
+            return None;
+        };
+        let builtin = profiles::builtin_libraries();
+        let lib_tool = libraries
+            .iter()
+            .chain(builtin.iter())
+            .find(|l| &l.id == library)
+            .and_then(|l| l.tool(id));
+        let all: Vec<&profiles::Preset> = cutting
+            .iter()
+            .chain(lib_tool.into_iter().flat_map(|t| t.presets.iter()))
+            .collect();
+        profiles::pick_preset(&all, kind, material).cloned()
+    }
+
+    /// Change a setup's stock material (None or blank: not set). In each of its operations,
+    /// a cutting parameter (feeds, depth per pass, stepover, ramp angle) that still has the
+    /// value the old material gave it takes the new material's; one typed over is kept.
+    /// Returns `"<operation id>: <parameter>"` for each value changed.
+    pub fn set_material(
+        &mut self,
+        setup: &str,
+        material: Option<String>,
+        libraries: &[ToolLibrary],
+        machine: Option<&crate::profiles::MachineProfile>,
+    ) -> Result<Vec<String>, String> {
+        let si = self
+            .setups
+            .iter()
+            .position(|s| s.id == setup)
+            .ok_or(format!("no setup {setup:?}"))?;
+        let material = material
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty());
+        let mut next = self.clone();
+        next.setups[si].material = material.clone();
+        let no_mesh = |_: &str| None;
+        let close = |a: &Value, b: &Value| match (a.as_f64(), b.as_f64()) {
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-9 * x.abs().max(1.0),
+            _ => a == b,
+        };
+        let mut changed = Vec::new();
+        let mut ops = self.setups[si].operations.clone();
+        for o in ops.iter_mut() {
+            let kind = crate::ops::kind_of(&o.op);
+            let tool = Some(o.op.tool());
+            let (Ok(old), Ok(new)) = (
+                self.op_defaults(kind, setup, tool, &[], libraries, machine, &no_mesh),
+                next.op_defaults(kind, setup, tool, &[], libraries, machine, &no_mesh),
+            ) else {
+                continue;
+            };
+            let mut v = serde_json::to_value(&o.op).map_err(|e| e.to_string())?;
+            let mut any = false;
+            for k in crate::ops::CUTTING_KEYS {
+                let Some(nv) = new.get(k) else { continue };
+                let untouched = match (v.get(k), old.get(k)) {
+                    (None, _) => true,
+                    (Some(c), Some(ov)) => close(c, ov),
+                    (Some(_), None) => false,
+                };
+                if untouched && v.get(k).is_none_or(|c| !close(c, nv)) {
+                    v[k] = nv.clone();
+                    changed.push(format!("{}: {k}", o.id));
+                    any = true;
+                }
+            }
+            if any {
+                o.op = serde_json::from_value(v).map_err(|e| format!("{}: {e}", o.id))?;
+            }
+        }
+        self.setups[si].material = material;
+        self.setups[si].operations = ops;
+        Ok(changed)
     }
 
     pub fn setup(&self, id: &str) -> Option<&Setup> {
@@ -1099,6 +1215,7 @@ mod tests {
             library: "makera-starter".into(),
             tool: "spiral-o-metal-3.175x12".into(),
             description: None,
+            cutting: vec![],
         };
         let text = serde_json::to_string(&p).unwrap();
         let (p2, _) = Project::from_json_any(&text).unwrap();

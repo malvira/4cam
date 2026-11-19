@@ -180,6 +180,7 @@ pub mod api {
         json!({
             "machines": profiles::builtin_machines(),
             "libraries": profiles::builtin_libraries(),
+            "materials": profiles::MATERIALS,
         })
     }
 
@@ -1339,6 +1340,39 @@ pub mod api {
         }
     }
 
+    /// Change a setup's stock material: `opts` = {setup?, material (null or "": not set),
+    /// machine?, libraries?}. Cutting parameters still at the old material's values take the
+    /// new one's; typed ones are kept. Returns {project, changed: ["<op id>: <param>"]}.
+    pub fn set_material(doc: &str, opts: &str) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let (mut p, _) = match marcam::project::Project::from_json_any(doc) {
+            Ok(x) => x,
+            Err(e) => return err(e),
+        };
+        let libs = match libraries(&o) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let Some(setup) = o["setup"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| p.setups.first().map(|s| s.id.clone()))
+        else {
+            return err("the project has no setups");
+        };
+        let machine = match &o["machine"] {
+            Value::String(id) => profiles::builtin_machine(id),
+            Value::Object(_) => serde_json::from_value(o["machine"].clone()).ok(),
+            _ => None,
+        };
+        let material = o["material"].as_str().map(str::to_string);
+        match p.set_material(&setup, material, &libs, machine.as_ref()) {
+            Ok(changed) => json!({"project": p, "changed": changed}),
+            Err(e) => err(e),
+        }
+    }
+
     /// Run the knurl wizard on a document (params JSON, mesh bytes for mesh models); returns
     /// the updated 0.2 project and what was added.
     pub fn wizard_knurl(doc: &str, params: &str, mesh: &[u8]) -> Value {
@@ -1429,6 +1463,7 @@ pub mod api {
             "wizard_knurl" => wizard_knurl(&d(a), &s(b), c),
             "body_project" => body_project(&s(a), b),
             "op_defaults" => op_defaults(&d(a), &s(b), c),
+            "set_material" => set_material(&d(a), &s(b)),
             "pickables" => pickables(&d(a), &s(b), c),
             "apply_picks" => apply_picks(&d(a), &s(b), c),
             "replace_model" => replace_model(&d(a), &s(b), c),

@@ -37,6 +37,8 @@ worker.onerror = (ev) => setStatus(`Engine failed to start: ${ev.message || "see
 const calls = {};
 function engine(cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
+  // the person's tool libraries: their tools' cutting data for new operations' defaults
+  if ((cmd === "opDefaults" || cmd === "setMaterial") && args[1] && !args[1].libraries) args[1] = { ...args[1], libraries: libraries() };
   const id = nextId++;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
@@ -1340,6 +1342,63 @@ function useTool(i, target) {
   }
 }
 
+// ---- a library tool's cutting data: rows of material × operation type × values
+const CUT_FIELDS = [
+  ["rpm", "rpm", "Spindle speed the feeds are for (scaled to the setup's)"],
+  ["feed", "feed", "Cutting feed, mm/min"],
+  ["plunge", "plunge", "Plunge feed, mm/min"],
+  ["stepdown", "depth", "Depth per pass, mm"],
+  ["stepover", "stepover", "Stepover, mm"],
+  ["ramp_angle", "ramp °", "Ramp angle, degrees"],
+];
+let opTypeNames = null; // [[kind, title]]
+
+async function loadOpTypeNames() {
+  if (!opTypeNames) {
+    const types = state.tree?.types?.length ? state.tree.types : (await engine("opTypes")).result;
+    opTypeNames = types.map((t) => [t.kind, t.title || t.kind]);
+  }
+  return opTypeNames;
+}
+
+function cutRowHtml(p = {}) {
+  const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const ops = (opTypeNames || []).map(([k, t]) => `<option value="${k}" ${p.op === k ? "selected" : ""}>${esc(t)}</option>`).join("");
+  const val = (k) => (p[k] == null || (["rpm", "feed", "plunge"].includes(k) && !p[k]) ? "" : p[k]);
+  return `<tr class="cut-row"><td><input class="cut-material" list="tfMaterials" placeholder="any material" aria-label="Material" value="${esc(p.material)}"></td>
+    <td><select class="cut-op" aria-label="Operation type"><option value="">any operation</option>${ops}</select></td>
+    ${CUT_FIELDS.map(([k, , help]) => `<td><input class="cut-${k}" type="number" step="any" min="0" title="${help}" aria-label="${help}" value="${val(k)}"></td>`).join("")}
+    <td><button type="button" class="cut-del" aria-label="Remove this row">✕</button></td></tr>`;
+}
+
+function renderCutting(presets) {
+  $("tfMaterials").innerHTML = (state.registry?.materials ?? []).map((m) => `<option value="${m}">`).join("");
+  $("tfCutTable").innerHTML = `<tr><th>Material</th><th>Operation</th>${CUT_FIELDS.map(([, l, help]) => `<th title="${help}">${l}</th>`).join("")}<th></th></tr>${presets.map(cutRowHtml).join("")}`;
+}
+
+/** The cutting data rows as library presets (rows with nothing in them left out). */
+function readCutting() {
+  const out = [];
+  for (const tr of $("tfCutTable").querySelectorAll("tr.cut-row")) {
+    const p = { material: tr.querySelector(".cut-material").value.trim() };
+    const op = tr.querySelector(".cut-op").value;
+    if (op) p.op = op;
+    let any = false;
+    for (const [k] of CUT_FIELDS) {
+      const v = tr.querySelector(`.cut-${k}`).value;
+      // (a depth or stepover of 0 is no value)
+      if (v === "" || !(+v >= 0) || (["stepdown", "stepover"].includes(k) && !(+v > 0))) {
+        if (["rpm", "feed", "plunge"].includes(k)) p[k] = 0;
+        continue;
+      }
+      p[k] = +v;
+      any = true;
+    }
+    if (any) out.push(p);
+  }
+  return out;
+}
+
 function openForm(i) {
   editing = i;
   const t = i >= 0 ? currentLibrary().tools[i] : { name: "", shape: { kind: "flat", diameter: 3.175 } };
@@ -1352,6 +1411,9 @@ function openForm(i) {
   $("tfCorner").value = t.shape.corner_radius ?? "";
   $("tfFlute").value = t.flute_length ?? "";
   $("tfNumber").value = t.number ?? "";
+  renderCutting(t.presets || []);
+  // (the operation names once, on the first open)
+  if (!opTypeNames) loadOpTypeNames().then(() => editing === i && renderCutting(t.presets || [])).catch(() => {});
   $("toolForm").classList.remove("hidden");
   $("tfName").focus();
 }
@@ -1383,6 +1445,11 @@ function saveForm(ev) {
   else delete tool.flute_length;
   if (number) tool.number = number;
   else delete tool.number;
+  const presets = readCutting();
+  const bad = presets.find((p) => p.ramp_angle > 89);
+  if (bad) return showError("Ramp angle: 0 to 89 degrees");
+  if (presets.length) tool.presets = presets;
+  else delete tool.presets;
   if (editing >= 0) lib.tools[editing] = tool;
   else lib.tools.push(tool);
   saveLibrary(lib);
@@ -1443,6 +1510,8 @@ $("toolTable").addEventListener("change", (ev) => {
   if (s && s.value) useTool(+s.dataset.use, s.value);
 });
 $("addTool").addEventListener("click", () => openForm(-1));
+$("tfCutAdd").addEventListener("click", () => $("tfCutTable").insertAdjacentHTML("beforeend", cutRowHtml({})));
+$("tfCutTable").addEventListener("click", (ev) => ev.target.closest(".cut-del")?.closest("tr").remove());
 $("toolForm").addEventListener("submit", saveForm);
 $("tfCancel").addEventListener("click", () => $("toolForm").classList.add("hidden"));
 $("exportLibrary").addEventListener("click", () => {

@@ -65,6 +65,8 @@ export async function load(source) {
     wizardKnurl: (doc, params, meshBytes) => call("wizard_knurl", doc, params || {}, meshBytes),
     // a new operation with every field filled: opts {type, setup, tool, geometry, machine}
     opDefaults: (doc, opts, meshBytes) => call("op_defaults", doc, opts || {}, meshBytes),
+    // a setup's stock material: {setup?, material, machine?, libraries?} -> {project, changed}
+    setMaterial: (doc, opts) => call("set_material", doc, opts || {}),
     // features of a setup's part to point operations at: {setup?, model?, index_a?}
     pickables: (doc, opts, meshBytes) => call("pickables", doc, opts || {}, meshBytes),
     // the parameters picked features set on an operation: {type, ids, setup?, tool?, index_a?}
