@@ -172,7 +172,7 @@ const INVARIANTS = `(async () => {
   if (t.draft && t.selected !== t.draft.op.id) bad.push('a new operation (' + t.draft.op.id + ') is open but ' + t.selected + ' is selected');
   if (t.selected) {
     const op = t.draft && t.draft.op.id === t.selected ? t.draft.op : t.retype && t.retype.op.id === t.selected ? t.retype.op : s?.operations.find((o) => o.id === t.selected);
-    if (!op) bad.push('the selected operation ' + t.selected + ' does not exist');
+    if (!op) bad.push('the selected operation ' + t.selected + ' does not exist (setup ' + t.setup + ': ' + (s?.operations.map((o) => o.id).join(',') ?? 'none') + '; draft ' + (t.draft?.op.id ?? '-') + '; status ' + document.getElementById('status').textContent + '; editor ' + (() => { try { return JSON.parse(document.getElementById('job').value).setups.find((x) => x.id === t.setup).operations.map((o) => o.id).join(','); } catch (e) { return e.message; } })() + '; errors ' + (document.getElementById('opErrors')?.textContent || '') + ')');
     else if (!form) bad.push('no editor for the selected ' + t.selected);
     else {
       const ty = t.types.find((x) => x.kind === op.type);
@@ -274,6 +274,12 @@ const A = {
     const what = await js("(() => { const t = window.__marcam.state.tree; return (t.draft?.op.id === t.selected ? 'new ' : t.retype ? 'retyped ' : '') + t.selected; })()");
     await js("document.querySelector('#opForm button[type=submit]').click(); true");
     await sleep(300);
+    // a new operation: until it is in the project or refused (its check can wait in the
+    // engine behind a live update)
+    if (what.startsWith("new ")) {
+      const id = what.slice(4);
+      await waitFor(() => js(`(() => { const e = document.getElementById('opErrors'); if (e && !e.classList.contains('hidden') && e.textContent) return true; try { return JSON.parse(document.getElementById('job').value).setups.some((s) => s.operations.some((o) => o.id === '${id}')); } catch { return false; } })()`), `${id} applied`, 60000).catch(() => {});
+    }
     await waitFor(async () => (await js("document.getElementById('job').value")) !== before || (await js("!document.getElementById('opErrors')?.classList.contains('hidden') || !window.__marcam.state.tree.draft")), "Apply", 15000).catch(() => {});
     await settle(200);
     const err = await js("(() => { const e = document.getElementById('opErrors'); return e && !e.classList.contains('hidden') ? e.textContent : ''; })()");

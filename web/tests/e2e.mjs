@@ -223,6 +223,11 @@ try {
   await S("Page.navigate", { url });
   await waitFor(async () => (await state()) === "ready", "the engine to load", 30000);
   check("page loads and the WebAssembly engine starts", true, await js("document.getElementById('version').textContent"));
+  // the live updating (on by default) is tested in its own section (8v): the sections before
+  // it plan when they ask (Tools > Replan all), as they were written
+  const liveDefault = await js("document.getElementById('autoGen').checked");
+  await js("const a = document.getElementById('autoGen'); a.checked = false; a.dispatchEvent(new Event('change')); true");
+  await waitFor(async () => (await state()) !== "busy", "a startup update to end", 60000);
 
   // 1. knob example on the Makera Z1: byte-identical to the cut G-code
   await clickGenerate();
@@ -1276,8 +1281,8 @@ try {
       op.feed = Math.round((op.feed || 500) * 1.1); t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
     await sleep(AUTO_WAIT);
     const edited = await js("({ stale: document.body.classList.contains('stale'), banner: !!document.getElementById('staleBanner'), attention: document.getElementById('generate').classList.contains('attention') })");
-    check("editing a parameter marks the results out of date and highlights Generate, and plans nothing",
-      autoDefault === false && edited.stale && edited.banner && edited.attention && (await plans()) === p0, `${JSON.stringify(edited)}; auto-regenerate on by default: ${autoDefault}; ${(await plans()) - p0} plans`);
+    check("live updating is on by default; switched off, editing a parameter marks the results out of date and highlights Replan, and plans nothing",
+      liveDefault === true && autoDefault === false && edited.stale && edited.banner && edited.attention && (await plans()) === p0, `${JSON.stringify(edited)}; live by default ${liveDefault}, here ${autoDefault}; ${(await plans()) - p0} plans`);
     await shot("16b_out_of_date");
     await clickGenerate();
     await waitDone("generation after the edit", 240000);
@@ -2059,6 +2064,9 @@ try {
     await sleep(300);
     const hitX = parseFloat(String(hit).split(" at ")[1]);
     const picked = await js("({ x: +document.getElementById('opForm').elements.x.value, notes: [...document.querySelectorAll('#opNotes, .pick-notes')].map((e) => e.textContent).join(' ') })");
+    // the draft is planned live: its toolpath drawn over the others before it is applied
+    await waitFor(() => js("(window.__marcam.state.draftPreview?.points || 0) > 0 && window.__marcam.state.three.groups.draft.children.length > 0"), "the draft's live preview", 60000);
+    const preview = await js("({ ...window.__marcam.state.draftPreview, previews: window.__marcam.calls.planPreview || 0 })");
     await shot("21c_parting_pick");
     await js("document.getElementById('pickFaces').click(); true");
     await sleep(300);
@@ -2066,12 +2074,14 @@ try {
     await js("const f = document.getElementById('opForm'); f.elements.stop_radius.value = '7'; f.requestSubmit(); true");
     await waitFor(() => js("[...document.querySelectorAll('#tree .tree-op')].some((r) => /Parting/.test(r.textContent))"), "the parting operation", 15000);
     await settle();
+    await sleep(500);
+    const previewGone = await js("window.__marcam.state.three.groups.draft.children.length === 0");
     await clickGenerate();
     await waitDone("planning with the parting", 120000);
     const res = await js("(() => { const r = window.__marcam.state.result; const p = r.programs.find((q) => /--- parting at X/.test(q.gcode)); return p ? { name: p.name, head: p.gcode.split('\\n').find((l) => /--- parting at X/.test(l)), ops: p.time?.ops || p.ops || null, issues: p.issues.length, total: r.time_total_s } : null; })()");
-    check("parting: a new operation at the part's back by default, placed by a click on the part, cut as a groove to a radius, planned with a time",
-      Math.abs(+x0 - -21.7) < 1e-6 && /band at -/.test(hit) && Math.abs(picked.x - hitX) < 0.01 && hitX > -14 && hitX < -1.8 && res && new RegExp(`X${picked.x.toFixed(3)}: down to a radius of 7\.000`).test(res.head) && res.issues === 0 && res.total > 0,
-      `default ${x0}; ${hit}; picked ${JSON.stringify(picked)}; ${JSON.stringify(res)}`);
+    check("parting: a new operation at the part's back by default, placed by a click on the part (its toolpath previewed live before Apply), cut as a groove to a radius, planned with a time",
+      Math.abs(+x0 - -21.7) < 1e-6 && /band at -/.test(hit) && Math.abs(picked.x - hitX) < 0.01 && hitX > -14 && hitX < -1.8 && res && new RegExp(`X${picked.x.toFixed(3)}: down to a radius of 7\.000`).test(res.head) && res.issues === 0 && res.total > 0 && preview.points > 0 && preview.previews > 0 && previewGone,
+      `default ${x0}; ${hit}; preview ${JSON.stringify(preview)}, gone after Apply ${previewGone}; picked ${JSON.stringify(picked)}; ${JSON.stringify(res)}`);
   }
 
   // 8t. (Mar) a long simulation: asked about first with how long it takes (and a quicker
@@ -2117,6 +2127,120 @@ try {
     check("after a cancel the engine works again (a new simulation runs, the ring gone when done)", ok2.stocks > 0 && ok2.ring, JSON.stringify(ok2));
     await sel("normal");
     await js(`const g = document.getElementById('simGpu'); g.checked = ${gpuWas}; g.dispatchEvent(new Event('change')); true`);
+  }
+
+  // 8v. (Mar) live updating, no Generate: a project in is planned by itself; an edit shows its
+  // operation waiting while the others stay planned, then plans only it; the settled results
+  // are what a fresh plan gives; view actions plan nothing; the G-code download waits for the
+  // update; the simulated stock is simulated again in the background; the time from an edit
+  // to current results on the plate, the knob and the oval part
+  {
+    const plans = () => js("window.__marcam.calls.planAndPost || 0");
+    await js("window.__genClicks = 0; document.getElementById('generate').addEventListener('click', () => window.__genClicks++); true");
+    await js("const a = document.getElementById('autoGen'); a.checked = true; a.dispatchEvent(new Event('change')); true");
+    const settled = (what) => waitFor(() => js("!!window.__marcam.state.result && window.__marcam.planIdle() && document.body.dataset.state !== 'busy'"), what, 240000);
+    const badges = () => js("[...document.querySelectorAll('#tree .op-state')].map((e) => e.dataset.stateFor + ':' + e.dataset.state)");
+    // (a 0.1 job, the knob example, has programs instead of setups)
+    const editFeed = (k, f) => js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); const o = (j.setups ? j.setups[0].operations : j.programs.flatMap((p) => p.operations))[${k}]; o.feed = ${f}; t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return o.id; })()`);
+    const fresh = () => js(`await (async () => { const m = window.__marcam, st = m.state, a = m.planArgs(); const job = JSON.parse(document.getElementById('job').value);
+      const { result } = await m.engine('planAndPost', job, a.machine, st.mesh, { max_points: 150000, libraries: a.libraries, setup: st.tree.setup, cache: false });
+      return result.programs.map((p) => p.gcode).join('|') === st.result.programs.map((p) => p.gcode).join('|'); })()`);
+    const latency = async (k, f) => {
+      const t0 = Date.now();
+      await editFeed(k, f);
+      await sleep(50);
+      await js("await window.__marcam.whenSettled()");
+      return Date.now() - t0;
+    };
+
+    // in: the plate, planned by itself
+    let t0 = Date.now();
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settled("the plate planned by itself");
+    const tOpen = Date.now() - t0;
+    const b0 = await badges();
+    const p0 = await plans();
+    const id = await editFeed(1, 333);
+    await sleep(120);
+    const b1 = await badges();
+    const banner = await js("!!document.getElementById('staleBanner') || document.body.classList.contains('stale')");
+    await shot("22a_live_pending");
+    await js("await window.__marcam.whenSettled()");
+    await settled("the plate updated");
+    const b2 = await badges();
+    const pc = await js("window.__marcam.state.result.plan_cache");
+    const planned = (await plans()) - p0;
+    const same = await fresh();
+    const waitingOk = b1.includes(`${id}:pending`) || b1.includes(`${id}:planning`);
+    const othersOk = b1.filter((b) => !b.startsWith(`${id}:`)).every((b) => b.endsWith(":planned"));
+    check("live: a project in is planned by itself; an edit shows its operation waiting (no out-of-date marks) while the others stay planned, then plans only it, as a fresh plan would; no Generate",
+      (await js("window.__genClicks")) === 0 && b0.length > 0 && b0.every((b) => b.endsWith(":planned")) && waitingOk && othersOk && !banner &&
+      b2.every((b) => b.endsWith(":planned")) && pc.planned === 1 && same && planned === 1,
+      `open ${tOpen} ms; ${b1.join(" ")} -> ${b2.join(" ")}; cache ${JSON.stringify(pc)}; same ${same}; banner ${banner}; ${planned} plan(s)`);
+
+    // view actions: nothing planned
+    const p1 = await plans();
+    await js("window.__marcam.setView('front', {})");
+    await js("window.__marcam.setView('iso', {})");
+    await js("document.querySelector('#tree .tree-op [data-act=\"eye\"]').click(); true");
+    await sleep(300);
+    await js("document.querySelector('#tree .tree-op [data-act=\"eye\"]').click(); true");
+    await js("const c = document.querySelector('#tree .tree-op [data-act=\"color\"]'); c.value = '#123456'; c.dispatchEvent(new Event('change', { bubbles: true })); true");
+    await js("document.querySelectorAll('#tabs button')[1]?.click(); document.querySelectorAll('#tabs button')[0].click(); true");
+    await sleep(1500);
+    check("live: view actions (views, eyes, a colour, tabs) plan nothing", (await plans()) === p1 && (await js("window.__marcam.planIdle()")), `${(await plans()) - p1} plans`);
+
+    // the download waits for the update
+    await js("window.__lastBlob = null; window.__createURL = window.__createURL || URL.createObjectURL; URL.createObjectURL = (b) => { window.__lastBlob = b; return window.__createURL.call(URL, b); }; true");
+    await js("document.querySelectorAll('#tabs button')[0].click(); true");
+    await editFeed(0, 444);
+    await js("document.getElementById('download').click(); true");
+    await waitFor(() => js("!!window.__lastBlob"), "the G-code download", 120000);
+    const dl = await js("await window.__lastBlob.text()");
+    const cur = await js("window.__marcam.state.result.programs[0].gcode");
+    await js("URL.createObjectURL = window.__createURL; true");
+    check("live: Download right after an edit waits for the update: the G-code saved is the edited one", dl === cur && /F444\b/.test(dl), `${dl.length} chars, F444 ${/F444\b/.test(dl)}`);
+
+    // the simulated stock: simulated again in the background, nothing asked
+    await js("const s = document.getElementById('simRes'); s.value = 'coarse'; s.dispatchEvent(new Event('change')); true");
+    await js("document.getElementById('simulate').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.sim && !window.__marcam.simLock.busy"), "the simulated plate", 120000);
+    const sims0 = await js("(window.__marcam.calls.simulate || 0) + (window.__marcam.calls.gpuOpen || 0)");
+    const dialogs0 = cdp.dialogs.length;
+    await editFeed(2, 555);
+    await js("await window.__marcam.whenSettled()");
+    await waitFor(async () => (await js("(window.__marcam.calls.simulate || 0) + (window.__marcam.calls.gpuOpen || 0)")) > sims0 && !(await js("window.__marcam.simLock.busy")) && (await js("!!window.__marcam.state.sim")), "the background simulation", 120000);
+    check("live: with the stock simulated, an update simulates it again in the background (nothing asked)", cdp.dialogs.length === dialogs0, `${(await js("(window.__marcam.calls.simulate || 0) + (window.__marcam.calls.gpuOpen || 0)")) - sims0} simulations (CPU or GPU)`);
+    await js("const s = document.getElementById('simRes'); s.value = 'normal'; s.dispatchEvent(new Event('change')); true");
+
+    // latency: an edit to current results
+    const lat = { plate: await latency(3, 610) };
+    t0 = Date.now();
+    await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+    await settled("the knob planned by itself");
+    lat.knobOpen = Date.now() - t0;
+    lat.knobKnurl = await latency(1, 190);
+    lat.knobTurning = await latency(0, 290);
+    const fx = join(root, "tests", "fixtures", "picking");
+    const gp = JSON.parse(readFileSync(join(fx, "oval_grip.project.json"), "utf8"));
+    // its operations as section 8o gives them (the fixture has none)
+    gp.setups[0].operations = [
+      { id: "op1", type: "face", tool: 2, depth: 0.1, step_down: 0.5, stepover: 0.6, feed: 800, plunge_feed: 200 },
+      { id: "op2", type: "pocket", tool: 2, rect: [1, 1, 5, 5], depth: 0.1, step_down: 0.5, stepover: 0.5, feed: 800, plunge_feed: 200 },
+      { id: "op3", type: "contour", tool: 2, path: [[1, 1], [5, 1], [5, 5]], side: "outside", depth: 0.1, step_down: 1.5, feed: 800, plunge_feed: 200 },
+    ];
+    gp.setups[0].outputs = ["face", "pocket", "cutout"].map((n, k) => ({ name: `grip_${n}`, title: n, operations: [`op${k + 1}`] }));
+    const grip = JSON.stringify({ format: "marcam-project", version: 1, project: gp, meshes: { "oval_grip.stl": readFileSync(join(fx, "oval_grip.stl")).toString("base64") } });
+    t0 = Date.now();
+    await js(`await window.__marcam.project.openText(${JSON.stringify(grip)}, "oval_grip.marcam.json").then(() => true)`);
+    const gripOps = await js("JSON.parse(document.getElementById('job').value).setups?.[0]?.operations?.length || 0");
+    if (gripOps) {
+      await settled("the oval part planned by itself");
+      lat.gripOpen = Date.now() - t0;
+      lat.gripEdit = await latency(gripOps - 1, 700);
+    }
+    check("live: time from an edit to current results (ms; the plate, the knob, the oval part)", lat.plate > 0 && lat.knobKnurl > 0 && lat.gripEdit > 0 && (await js("window.__genClicks")) === 0, JSON.stringify(lat));
+    await js("const a = document.getElementById('autoGen'); a.checked = false; a.dispatchEvent(new Event('change')); true");
   }
 
   // 9. phone width: layout stacks, no horizontal scroll

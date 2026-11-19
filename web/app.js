@@ -183,11 +183,14 @@ function updateGenerateButton() {
   if (document.body.dataset.state !== "busy") $("generate").disabled = !ops && !!state.registry;
 }
 
-// ---------------------------------------------------------------- auto-regenerate
-// Off by default. When on, an edit regenerates 800 ms after the last one, never while a
-// mouse button is held (a slider or a drag waits for its release), and a newer request
-// supersedes one still running (its result is dropped).
-const AUTO_DELAY = 800;
+// ---------------------------------------------------------------- live updating
+// On by default (Tools > Update automatically): an edit plans again 500 ms after the last
+// one, never while a mouse button is held (a slider or a drag waits for its release); only
+// the operations it touched are planned (the engine's plan cache), and a newer request
+// supersedes one still running (its result is dropped). Each operation in the tree shows
+// whether it is planned, waiting or being planned (no "out of date" marks), and exports wait
+// for the current results.
+const AUTO_DELAY = 500;
 let autoTimer = null;
 let autoPending = false;
 let pointerHeld = false;
@@ -204,8 +207,61 @@ function scheduleAuto() {
   autoPending = false;
   autoTimer = setTimeout(() => {
     autoTimer = null;
-    generate();
+    generate({ auto: true });
   }, AUTO_DELAY);
+  window.__marcam.tree?.renderStates?.();
+}
+
+// ---- when the results are current: nothing waiting, nothing being planned
+let settleWaiters = [];
+function planIdle() {
+  return !autoTimer && !autoPending && !state.planning;
+}
+/** Resolves once the results match the project (at once when they do). */
+function whenSettled() {
+  return planIdle() ? Promise.resolve() : new Promise((r) => settleWaiters.push(r));
+}
+function checkSettled() {
+  if (!planIdle()) return;
+  const w = settleWaiters;
+  settleWaiters = [];
+  w.forEach((f) => f());
+}
+
+// ---- each operation's state, for the tree's badges
+/** What of a setup decides its operations' toolpaths besides the operations themselves. */
+function setupKey(doc, s) {
+  if (!doc || !s) return "";
+  const { operations, outputs, name, ...rest } = s;
+  return JSON.stringify([rest, doc.tools, doc.models, doc.unindexed || [], outputs.map((o) => [o.name, o.operations, o.reset_a])]);
+}
+/** An operation as planned (display-only fields left out: a colour or a name plans nothing). */
+function opKey(o) {
+  if (!o) return "";
+  const { name, color, ...rest } = o;
+  return JSON.stringify(rest);
+}
+/** "planned", "pending" (changed: planned again in a moment), "planning", "error" or "none"
+ *  (live updating off and never planned) for operation `opId` of setup `setupId`. */
+function opState(setupId, opId) {
+  let doc;
+  try {
+    doc = readJob();
+  } catch {
+    return "none";
+  }
+  const s = doc.setups?.find((x) => x.id === setupId);
+  const op = s?.operations?.find((o) => o.id === opId);
+  if (!op) return "none";
+  if (op.enabled === false) return "off";
+  const same = (planned) => {
+    const ps = planned?.setups?.find((x) => x.id === setupId);
+    return !!ps && setupKey(planned, ps) === setupKey(doc, s) && opKey(ps.operations.find((o) => o.id === opId)) === opKey(op);
+  };
+  if (state.planError && same(state.planError.doc)) return "error";
+  if (state.planning && same(state.planning)) return "planning";
+  if (state.result && same(state.job)) return "planned";
+  return autoOn() ? "pending" : "none";
 }
 window.addEventListener("pointerdown", () => {
   pointerHeld = true;
@@ -234,11 +290,16 @@ function markStale() {
   drawModel();
   if (state.result && !state.stale) {
     state.stale = true;
-    document.body.classList.add("stale");
-    selectTab(state.tab);
+    // live: the tree's badges say what is being planned again (the results stay as they
+    // are until the new ones come); otherwise the results are marked out of date
+    if (!autoOn()) {
+      document.body.classList.add("stale");
+      selectTab(state.tab);
+    }
   }
   updateGenerateButton();
   scheduleAuto();
+  window.__marcam.tree?.renderStates?.();
 }
 
 const RESULT_GROUPS = ["part", "stock", "path", "sim", "tool"];
@@ -332,6 +393,8 @@ async function resetProject(msg, actions) {
 
 /** No results (a new or just opened project); `msg`, if given, says what to do. */
 function clearResults(msg, actions = ["import", "open"]) {
+  // (results cleared because the project needs planning: live, it is planned now)
+  if (actions?.includes("generate") && autoOn()) setTimeout(liveLoaded, 0);
   state.result = null;
   state.sim = null;
   state.job = null;
@@ -498,7 +561,18 @@ async function loadExampleInto(name) {
   clearResults("");
   await window.__marcam.tree?.refresh();
   updateSimResInfo();
-  if (state.registry) setStatus(`Loaded the ${name} example: Generate to plan it`, "ready");
+  if (state.registry) setStatus(autoOn() ? `Loaded the ${name} example: planning it...` : `Loaded the ${name} example: Generate to plan it`, "ready");
+  liveLoaded();
+}
+
+/** A project just in (opened, an example, a setup changed, undone): planned by itself when
+ *  live updating is on. */
+function liveLoaded() {
+  let ops = false;
+  try {
+    ops = hasEnabledOps(readJob());
+  } catch {}
+  if (autoOn() && ops && state.registry) scheduleAuto();
 }
 
 /** The part's mesh (an STL, with face numbers when it came from a STEP); `source`: the file it
@@ -534,7 +608,9 @@ export function fmtTime(sec) {
 }
 window.__marcam = Object.assign(window.__marcam || {}, { fmtTime });
 
-async function generate() {
+async function generate(opts = {}) {
+  // (a click passes an event)
+  if (opts instanceof Event) opts = {};
   showError("");
   let job;
   try {
@@ -556,8 +632,12 @@ async function generate() {
     return;
   }
   $("generate").disabled = $("simulate").disabled = true;
-  setStatus("Generating...", "busy");
+  setStatus(opts.auto ? "Updating the toolpaths..." : "Generating...", "busy");
   const run = (state.genRun = (state.genRun || 0) + 1);
+  const hadSim = !!state.sim;
+  state.planning = job;
+  state.planError = null;
+  window.__marcam.tree?.renderStates?.();
   try {
     const setupId = state.tree?.setup;
     const { result, ms } = await engine("planAndPost", job, machineArg(), state.mesh, { max_points: 150000, libraries: libraries(), setup: job.schema_version === "0.2" ? setupId : undefined });
@@ -580,12 +660,38 @@ async function generate() {
     // what was planned (operations unchanged since the last plan are reused)
     const pc = result.plan_cache;
     const what = pc && pc.reused ? ` (planned ${pc.planned} operation${pc.planned === 1 ? "" : "s"}, ${pc.reused} unchanged)` : "";
-    setStatus(`Generated ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s${what}, ${issues} issue(s); estimated machining time ${fmtTime(result.time_total_s)}`, "done");
+    setStatus(`${opts.auto ? "Updated" : "Generated"} ${result.programs.length} program(s) in ${(ms / 1000).toFixed(1)} s${what}, ${issues} issue(s); estimated machining time ${fmtTime(result.time_total_s)}`, "done");
+    // the simulated stock was shown: simulated again in the background, coarse first
+    // (once this run is over: after the `finally` below)
+    if (hadSim && opts.auto) setTimeout(backgroundSimulate, 0);
   } catch (e) {
-    showError(e.message);
-    setStatus("Failed", "error");
+    if (run === state.genRun) {
+      state.planError = { doc: job, message: e.message };
+      showError(e.message);
+      setStatus("Failed", "error");
+    }
   } finally {
+    if (run === state.genRun) state.planning = null;
     $("generate").disabled = $("simulate").disabled = false;
+    window.__marcam.tree?.renderStates?.();
+    checkSettled();
+  }
+}
+
+/** After a live update with the stock shown: simulated again, at Coarse at once, then at the
+ *  chosen resolution when it is quick (no question asked in the background). */
+async function backgroundSimulate() {
+  const want = $("simRes").value;
+  const sel = $("simRes");
+  try {
+    if (want !== "coarse") {
+      sel.value = "coarse";
+      await simLock.run("batch", () => simulateQuiet());
+      sel.value = want;
+    }
+    await simLock.run("batch", () => simulateQuiet(SIM_ASK_SECONDS));
+  } finally {
+    sel.value = want;
   }
 }
 
@@ -755,12 +861,29 @@ function simulate() {
   return simLock.run("batch", simulateLocked);
 }
 
-async function simulateLocked() {
+/** The batch simulation without asking (background): skipped when estimated longer than
+ *  `max` seconds, or when the project changed meanwhile. */
+async function simulateQuiet(max = Infinity) {
+  if (!state.result || !planIdle()) return;
+  try {
+    const job = readJob();
+    const base = { libraries: libraries(), setup: job.schema_version === "0.2" ? state.tree?.setup : undefined, estimate: true };
+    const t = (await engine("simGrid", job, { ...base, ...simOpts() }, state.mesh)).result.time;
+    const s = (t?.seconds || 0) * (t?.batch_factor || 1);
+    if (s > max || s > (t?.max_seconds ?? Infinity)) return;
+    simRing.estimate = s;
+  } catch {
+    return;
+  }
+  return simulateLocked({ quiet: true });
+}
+
+async function simulateLocked(opts = {}) {
   if (!state.result) await generate();
   if (!state.result) return;
   // busy at once (the grid check below is asynchronous)
   setStatus("Checking the simulation grid...", "busy");
-  if (!(await confirmSimRes(true))) {
+  if (!opts.quiet && !(await confirmSimRes(true))) {
     setStatus("Simulation not started", "done");
     return;
   }
@@ -867,7 +990,12 @@ function selectTab(i) {
   updateView();
 }
 
-function download() {
+async function download() {
+  // the G-code of the project as it is: after any update waiting or running
+  if (!planIdle()) {
+    setStatus("Waiting for the toolpaths to update before saving the G-code...", "busy");
+    await whenSettled();
+  }
   const p = state.result?.programs[state.tab];
   if (!p) return;
   const url = URL.createObjectURL(new Blob([p.gcode], { type: "text/plain" }));
@@ -991,7 +1119,7 @@ async function getThree() {
     scene.add(sun);
     const axes = new THREE.AxesHelper(5);
     scene.add(axes);
-    const groups = { part: new THREE.Group(), stock: new THREE.Group(), path: new THREE.Group(), sim: new THREE.Group(), tool: new THREE.Group() };
+    const groups = { part: new THREE.Group(), stock: new THREE.Group(), path: new THREE.Group(), sim: new THREE.Group(), tool: new THREE.Group(), draft: new THREE.Group() };
     for (const g of Object.values(groups)) scene.add(g);
     const resize = () => {
       const w = host.clientWidth, h = host.clientHeight;
@@ -1035,6 +1163,59 @@ function clear(group) {
 function pointXYZ(pts, i) {
   return pts[4 * i + 3] >= 2 ? [pts[4 * i], pts[4 * i + 1], pts[4 * i + 2]] : toXYZ(pts[4 * i], pts[4 * i + 1], pts[4 * i + 2]);
 }
+
+// ---------------------------------------------------------------- the draft's live preview
+// An operation being set up (added, not applied yet) is planned in the background as it is
+// picked and edited, and its toolpath drawn in amber over the others: what Apply would give.
+let draftRun = 0;
+let draftTimer = null;
+/** Plan `doc` (the project with the draft operation `opId` in setup `setupId`) and show that
+ *  operation's toolpath; `doc` null clears the preview. */
+function previewDraft(doc, setupId, opId) {
+  clearTimeout(draftTimer);
+  const run = ++draftRun;
+  if (!doc) {
+    drawDraft(null);
+    return;
+  }
+  draftTimer = setTimeout(async () => {
+    try {
+      const { result } = await engine("planPreview", doc, machineArg(), state.mesh, { max_points: 60000, libraries: libraries(), setup: setupId });
+      if (run !== draftRun) return;
+      let pts = null;
+      for (const p of result.programs) {
+        const ops = p.toolpath.ops || [];
+        const k = ops.findIndex((o) => o.id === opId);
+        if (k < 0) continue;
+        const n = p.toolpath.points.length / 4;
+        const start = Math.max(0, ops[k].start - 1);
+        const end = k + 1 < ops.length ? ops[k + 1].start : n;
+        pts = p.toolpath.points.slice(4 * start, 4 * end);
+        break;
+      }
+      state.draftPreview = { opId, points: pts ? pts.length / 4 : 0, error: null };
+      drawDraft(pts);
+    } catch (e) {
+      if (run !== draftRun) return;
+      // (an incomplete draft does not plan: no preview, the form says what is missing)
+      state.draftPreview = { opId, points: 0, error: e.message };
+      drawDraft(null);
+    }
+  }, 300);
+}
+async function drawDraft(pts) {
+  const v = await getThree();
+  if (!v || v.failed) return;
+  const g = v.groups.draft;
+  clear(g);
+  if (!pts || pts.length < 8) return;
+  const cut = [];
+  for (let i = 1; i < pts.length / 4; i++) cut.push(...pointXYZ(pts, i - 1), ...pointXYZ(pts, i));
+  const geo = new v.THREE.BufferGeometry();
+  geo.setAttribute("position", new v.THREE.Float32BufferAttribute(cut, 3));
+  g.add(new v.THREE.LineSegments(geo, new v.THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.95 })));
+}
+window.__marcam.previewDraft = previewDraft;
 
 /** Machine (x, r, a) -> part frame xyz: the tool at A sits over part angle 90 - A. */
 function toXYZ(x, r, aDeg) {
@@ -1697,15 +1878,33 @@ $("job").addEventListener("change", () => window.__marcam.tree.refresh());
 
 // ---------------------------------------------------------------- auto-regenerate setting
 try {
-  $("autoGen").checked = localStorage.getItem("marcam.autoGen") === "1";
-} catch {}
+  $("autoGen").checked = localStorage.getItem("marcam.autoGen") !== "0";
+} catch {
+  $("autoGen").checked = true;
+}
 $("autoGen").addEventListener("change", () => {
   try {
     localStorage.setItem("marcam.autoGen", $("autoGen").checked ? "1" : "0");
   } catch {}
   if ($("autoGen").checked && state.stale) scheduleAuto();
+  // off: an update waiting is dropped (the results are marked out of date instead)
+  if (!$("autoGen").checked) {
+    clearTimeout(autoTimer);
+    autoTimer = null;
+    autoPending = false;
+    if (state.stale) {
+      document.body.classList.add("stale");
+      if (state.result) selectTab(state.tab);
+    }
+    checkSettled();
+  }
+  window.__marcam.tree?.renderStates?.();
 });
 window.__marcam.autoDelay = AUTO_DELAY;
+window.__marcam.opState = opState;
+window.__marcam.liveLoaded = liveLoaded;
+window.__marcam.whenSettled = whenSettled;
+window.__marcam.planIdle = planIdle;
 window.__marcam.setHidden = setHidden;
 window.__marcam.hiddenStoreKey = hiddenStoreKey;
 // what Generate plans with (the tests plan the saved project again with it)

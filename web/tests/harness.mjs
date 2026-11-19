@@ -120,7 +120,13 @@ export async function startApp(opts = {}) {
     },
     async open() {
       await S("Page.navigate", { url });
-      await waitFor(() => js("document.body.dataset.state === 'ready'"), "the engine", 60000);
+      // ready, or (live updating plans the startup example) done planning it
+      try {
+        await waitFor(() => js("['ready', 'done'].includes(document.body.dataset.state) && window.__marcam.planIdle?.() !== false"), "the engine", 120000);
+      } catch (e) {
+        const why = await js("JSON.stringify({ state: document.body.dataset.state, status: document.getElementById('status')?.textContent, error: document.getElementById('error')?.textContent, idle: window.__marcam?.planIdle?.() })").catch((x) => x.message);
+        throw new Error(`${e.message}: ${why} ${app.pageErrors().join(" | ").slice(0, 600)}`);
+      }
     },
     async close() {
       try { await send("Browser.close"); } catch {}

@@ -18,6 +18,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   /** Re-read the editor: 0.1 jobs are shown upgraded (the editor switches to 0.2 on the first edit). */
   async function refresh() {
+    // refreshes overlap (a plan ending while an edit is applied): only the latest one, which
+    // read the project last, is shown (an older one would put back what was there before)
+    const gen = (t.refreshGen = (t.refreshGen || 0) + 1);
     await loadTypes();
     let raw;
     try {
@@ -28,6 +31,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     try {
       const { result } = await engine("checkProject", raw);
+      if (gen !== t.refreshGen) return;
       t.doc = result.project;
       t.problems = result.problems;
       t.upgraded = result.upgraded;
@@ -158,6 +162,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
           <input type="checkbox" data-act="enable" ${op.enabled === false ? "" : "checked"} aria-label="Enable ${esc(id)}">
           <input type="color" data-act="color" value="${colorOf(op, i)}" aria-label="Colour of ${esc(id)}">
           <button type="button" data-act="eye" class="eye ${isHidden(id) ? "off" : ""}" aria-pressed="${!isHidden(id)}" aria-label="Show the toolpath of ${esc(id)}" title="Show or hide this toolpath (view only; Alt-click: show only this)">${isHidden(id) ? "◌" : "◉"}</button>
+          <span class="op-state" data-state-for="${esc(id)}" aria-live="polite"></span>
           <span class="tree-label" data-act="select">${opProblem(op) ? `<span class="op-error" title="${esc(opProblem(op))}">⚠</span> ` : ""}${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}${ot != null ? ` · <span class="tree-time">${fmt(ot)}</span>` : ""}</span></span>
           <button type="button" data-act="delete" aria-label="Delete ${esc(id)}">✕</button></div>`;
         n++;
@@ -174,6 +179,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     html += `<div id="opEditor"></div>`;
     box.innerHTML = html;
     box.dataset.ops = String(n);
+    renderStates();
     renderEditor();
     detectFeatures();
   }
@@ -304,7 +310,29 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   }
 
   /** Form for the selected operation, built from the registry's parameter specs. */
+  /** The operation being added, planned live in the background and drawn over the others
+   *  (the app's preview); none: the preview cleared. */
+  function previewDraft() {
+    const pv = window.__marcam?.previewDraft;
+    if (!pv) return;
+    if (!t.draft || !t.doc) return pv(null);
+    let op = t.draft.op;
+    try {
+      if (t.selected === t.draft.op.id && $("opForm")) op = readForm();
+    } catch {}
+    const doc = structuredClone(t.doc);
+    const s = doc.setups.find((x) => x.id === t.setup);
+    if (!s) return pv(null);
+    s.operations.push(op);
+    let out = s.outputs.find((o) => o.name === t.draft.out);
+    if (!out) s.outputs.push((out = { name: `${s.id}_${op.id}`, title: t.draft.title || op.type, operations: [] }));
+    out.operations.push(op.id);
+    pv(doc, s.id, op.id);
+  }
+
   function renderEditor() {
+    // (after the form is drawn)
+    queueMicrotask(previewDraft);
     const ed = $("opEditor");
     const op = t.selected && opById(t.selected);
     if (!op) {
@@ -1208,6 +1236,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     await commit();
   });
+  // a field of the operation being added: its preview again
+  $("tree").addEventListener("input", (ev) => {
+    if (t.draft && ev.target.closest?.("#opForm")) previewDraft();
+  });
   $("tree").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const op = readForm();
@@ -1282,5 +1314,30 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     $("tree").innerHTML = "";
   }
 
-  return { refresh, pickAt, pickSimilar, reset, renderEyes, changeType, moveOp, nudge, state: t };
+  /** Each operation's badge: planned, waiting to be planned again, being planned, or failed
+   *  (from the app's opState; in place, nothing else redrawn). */
+  const STATE_BADGES = {
+    planned: ["✓", "Planned: the toolpath and time shown are this operation's as it is"],
+    pending: ["•", "Changed: it is planned again in a moment"],
+    planning: ["◐", "Being planned"],
+    error: ["⚠", "Not planned: see the message"],
+  };
+  function renderStates() {
+    if (!t.doc) return;
+    const s = setup();
+    const of = window.__marcam?.opState;
+    if (!s || !of) return;
+    for (const el of document.querySelectorAll("#tree .op-state")) {
+      const st = of(s.id, el.dataset.stateFor);
+      const [mark, title] = STATE_BADGES[st] || ["", ""];
+      if (el.dataset.state === st) continue;
+      el.dataset.state = st;
+      el.className = `op-state ${st}`;
+      el.textContent = mark;
+      el.title = title;
+      el.setAttribute("aria-label", title);
+    }
+  }
+
+  return { refresh, pickAt, pickSimilar, reset, renderEyes, renderStates, changeType, moveOp, nudge, state: t };
 }

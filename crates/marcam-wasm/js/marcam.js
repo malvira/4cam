@@ -55,6 +55,10 @@ export async function load(source) {
     // object; opts.libraries: extra tool libraries for {"library", "tool"} references
     planAndPost: (job, machine, meshBytes, opts = {}) =>
       call("plan_and_post_opts", job, { ...opts, machine: machine ?? null }, meshBytes),
+    // planAndPost for a preview (an operation being set up, not in the project yet): the same
+    // call, under its own name so a host can tell previews from plans
+    planPreview: (job, machine, meshBytes, opts = {}) =>
+      call("plan_and_post_opts", job, { ...opts, machine: machine ?? null }, meshBytes),
     simulate: (job, opts, meshBytes) => call("simulate", job, opts || {}, meshBytes),
     // built-in machine profiles and tool libraries
     profileList: () => call("profile_list"),

@@ -28,6 +28,9 @@
   <details class="menu" id="menuTools"><summary>Tools</summary><div class="menu-items">
     <button id="menuAddTool" type="button" title="Add a tool from the libraries (or a new one) to the project">Add tool from library...</button>
     <button id="menuToolNumbers" type="button" title="Give the project's tools their T numbers">Tool numbers...</button>
+    <hr>
+    <button id="generate" type="button" title="Plan every operation now (the toolpaths update by themselves after each edit; unchanged operations are reused)" disabled>Replan all</button>
+    <label class="menu-check" title="Plan again by itself half a second after an edit (never while dragging), only what the edit touched"><input id="autoGen" type="checkbox" checked> Update automatically</label>
   </div></details>
   <details class="menu" id="menuView"><summary>View</summary><div class="menu-items">
     <label><input id="showSide" type="checkbox"> side view</label>
@@ -125,9 +128,7 @@
       <textarea id="job" class="code" rows="18" spellcheck="false" aria-label="Project JSON"></textarea>
     </details>
     <div class="row">
-      <button id="generate" type="button" class="primary" disabled>Generate</button>
       <button id="simulate" type="button" disabled>Simulate stock</button>
-      <label class="small" title="Generate again by itself 0.8 s after an edit (never while dragging)"><input id="autoGen" type="checkbox"> auto-regenerate</label>
     </div>
     <div class="row small" id="simResRow">
       <label for="simRes">Simulation grid</label>

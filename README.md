@@ -171,8 +171,17 @@ browser.
     regenerates. **+ Setup** adds a setup for the same part, with the same choices. Only
     operation types that fit a setup are offered.
   - The project's name, with an "unsaved" mark. New, Open and examples ask before
-    discarding changes. Results the project no longer matches are marked out of date until
-    Generate.
+    discarding changes.
+  - **Live updating** (on by default; Tools > Update automatically): there is no Generate
+    button. A project opened, an example, an edit: half a second after it (never while a
+    mouse button is held), the operations it touched are planned again in the background, the
+    others kept (the engine's plan cache). Each operation in the tree carries a badge: ✓
+    planned, • changed (waiting), ◐ being planned, ⚠ failed. The results stay on screen until
+    the new ones come; Download .nc waits for them; a simulated stock is simulated again
+    (Coarse at once, then the chosen resolution when it is quick). An operation being added
+    is planned live as it is picked and edited and drawn in amber before Apply. Tools >
+    Replan all plans now. Switched off, results the project no longer matches are marked
+    out of date until Replan all.
   - The example picker.
 - **Left panel:**
   - the machine (built-in Makera Z1, Carvera, Carvera Air, LinuxCNC, imported profiles, or custom JSON), with a summary of its limits;
@@ -180,7 +189,7 @@ browser.
   - "Attach mesh file": the mesh an opened project names (STL or 3MF), as it is;
   - quick settings that write into the job JSON (stock, tool sizes, feeds, steps);
   - the job JSON editor.
-- **Generate:** shows one tab per program with:
+- **Results** (one tab per program):
   - the line count, verifier issues and gouge check;
   - the G-code, with **Download .nc**;
   - a 3D view (three.js, loaded from jsDelivr), with the toolpath wrapped around the part

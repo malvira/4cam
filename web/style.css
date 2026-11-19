@@ -221,3 +221,12 @@ details.menu[open] > summary { border-color: var(--accent); }
 .sim-ring.spin { animation: sim-ring-spin 1s linear infinite; }
 .sim-ring:hover { filter: brightness(1.3); }
 @keyframes sim-ring-spin { to { transform: rotate(360deg); } }
+
+/* an operation's state in the tree (live updating) */
+.op-state { display: inline-block; width: 1em; text-align: center; font-size: 11px; color: var(--muted); }
+.op-state.planned { color: var(--ok); }
+.op-state.pending { color: #d97706; }
+.op-state.planning { color: var(--accent); animation: op-state-pulse 1s ease-in-out infinite; }
+.op-state.error { color: var(--bad); }
+@keyframes op-state-pulse { 50% { opacity: 0.3; } }
+.menu-check { display: flex; gap: 6px; align-items: center; font-size: 13px; padding: 2px 4px; }
