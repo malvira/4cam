@@ -117,13 +117,77 @@ impl MeshSource {
 }
 
 /// Revolved profile: `[x, r]` points in ascending x. Two consecutive points with the same x
-/// form a step; at the step itself the +x side wins.
+/// form a step; at the step itself the +x side wins. Read from points written front to back
+/// (descending x) too: they are turned round. Points must be finite, with radii not below 0,
+/// and x must not go back and forth.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(try_from = "ProfileText")]
 pub struct Profile {
     pub points: Vec<[f64; 2]>,
     /// Radius left past the last point (toward +x). Defaults to the last point's radius.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beyond_front: Option<f64>,
+}
+
+/// A profile as written, before [`Profile::normalized`].
+#[derive(Deserialize)]
+struct ProfileText {
+    points: Vec<[f64; 2]>,
+    #[serde(default)]
+    beyond_front: Option<f64>,
+}
+
+impl TryFrom<ProfileText> for Profile {
+    type Error = String;
+    fn try_from(t: ProfileText) -> Result<Profile, String> {
+        Profile {
+            points: t.points,
+            beyond_front: t.beyond_front,
+        }
+        .normalized()
+    }
+}
+
+impl Profile {
+    /// The profile in ascending x (points written front to back turned round), or why it
+    /// cannot be one: a point not finite or with a negative radius, or x going back and
+    /// forth.
+    pub fn normalized(mut self) -> Result<Profile, String> {
+        if let Some((i, p)) = self
+            .points
+            .iter()
+            .enumerate()
+            .find(|(_, p)| !(p[0].is_finite() && p[1].is_finite() && p[1] >= 0.0))
+        {
+            return Err(format!(
+                "profile point {} [{}, {}]: x and the radius must be numbers, the radius 0 or more",
+                i + 1,
+                p[0],
+                p[1]
+            ));
+        }
+        if self
+            .beyond_front
+            .is_some_and(|r| !(r.is_finite() && r >= 0.0))
+        {
+            return Err("profile beyond_front: a radius of 0 or more".into());
+        }
+        if let (Some(a), Some(b)) = (self.points.first(), self.points.last()) {
+            if a[0] > b[0] {
+                self.points.reverse();
+            }
+        }
+        if let Some(i) = self.points.windows(2).position(|w| w[1][0] < w[0][0]) {
+            return Err(format!(
+                "profile points {} and {}: x goes back (from {} to {}); a revolved profile's points run one way along the axis",
+                i + 1,
+                i + 2,
+                self.points[i][0],
+                self.points[i + 1][0]
+            ));
+        }
+        Ok(self)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
