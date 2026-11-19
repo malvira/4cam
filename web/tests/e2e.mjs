@@ -396,10 +396,10 @@ try {
   await settle();
   // (Mar) reordered by dragging: op3 dropped on the upper half of op2 (the arrows are gone)
   const dragOnto = (src, dst, before) => js(`(() => { const a = document.querySelector('#tree .tree-op[data-op="${src}"]'), b = document.querySelector('#tree .tree-op[data-op="${dst}"]');
-    const dt = new DataTransfer(); const r = b.getBoundingClientRect(); const y = before ? r.top + 2 : r.bottom - 2;
+    const dt = new DataTransfer(); const r = b.getBoundingClientRect(); const y = ${before} ? r.top + 2 : r.bottom - 2;
     a.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
     b.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, clientY: y }));
-    const line = b.classList.contains(before ? 'drop-before' : 'drop-after');
+    const line = b.classList.contains(${before} ? 'drop-before' : 'drop-after');
     b.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientY: y }));
     a.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
     return line; })()`);
