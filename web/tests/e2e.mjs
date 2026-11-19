@@ -134,7 +134,12 @@ const state = () => js("document.body.dataset.state");
 // Generate, once it can be pressed: a project just loaded may not have enabled it yet (on a
 // slow machine the click came first and was lost)
 async function clickGenerate() {
-  await waitFor(() => js("!document.getElementById('generate').disabled && document.body.dataset.state !== 'busy'"), "Generate to be enabled", 60000);
+  try {
+    await waitFor(() => js("!document.getElementById('generate').disabled && document.body.dataset.state !== 'busy'"), "Generate to be enabled", 60000);
+  } catch (e) {
+    const why = await js("JSON.stringify({ disabled: document.getElementById('generate').disabled, state: document.body.dataset.state, status: document.getElementById('status').textContent, lock: window.__marcam.simLock?.busy, idle: window.__marcam.planIdle?.(), playing: window.__marcam.state.machining?.busy })");
+    throw new Error(`${e.message}: ${why}`);
+  }
   await js("document.getElementById('generate').click(); true");
 }
 // console.error from the page (an error swallowed into the console is still a failure), less
@@ -146,8 +151,18 @@ function consoleErrors() {
     .map((e) => e.params.args.map((a) => a.value ?? a.description ?? "").join(" "))
     .filter((t) => !EXPECTED_CONSOLE.some((r) => r.test(t)));
 }
+// The operation types the tree offers (the tree renders after a plan: waited for)
+async function addTypes() {
+  await waitFor(() => js("!!document.getElementById('treeAddType')"), "the tree's operation types", 30000);
+  return js("[...document.getElementById('treeAddType').options].map((o) => o.value)");
+}
 async function waitDone(what, timeoutMs) {
-  return waitFor(async () => { const s = await state(); if (s === "error") throw new Error(await js("document.getElementById('error').textContent")); return s === "done"; }, what, timeoutMs);
+  try {
+    return await waitFor(async () => { const s = await state(); if (s === "error") throw new Error(await js("document.getElementById('error').textContent")); return s === "done"; }, what, timeoutMs);
+  } catch (e) {
+    const why = await js("JSON.stringify({ state: document.body.dataset.state, status: document.getElementById('status').textContent, disabled: document.getElementById('generate').disabled, lock: window.__marcam.simLock?.busy, idle: window.__marcam.planIdle?.(), machining: document.body.dataset.machining })").catch(() => "?");
+    throw new Error(`${e.message}: ${why}`);
+  }
 }
 // Solids must render closed: looking down the rotary axis at either end, the middle of the
 // view must show the end face, not the background through an open shell.
@@ -228,6 +243,10 @@ try {
   const liveDefault = await js("document.getElementById('autoGen').checked");
   await js("const a = document.getElementById('autoGen'); a.checked = false; a.dispatchEvent(new Event('change')); true");
   await waitFor(async () => (await state()) !== "busy", "a startup update to end", 60000);
+  // the playback's stock (off by default) on: the sections written for the machining
+  // simulation play it with the stock
+  const stockDefault = await js("document.getElementById('simStock').checked");
+  await js("const s = document.getElementById('simStock'); s.checked = true; s.dispatchEvent(new Event('change')); true");
 
   // 1. knob example on the Makera Z1: byte-identical to the cut G-code
   await clickGenerate();
@@ -293,7 +312,12 @@ try {
   await shot("08_machining_start");
   const seekTo = async (n) => {
     await js(`const s = document.getElementById('simScrub'); s.value = ${n}; s.dispatchEvent(new Event('input')); true`);
-    await waitFor(() => js(`${M}.pos === ${n} && !${M}.busy`), `seeking to ${n}`, 60000);
+    try {
+      await waitFor(() => js(`${M}.pos === ${n} && !${M}.busy`), `seeking to ${n}`, 60000);
+    } catch (e) {
+      const why = await js(`JSON.stringify({ pos: ${M}.pos, target: ${M}.target, wanted: ${M}.wanted, busy: ${M}.busy, stock: ${M}.stock, open: ${M}.open, segs: ${M}.session?.segments, max: document.getElementById('simScrub').max, lock: window.__marcam.simLock.busy, status: document.getElementById('status').textContent })`);
+      throw new Error(`${e.message}: ${why}`);
+    }
   };
   const cutCells = (tag) => js(`${M}.op.reduce((n, t) => n + (t === ${tag}), 0)`);
   const midRough = Math.round(nseg * 0.15);
@@ -337,13 +361,15 @@ try {
   await js("document.getElementById('simClose').click(); true");
 
   // 5. LinuxCNC machine (G93)
-  await js("document.getElementById('machine').value = 'linuxcnc-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
+  await js("document.getElementById('machine').value = 'linuxcnc-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); true");
+  await clickGenerate();
   await waitDone("LinuxCNC generation", 60000);
   const g93 = await js("window.__marcam.state.result.programs[window.__marcam.state.tab].gcode.includes('\\nG93 ')");
   check("LinuxCNC post uses G93 inverse time", g93);
 
   // 5b. machine profiles: the Carvera, with its limits checked
-  await js("document.getElementById('machine').value = 'makera-carvera-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
+  await js("document.getElementById('machine').value = 'makera-carvera-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); true");
+  await clickGenerate();
   await waitDone("Carvera generation", 60000);
   const info = await js("document.getElementById('machineInfo').textContent");
   check("Carvera profile shows its limits", /X 360 mm/.test(info) && /ATC 6 slots/.test(info), info);
@@ -360,7 +386,8 @@ try {
   await js("const s = document.querySelector('#toolTable select[data-use=\"0\"]'); s.value = '1'; s.dispatchEvent(new Event('change', { bubbles: true })); true");
   const t1 = await js("JSON.parse(document.getElementById('job').value).tools.find(t => t.number === 1)");
   check("library tool becomes the job's T1", t1.description === "Edited Flat 3.0" && t1.diameter === 3 && t1.kind === "flat", JSON.stringify(t1));
-  await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('generate').click()");
+  await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); true");
+  await clickGenerate();
   await waitDone("generation with the library tool", 60000);
   await js("document.querySelectorAll('#tabs button')[0].click()");
   const head = await js("window.__marcam.state.result.programs[window.__marcam.state.tab].gcode.split('\\n').slice(0, 3).join(' | ')");
@@ -432,7 +459,7 @@ try {
   await settle();
   // every operation type: the create form comes fully filled and applies without problems
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
-  const typesAll = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
+  const typesAll = (await addTypes()).join(",");
   const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
   check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 15 && String(typesAll).split(",").length === 15, `${typesAll}`);
   const filled = [];
@@ -490,6 +517,7 @@ try {
   await settle();
   await js("document.getElementById('simOpen').click(); true");
   await waitFor(() => js("document.body.dataset.machining === 'open'"), "the machining simulation", 60000);
+  await waitFor(() => js("document.querySelector('#opLegend input[data-tag=\"1\"]')?.value === '#00ff00'"), "the new colour in the playback", 30000).catch(() => {});
   const legend = await js("document.querySelector('#opLegend input[data-tag=\"1\"]').value");
   check("operation colours set in the tree colour the machining simulation", legend === "#00ff00", legend);
   await js("document.getElementById('simClose').click(); true");
@@ -563,7 +591,7 @@ try {
   await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate's dome mesh", 15000);
   await settle();
   const plateMachine = await js("document.getElementById('machine').value");
-  const plateTypes = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
+  const plateTypes = (await addTypes()).join(",");
   check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,bore,contour,raster3d,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
   await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 15000);
@@ -973,10 +1001,11 @@ try {
     for (const [kind, ops] of [["rotary", "rotary_rough,rotary_finish"], ["indexed", "rough3d,rough3d,raster3d,raster3d"], ["vise", "rough3d,raster3d"]]) {
       await js("document.getElementById('projectNew').click(); true");
       const info = await inDialog({ name: `knob_${kind}`, kind, axis: kind === "vise" ? "x" : "x", file: ["knob.stl", knobStl], shot: `15b_new_${kind}` });
+      await waitFor(async () => (await doc()).setups?.[0]?.kind === kind, `the new ${kind} project`, 30000);
       await waitDone(`generation of a new ${kind} project`, 240000);
       const d = await doc();
       const v = await viewsOk();
-      const offered = await js("[...document.getElementById('treeAddType').options].map((o) => o.value)");
+      const offered = await addTypes();
       byKind[kind] = { d, offered };
       const fitsOffered = kind === "rotary" ? !offered.includes("pocket") && offered.includes("rotary_finish")
         : kind === "indexed" ? offered.includes("pocket") && !offered.includes("rotary_finish") && !offered.includes("helical_knurl")
@@ -1066,7 +1095,7 @@ try {
     const dc = await doc();
     const vc = await viewsOk();
     const undoShown = await js("!document.getElementById('undoBar').classList.contains('hidden')");
-    const offeredC = await js("[...document.getElementById('treeAddType').options].map((o) => o.value)");
+    const offeredC = await addTypes();
     check("Edit setup: rotary to 3-axis vise warns, removes the rotary operations, adds 3-axis ones, re-places the part in a block and regenerates",
       editPre.kind === "rotary" && /removes op1 \(rotary_rough\), op2 \(rotary_finish\)/.test(warned) && dc.setups[0].kind === "vise" && dc.setups[0].stock.shape === "box" && dc.setups[0].operations.map((o) => o.type).join() === "rough3d,raster3d" && dc.models.find((m) => m.kind === "mesh").axis === "x" && vc.tabs.every((t) => t.endsWith("OK")) && vc.part > 0 && undoShown && !offeredC.includes("rotary_finish") && /removed/.test(convertMsg),
       `${JSON.stringify(editPre)}; ${warned.slice(0, 120)}; ${dc.setups[0].operations.map((o) => o.type)}; ${JSON.stringify(dc.setups[0].stock)}; axis ${dc.models.find((m) => m.kind === "mesh").axis}; tabs ${vc.tabs}; part ${vc.part}; undo ${undoShown}; error ${(await js("document.getElementById('error').textContent")).slice(0, 80)}`);
@@ -2097,6 +2126,8 @@ try {
     const gpuWas = await js("document.getElementById('simGpu').checked");
     await js("const g = document.getElementById('simGpu'); g.checked = false; g.dispatchEvent(new Event('change')); true");
     await sel("ultra");
+    // (the background simulation after the plan finishes first: this one is the person's)
+    await waitFor(() => js("!window.__marcam.simLock.busy && !window.__marcam.simLock.waiting && document.getElementById('simRing').classList.contains('hidden')"), "the background simulation to finish", 120000);
     const nDialogs = cdp.dialogs.length;
     cdp.dialogAnswer = true;
     await js("document.getElementById('simulate').click(); true");
@@ -2258,6 +2289,10 @@ try {
     // ×1000: a second of play is about a thousand seconds of machining
     await js("const s = document.getElementById('simSpeed'); s.value = '3'; s.dispatchEvent(new Event('input')); true");
     const speedLabel = await js("document.getElementById('simSpeedLabel').textContent");
+    // (from the start, once the background work after the plan is done)
+    await waitFor(() => js("!window.__marcam.simLock.busy && !window.__marcam.simLock.waiting"), "the background simulation to finish", 120000);
+    await js("const s = document.getElementById('simScrub'); s.value = '0'; s.dispatchEvent(new Event('input')); true");
+    await waitFor(() => js("window.__marcam.state.machining.pos === 0"), "the playback at its start", 10000);
     await js("document.getElementById('simPlay').click(); true");
     await sleep(1500);
     await js("document.getElementById('simPlay').click(); true");

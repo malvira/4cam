@@ -341,7 +341,8 @@ let resimTimer = null;
 function resimulate() {
   clearTimeout(resimTimer);
   resimTimer = setTimeout(() => {
-    if (document.body.dataset.state !== "busy" && state.result) simulate();
+    // (a view action: in the background, the status line keeps the job's times)
+    if (document.body.dataset.state !== "busy" && state.result) simLock.run("batch", () => simulateLocked({ quiet: true }), { quiet: true });
   }, 200);
 }
 /** Each preview point of program `p`: whether its operation is hidden (null: none is). */
@@ -398,6 +399,8 @@ async function resetProject(msg, actions) {
 function clearResults(msg, actions = ["import", "open"]) {
   // (results cleared because the project needs planning: live, it is planned now)
   if (actions?.includes("generate") && autoOn()) setTimeout(liveLoaded, 0);
+  // the viewer's playback goes with them
+  window.__marcam.machining?.reset?.();
   state.result = null;
   state.sim = null;
   state.job = null;
@@ -667,6 +670,10 @@ async function generate(opts = {}) {
     // the simulated stock was shown: simulated again in the background, coarse first
     // (once this run is over: after the `finally` below)
     if (hadSim && opts.auto) setTimeout(backgroundSimulate, 0);
+    // the viewer (the playback) shows the new toolpaths, at the same place
+    setTimeout(() => {
+      if (run === state.genRun) window.__marcam.machining?.open({ auto: true });
+    }, 0);
   } catch (e) {
     if (run === state.genRun) {
       state.planError = { doc: job, message: e.message };
@@ -689,10 +696,10 @@ async function backgroundSimulate() {
   try {
     if (want !== "coarse") {
       sel.value = "coarse";
-      await simLock.run("batch", () => simulateQuiet());
+      await simLock.run("batch", () => simulateQuiet(), { quiet: true });
       sel.value = want;
     }
-    await simLock.run("batch", () => simulateQuiet(SIM_ASK_SECONDS));
+    await simLock.run("batch", () => simulateQuiet(SIM_ASK_SECONDS), { quiet: true });
   } finally {
     sel.value = want;
   }
@@ -837,18 +844,27 @@ const simLock = {
   gen: 0,
   tail: Promise.resolve(),
   /** Run `fn` once no other simulation runs (not at all if a cancel comes first). */
-  run(kind, fn) {
+  run(kind, fn, opts = {}) {
     const gen = this.gen;
-    if (this.busy) setStatus("Waiting for the simulation that is running (click the ring in the 3D view to cancel it)", "busy");
+    // (the person is told they wait; the background is not shown waiting. What the status
+    // said before comes back if the run says nothing itself.)
+    const WAIT = "Waiting for the simulation that is running (click the ring in the 3D view to cancel it)";
+    const before = [$("status").textContent, document.body.dataset.state];
+    const told = this.busy && !opts.quiet;
+    if (told) setStatus(WAIT, "busy");
+    const restore = () => {
+      if (told && $("status").textContent === WAIT) setStatus(before[0], before[1] === "busy" ? "done" : before[1]);
+    };
     this.waiting++;
     const p = this.tail.then(async () => {
       this.waiting--;
-      if (gen !== this.gen) return;
+      if (gen !== this.gen) return restore();
       this.busy = kind;
       try {
         return await fn();
       } finally {
         this.busy = false;
+        restore();
       }
     });
     this.tail = p.catch(() => {});
@@ -867,9 +883,10 @@ function simulate() {
 /** The batch simulation without asking (background): skipped when estimated longer than
  *  `max` seconds, or when the project changed meanwhile. */
 async function simulateQuiet(max = Infinity) {
-  if (!state.result || !planIdle()) return;
+  // (the results' own job: an edit since then is not simulated, nor planned, here)
+  if (!state.result || !state.job || state.stale || !planIdle()) return;
   try {
-    const job = readJob();
+    const job = state.job;
     const base = { libraries: libraries(), setup: job.schema_version === "0.2" ? state.tree?.setup : undefined, estimate: true };
     const t = (await engine("simGrid", job, { ...base, ...simOpts() }, state.mesh)).result.time;
     const s = (t?.seconds || 0) * (t?.batch_factor || 1);
@@ -882,16 +899,20 @@ async function simulateQuiet(max = Infinity) {
 }
 
 async function simulateLocked(opts = {}) {
+  // (in the background, never a plan: the results went meanwhile, so nothing to simulate)
+  if (!state.result && opts.quiet) return;
   if (!state.result) await generate();
   if (!state.result) return;
-  // busy at once (the grid check below is asynchronous)
-  setStatus("Checking the simulation grid...", "busy");
+  // busy at once (the grid check below is asynchronous); not in the background
+  if (!opts.quiet) setStatus("Checking the simulation grid...", "busy");
   if (!opts.quiet && !(await confirmSimRes(true))) {
     setStatus("Simulation not started", "done");
     return;
   }
-  $("generate").disabled = $("simulate").disabled = true;
-  setStatus("Simulating stock...", "busy");
+  // (in the background: the buttons and the status line are left to what the person does)
+  if (!opts.quiet) $("generate").disabled = $("simulate").disabled = true;
+  const say = opts.quiet ? () => {} : setStatus;
+  say("Simulating stock...", "busy");
   try {
     const t0 = performance.now();
     let result = null;
@@ -917,18 +938,21 @@ async function simulateLocked(opts = {}) {
     state.sim = result;
     selectTab(state.tab);
     const s = result.stocks[state.tab];
-    setStatus(`Simulated in ${(ms / 1000).toFixed(1)} s`, "done");
+    say(`Simulated in ${(ms / 1000).toFixed(1)} s`, "done");
     const hits = result.stocks.reduce((n, st) => n + (st.collisions?.count || 0), 0);
     if (s && (s.rapid_hits || s.gouge_cells || hits)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s), ${hits} holder/shank collision(s)`);
   } catch (e) {
     if (e.message === "cancelled") {
-      setStatus("Simulation cancelled", "done");
+      if (!opts.quiet) setStatus("Simulation cancelled", "done");
+    } else if (opts.quiet) {
+      // (a background run that failed: the person asked for nothing, so nothing is shown)
+      console.warn(`background simulation: ${e.message}`);
     } else {
       showError(e.message);
       setStatus("Simulation failed", "error");
     }
   } finally {
-    $("generate").disabled = $("simulate").disabled = false;
+    if (!opts.quiet) $("generate").disabled = $("simulate").disabled = false;
   }
 }
 
@@ -1136,6 +1160,7 @@ async function getThree() {
     const cube = addViewCube({ THREE, renderer, camera, controls }, host);
     const loop = () => {
       controls.update();
+      window.__marcam.machining?.syncFrame?.();
       renderer.render(scene, camera);
       cube.render();
       requestAnimationFrame(loop);
@@ -1276,6 +1301,12 @@ async function drawDraft(pts) {
   g.add(new v.THREE.LineSegments(geo, new v.THREE.LineBasicMaterial({ color: colorNum("draft"), transparent: true, opacity: 0.95 })));
 }
 window.__marcam.previewDraft = previewDraft;
+/** The stock's numbers (material left, gouges, rapids through it) when the viewer shows the
+ *  stock: the batch simulation in the background, nothing asked (skipped when long). */
+window.__marcam.statsInBackground = () => {
+  if (!state.result || state.sim) return;
+  setTimeout(() => simLock.run("batch", () => simulateQuiet(SIM_ASK_SECONDS), { quiet: true }), 0);
+};
 
 /** Machine (x, r, a) -> part frame xyz: the tool at A sits over part angle 90 - A. */
 function toXYZ(x, r, aDeg) {

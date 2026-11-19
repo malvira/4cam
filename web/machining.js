@@ -75,8 +75,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   {
     const sp = recall("marcam.playSpeed");
     if (sp !== null && Number.isFinite(+sp)) $("simSpeed").value = sp;
+    // (off unless chosen: the playback without stock asks nothing of the engine)
     const st = recall("marcam.playStock");
-    if (st !== null) $("simStock").checked = st === "1";
+    $("simStock").checked = st === "1";
     showSpeed();
   }
   /** Machine time (s) when `n` segments have been played. */
@@ -149,8 +150,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   async function applyHidden() {
     if (!m.session) return;
     if (m.open) {
+      // (a view action: opened again by itself, the status line keeps the job's times)
       const at = m.pos;
-      await open();
+      await open({ auto: true });
       if (m.session) await seek(Math.min(at, m.session.segments));
     } else {
       refreshHidden();
@@ -267,13 +269,16 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     placeTool();
   }
 
-  /** The played toolpath as lines in the part's frame (machine tip turned back by A), each
-   *  cut in its operation's colour, rapids red; drawn up to the playback's position. */
+  /** The toolpath as lines in the part's frame (machine tip turned back by A): the cuts in
+   *  their operation's colour and the rapids red, each as what has been played (drawn up to
+   *  the playback's position) and what is still to come (faint). The segments are indexed the
+   *  same in both geometries (the other kind's collapsed to a point), so one position cuts
+   *  both. */
   function buildPath(THREE, work) {
     const p = m.session.path;
     const n = m.session.segments;
-    const pos = new Float32Array(n * 6);
-    const col = new Float32Array(n * 6);
+    const geo = { cut: [new Float32Array(n * 6), new Float32Array(n * 6)], rapid: [new Float32Array(n * 6), new Float32Array(n * 6)] };
+    const rapidRgb = colorRgb("rapid");
     let prev = null;
     for (let k = 0; k < n; k++) {
       const [x, y, z, a, rapid, , tag] = p.subarray(7 * k, 7 * k + 7);
@@ -281,19 +286,49 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       const c = Math.cos(r), sn = Math.sin(r);
       const q = [x, y * c + z * sn, -y * sn + z * c];
       const from = prev || q;
-      pos.set(from, 6 * k);
-      pos.set(q, 6 * k + 3);
-      const rgb = rapid ? colorRgb("rapid") : m.colors[tag] || colorRgb("cut");
-      col.set(rgb, 6 * k);
-      col.set(rgb, 6 * k + 3);
+      const [mine, other] = rapid ? [geo.rapid, geo.cut] : [geo.cut, geo.rapid];
+      mine[0].set(from, 6 * k);
+      mine[0].set(q, 6 * k + 3);
+      other[0].set(q, 6 * k);
+      other[0].set(q, 6 * k + 3);
+      const rgb = rapid ? rapidRgb : m.colors[tag] || colorRgb("cut");
+      mine[1].set(rgb, 6 * k);
+      mine[1].set(rgb, 6 * k + 3);
       prev = q;
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    g.setAttribute("color", new THREE.BufferAttribute(col, 3));
-    m.pathLine = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9 }));
-    m.pathLine.geometry.setDrawRange(0, 2 * m.pos);
-    work.add(m.pathLine);
+    const lines = ([pos, col], opacity) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+      return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity }));
+    };
+    m.paths = {
+      cut: [lines(geo.cut, 0.9), lines(geo.cut, 0.22)],
+      rapid: [lines(geo.rapid, 0.6), lines(geo.rapid, 0.15)],
+    };
+    m.pathLine = m.paths.cut[0];
+    for (const pair of Object.values(m.paths)) for (const o of pair) work.add(o);
+    showRange();
+    applyLayers();
+  }
+
+  /** What has been played, and what is to come, at the playback's position. */
+  function showRange() {
+    if (!m.paths) return;
+    const n = m.session.segments;
+    const at = Math.min(m.pos, n);
+    for (const [played, ahead] of Object.values(m.paths)) {
+      played.geometry.setDrawRange(0, 2 * at);
+      ahead.geometry.setDrawRange(2 * at, 2 * (n - at));
+    }
+  }
+
+  /** The viewer's switches: rapids, the part (it turns under the tool without stock). */
+  function applyLayers() {
+    const v = state.three;
+    if (!v || v.failed || !v.groups.work) return;
+    for (const o of m.paths?.rapid || []) o.visible = $("showRapids").checked;
+    for (const c of v.groups.work.children) if (c.userData.shared) c.visible = $("showPart").checked;
   }
 
   /** Only the machining view while it is open. */
@@ -358,13 +393,15 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const op = s.ops.find((o) => o.tag === opTag);
     const where = m.xyz ? `X${x.toFixed(1)} Y${y.toFixed(1)} Z${z.toFixed(2)}` : y ? `A${a.toFixed(1)} · Y${y.toFixed(2)} Z${z.toFixed(2)}` : `A${a.toFixed(1)}`;
     // the work turns by A (right-handed about +X; 0 on a vise); the tool stands at its tip
-    v.groups.work.rotation.x = (a * Math.PI) / 180;
+    m.angle = (a * Math.PI) / 180;
+    v.groups.work.rotation.x = m.angle;
     v.groups.toolModel.position.set(x, y, z);
     // the tool is always drawn: what is played is what is shown
     v.groups.toolModel.visible = true;
-    m.pathLine?.geometry.setDrawRange(0, 2 * Math.min(m.pos, s.segments));
+    syncFrame();
+    showRange();
     const clock = s.times?.length ? ` · ${fmtClock(timeAt(m.pos))} / ${fmtClock(s.times[s.times.length - 1])}` : "";
-    $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${clock}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.stock ? (m.gpu ? "GPU" : "CPU") : "no stock"}`;
+    $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${clock}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.stock ? (m.gpu ? "GPU" : "CPU") : "no stock"}${m.note ? ` · ${m.note}` : ""}`;
   }
 
   /** Apply a sim_seek result: rows changed -> update vertices and colours in place. */
@@ -424,6 +461,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
 
   async function seek(n) {
     if (!m.session) return;
+    // (the place asked for: a playback opened again meanwhile goes there)
+    m.wanted = n;
     // no stock: only the tool and the path move
     if (!m.stock) {
       m.pos = Math.max(0, Math.min(n, m.session.segments));
@@ -434,9 +473,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.target = n;
     if (m.busy) return;
     m.busy = true;
-    const session = m.session;
     try {
-      while (m.target !== m.pos) {
+      while (m.session && m.stock && m.target !== m.pos) {
+        const session = m.session;
         const want = m.target;
         let result;
         if (m.gpu) {
@@ -451,10 +490,14 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         } else {
           result = (await engine("simSeek", want)).result;
         }
-        // closed (or another opened) while the engine worked: nothing to show
-        if (m.session !== session || !result) break;
+        // closed while the engine worked: nothing to show; another opened meanwhile (the
+        // playback opened again after a plan): on to the place asked for in that one
+        if (!m.session) break;
+        if (m.session !== session) continue;
+        if (!result) break;
         applyRows(result);
-        if (result.pos === want || m.target === want) break;
+        // (a newer place asked for meanwhile: on to it; else done, even short of it)
+        if (m.target === want) break;
       }
     } catch (e) {
       // cancelled (the playback went with the engine's worker): nothing more to show
@@ -464,8 +507,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
   }
 
-  async function open() {
-    showError("");
+  /** Open (or open again, at the same place) the playback. `opts.auto`: by itself after a
+   *  plan (nothing asked, the status left alone, at the end the first time). */
+  async function open(opts = {}) {
+    if (!opts.auto) showError("");
     let job;
     try {
       job = readJob();
@@ -474,22 +519,34 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
     // one simulation at a time (the engine does one thing at a time, and two on the GPU at
     // once can stall it): after the one running
-    if (!simLock) return openLocked(job);
+    if (!simLock) return openLocked(job, opts);
     return simLock.run("playback", () => {
-      setStatus("Opening machining simulation...", "busy");
-      return openLocked(job);
-    });
+      if (!opts.auto) setStatus("Opening machining simulation...", "busy");
+      return openLocked(job, opts);
+    }, { quiet: !!opts.auto });
   }
 
-  async function openLocked(job) {
+  async function openLocked(job, opts = {}) {
     // the stock simulated along (Stock on), or only the tool and the path
-    const stock = !!$("simStock").checked;
-    if (stock && confirmSimRes && !(await confirmSimRes())) {
+    let stock = !!$("simStock").checked;
+    m.note = "";
+    if (stock && opts.auto) {
+      // opened by itself (after a plan): nothing asked; too long a simulation is not started
+      try {
+        const t = (await engine("simGrid", job, { ...(simOpts?.() || {}), libraries: libraries(), setup: job.schema_version === "0.2" ? state.tree?.setup : undefined, estimate: true }, state.mesh)).result.time;
+        if (t?.seconds > 30) {
+          stock = false;
+          m.note = `stock not simulated: about ${Math.round(t.seconds)} s at this resolution (choose a coarser one, or turn stock off and on to start it anyway)`;
+        }
+      } catch {}
+    } else if (stock && confirmSimRes && !(await confirmSimRes())) {
       setStatus("Machining simulation not started", "done");
       return;
     }
     const mine = epoch;
-    const keep = m.open ? m.pos : 0;
+    // the same place when open again; the first time, the end (the whole job drawn)
+    const keep = m.open ? (m.wanted ?? m.pos) : (m.keepAt ?? Number.POSITIVE_INFINITY);
+    m.keepAt = null;
     try {
       const setup = job.schema_version === "0.2" ? state.tree?.setup : undefined;
       const machine = machineArg?.() ?? null;
@@ -514,7 +571,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         m.open = true;
         document.body.dataset.machining = "open";
         if (keep) await seek(Math.min(keep, result.segments));
-        setStatus(`Playback: ${result.segments.toLocaleString("en")} moves, ${result.ops.length} operations, ${fmtClock(result.times?.[result.times.length - 1] || 0)} of machining (no stock)`, "done");
+        if (!opts.auto) setStatus(`Playback: ${result.segments.toLocaleString("en")} moves, ${result.ops.length} operations, ${fmtClock(result.times?.[result.times.length - 1] || 0)} of machining (no stock)`, "done");
         return;
       }
       const n = m.xyz ? result.grid.nx * result.grid.ny : result.grid.nx * result.grid.na;
@@ -557,8 +614,16 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.open = true;
       document.body.dataset.machining = "open";
       if (keep) await seek(Math.min(keep, result.segments));
-      setStatus(`Machining simulation: ${result.segments.toLocaleString("en")} moves, ${result.ops.length} operations`, "done");
+      if (!opts.auto) setStatus(`Machining simulation: ${result.segments.toLocaleString("en")} moves, ${result.ops.length} operations`, "done");
+      // the stock's numbers (material left, gouges, rapids through it): the batch simulation,
+      // in the background
+      window.__marcam.statsInBackground?.();
     } catch (e) {
+      if (opts.auto) {
+        // (opened by itself: the status line stays the person's)
+        if (e.message !== "cancelled") showError(e.message);
+        return;
+      }
       if (e.message === "cancelled") return setStatus("Machining simulation cancelled", "done");
       showError(e.message);
       setStatus("Machining simulation failed", "error");
@@ -580,7 +645,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function reset() {
     epoch++;
     close();
-    Object.assign(m, { session: null, r: null, op: null, pos: 0, target: 0, busy: false, stockMesh: null, ghost: null, dgrid: null, dr: null, dop: null, toolNumber: null, colors: {} });
+    Object.assign(m, { session: null, r: null, op: null, pos: 0, target: 0, wanted: null, busy: false, stockMesh: null, ghost: null, dgrid: null, dr: null, dop: null, toolNumber: null, colors: {} });
     $("opLegend").innerHTML = "";
     const v = state.three;
     if (v && !v.failed && v.groups.machining) {
@@ -631,7 +696,15 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     requestAnimationFrame(frame);
   }
 
-  $("simOpen").addEventListener("click", open);
+  // opened again by hand: not open until the new playback is (at the same place)
+  $("simOpen").addEventListener("click", () => {
+    if (m.open) {
+      m.keepAt = m.wanted ?? m.pos;
+      m.open = false;
+      document.body.dataset.machining = "";
+    }
+    open();
+  });
   $("simClose").addEventListener("click", close);
   $("simPlay").addEventListener("click", () => {
     if (!m.session) return;
@@ -670,6 +743,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (playing && m.session) $("simPlay").click();
   });
   $("simGhost").addEventListener("change", () => m.ghost && (m.ghost.visible = $("simGhost").checked));
+  $("showRapids").addEventListener("change", () => applyLayers());
+  $("showPart").addEventListener("change", () => applyLayers());
   $("opLegend").addEventListener("input", (ev) => {
     const inp = ev.target.closest("input[type=color]");
     if (!inp) return;
@@ -705,6 +780,21 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.session = null;
   }
 
+  /** Picking on the model, a new operation's preview, placing tabs: they are drawn in the
+   *  part's own frame, so the work is shown at A0 (and the tool hidden) meanwhile. Called
+   *  every frame (cheap). */
+  function syncFrame() {
+    const v = state.three;
+    if (!m.open || !v || v.failed || !v.groups.work) return;
+    const t = state.tree;
+    const editing = !!(t && (t.picking || t.draft || t.tabMode));
+    // the part and stock as they are (the playback steps aside), and back after (each
+    // frame: other views set these too)
+    m.editing = editing;
+    showMachining(!editing);
+    if (!editing) v.groups.work.rotation.x = m.angle || 0;
+  }
+
   /** The colours changed (View > Colours): the open playback drawn again. */
   async function recolor() {
     if (!m.open || !m.session) return;
@@ -712,5 +802,5 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     await buildScene();
   }
 
-  return { open, close, seek, reset, applyHidden, colorOf, lost, recolor, state: m };
+  return { open, close, seek, reset, applyHidden, colorOf, lost, recolor, syncFrame, state: m };
 }
