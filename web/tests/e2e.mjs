@@ -1872,8 +1872,9 @@ try {
     await waitFor(() => js("document.getElementById('toolPick').open"), "the tool library", 10000);
     const offered = await js("document.querySelectorAll('#tpList .tp-row').length");
     const kindFilter = await js("document.getElementById('tpKind').value");
-    // a flat tool (the filter starts on the operation's tool type)
-    await js("document.querySelector('#tpList .tp-row').click(); true");
+    // a flat tool (the filter starts on the operation's tool type), not the one the project
+    // has already as T1 (that would be one tool under two numbers, warned about)
+    await js("[...document.querySelectorAll('#tpList .tp-row')].find((r) => !/Spiral O Metal 3\.175 x 12/.test(r.textContent)).click(); true");
     await waitFor(() => js("!document.getElementById('toolPick').open"), "the library closed", 10000);
     await settle();
     await waitFor(() => js("!!document.querySelector('#opForm button[type=submit]')"), "the editor after the pick", 10000);
