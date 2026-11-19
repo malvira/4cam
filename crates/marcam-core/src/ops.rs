@@ -262,6 +262,33 @@ pub fn registry() -> Vec<OperationType> {
             shapes_part: true,
         },
         OperationType {
+            kind: "parting",
+            title: "Parting (cut-off)",
+            description: "Cut the part off the bar (or groove it down to a radius): the tool feeds in helically as the part turns, slowing towards the axis.",
+            group: "feature",
+            params: vec![
+                tool(),
+                p("x", "number", "mm", "Where the groove's part-side edge is: the part is on the +X side, the groove runs towards -X."),
+                p("width", "number", "mm", "Groove width; 0 (or less than the tool): the tool's width. Wider grooves are cut in steps along X.").opt(json!(0.0)).min(0.0),
+                p("step_x", "number", "× tool Ø", "X step between the passes of a wider groove, as a fraction of the tool width.").opt(json!(0.8)).min(0.05).max(1.0),
+                p("top", "number", "mm", "Radius of the material at the groove (where the infeed starts, what the chamfer is measured from). Empty: the stock's.").opt(Value::Null).min(0.0),
+                p("stop_radius", "number", "mm", "Stop at this radius (a groove); 0: cut the part off.").opt(json!(0.0)).min(0.0),
+                p("sliver", "number", "mm", "Cutting off: leave a core of this radius holding the part, to break by hand; 0: right through.").opt(json!(0.0)).min(0.0),
+                p("depth_per_rev", "number", "mm", "Radial depth per turn at the outside.").min(0.005),
+                p("taper", "number", "", "Depth per turn and feed at the axis, as a fraction of their values at the outside (they fall with the radius).").opt(json!(0.4)).min(0.05).max(1.0),
+                p("chamfer", "number", "mm", "Chamfer the part's edge by this much along X first (a V-bit with its flank, a flat end mill in small steps); 0: none.").opt(json!(0.0)).min(0.0),
+                p("segment_deg", "number", "deg", "Angular length of each move.").opt(json!(6.0)).min(0.1),
+                feed(),
+                plunge(),
+                ramp(),
+                smoothing(),
+            ],
+            tool_shapes: &["flat", "vbit"],
+            geometry: &["edge"],
+            machine_needs: &["rotary_a"],
+            shapes_part: true,
+        },
+        OperationType {
             kind: "face",
             title: "Facing (3-axis)",
             description: "Face the top of the block down by a depth, in zig-zag passes along X.",
@@ -599,6 +626,7 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::RotaryTurning(_) => "rotary_turning",
         Operation::HelicalKnurl(_) => "helical_knurl",
         Operation::FlankChamfer(_) => "flank_chamfer",
+        Operation::Parting(_) => "parting",
         Operation::RotaryFinish(_) => "rotary_finish",
         Operation::RotaryRough(_) => "rotary_rough",
         Operation::Face(_) => "face",
@@ -639,13 +667,14 @@ fn nice(v: f64, step: f64) -> f64 {
 }
 
 /// The parameters cutting data sets (see [`apply_cutting`]).
-pub const CUTTING_KEYS: [&str; 11] = [
+pub const CUTTING_KEYS: [&str; 12] = [
     "feed",
     "rough_feed",
     "finish_feed",
     "plunge_feed",
     "step_down",
     "rough_depth",
+    "depth_per_rev",
     "stepover",
     "stepover_mm",
     "step_x",
@@ -699,6 +728,7 @@ pub fn apply_cutting(
     if let Some(d) = p.stepdown {
         set("step_down", nice(d, 0.001));
         set("rough_depth", nice(d, 0.001));
+        set("depth_per_rev", nice(d, 0.001));
     }
     if let Some(s) = p.stepover {
         for k in ["stepover", "stepover_mm", "step_x", "rough_step"] {
@@ -842,6 +872,29 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("fill".into(), json!(0.95));
             v.insert("passes".into(), json!([0.6, 1.0]));
             v.insert("feed".into(), json!(nice(feed * 2.0 / 3.0, 5.0)));
+            v.insert("plunge_feed".into(), json!(plunge));
+        }
+        "parting" => {
+            // at the back of the part, the full depth (a cut-off), gently: a tenth of the tool
+            // a turn
+            let back = part_x().map_or(x_range[0], |r| r[0]);
+            v.insert("x".into(), json!(nice(back, 0.001)));
+            // behind the part the bar is whole; as deep as the tool's flutes reach (a cut-off
+            // when they reach the axis, else a groove that deep)
+            let top = job.stock.radius;
+            v.insert("top".into(), json!(nice(top, 0.001)));
+            let reach = tool.flute_length.map_or(f64::INFINITY, |f| f - 1.0);
+            let stop = if reach > top {
+                0.0
+            } else {
+                nice(top - reach + 0.1, 0.05)
+            };
+            v.insert("stop_radius".into(), json!(stop));
+            v.insert(
+                "depth_per_rev".into(),
+                json!(nice((0.1 * d).max(0.05), 0.01)),
+            );
+            v.insert("feed".into(), json!(nice(feed * 0.6, 5.0)));
             v.insert("plunge_feed".into(), json!(plunge));
         }
         "flank_chamfer" => {

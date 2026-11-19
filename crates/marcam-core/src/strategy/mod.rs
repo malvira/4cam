@@ -4,6 +4,7 @@ pub mod bore;
 pub mod engrave;
 mod flank_chamfer;
 mod helical_knurl;
+pub mod parting;
 mod rotary_finish;
 mod rotary_rough;
 mod rotary_turning;
@@ -11,6 +12,7 @@ pub mod three_axis;
 
 pub use flank_chamfer::flank_chamfer;
 pub use helical_knurl::helical_knurl;
+pub use parting::{parting, PartingTool};
 pub use rotary_finish::{rotary_finish, rotary_finish_on};
 pub use rotary_rough::rotary_rough;
 pub use rotary_turning::rotary_turning;

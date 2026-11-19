@@ -429,7 +429,7 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = await js("[...document.getElementById('treeAddType').options].map(o => o.value).join(',')");
   const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 14 && String(typesAll).split(",").length === 14, `${typesAll}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 15 && String(typesAll).split(",").length === 15, `${typesAll}`);
   const filled = [];
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
@@ -445,7 +445,7 @@ try {
     await treeAct(id, "delete");
     await settle();
   }
-  check("every operation type's new form is fully filled and applies cleanly", filled.length === 14 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
+  check("every operation type's new form is fully filled and applies cleanly", filled.length === 15 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 15000);
@@ -2040,6 +2040,38 @@ try {
     await js("document.getElementById('sdCancel').click(); true");
     check("a new operation takes the tool's data for its type in the setup's material, else the tool's for the material; the dialog shows the material",
       fresh.pocket === 450 && fresh.depth === 0.4 && fresh.face === 500 && shown === "aluminium", `${JSON.stringify(fresh)} ${shown}`);
+  }
+
+  // 8s2. (Mar) parting: a new operation type, placed by a click on the part (snapped to a
+  // band's end when near it), typed or defaulted to the part's back; it plans with a time
+  {
+    await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await js("document.getElementById('treeAddType').value = 'parting'; document.getElementById('treeAddOut').value = '__new'; document.getElementById('treeAdd').click(); true");
+    await waitFor(() => js("!!document.getElementById('opForm')"), "the parting form", 15000);
+    const x0 = await js("document.getElementById('opForm').elements.x.value");
+    // pick: a click on the taper, mid-way (not near its ends)
+    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "pick mode for the parting", 15000);
+    await js("window.__marcam.setView('iso', {})");
+    const at = await js(`(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(-7.5, 0, -9.0).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
+    const hit = await js(`const pr = await window.__marcam.tree.pickAt(${at[0]}, ${at[1]}); pr ? (pr.pickable?.kind || 'none') + ' at ' + pr.point.x.toFixed(2) : 'nothing'`);
+    await sleep(300);
+    const hitX = parseFloat(String(hit).split(" at ")[1]);
+    const picked = await js("({ x: +document.getElementById('opForm').elements.x.value, notes: [...document.querySelectorAll('#opNotes, .pick-notes')].map((e) => e.textContent).join(' ') })");
+    await shot("21c_parting_pick");
+    await js("document.getElementById('pickFaces').click(); true");
+    await sleep(300);
+    // a groove down to 7 mm (the knob's T1 cannot reach the axis), then applied
+    await js("const f = document.getElementById('opForm'); f.elements.stop_radius.value = '7'; f.requestSubmit(); true");
+    await waitFor(() => js("[...document.querySelectorAll('#tree .tree-op')].some((r) => /Parting/.test(r.textContent))"), "the parting operation", 15000);
+    await settle();
+    await clickGenerate();
+    await waitDone("planning with the parting", 120000);
+    const res = await js("(() => { const r = window.__marcam.state.result; const p = r.programs.find((q) => /--- parting at X/.test(q.gcode)); return p ? { name: p.name, head: p.gcode.split('\\n').find((l) => /--- parting at X/.test(l)), ops: p.time?.ops || p.ops || null, issues: p.issues.length, total: r.time_total_s } : null; })()");
+    check("parting: a new operation at the part's back by default, placed by a click on the part, cut as a groove to a radius, planned with a time",
+      Math.abs(+x0 - -21.7) < 1e-6 && /band at -/.test(hit) && Math.abs(picked.x - hitX) < 0.01 && hitX > -14 && hitX < -1.8 && res && new RegExp(`X${picked.x.toFixed(3)}: down to a radius of 7\.000`).test(res.head) && res.issues === 0 && res.total > 0,
+      `default ${x0}; ${hit}; picked ${JSON.stringify(picked)}; ${JSON.stringify(res)}`);
   }
 
   // 8t. (Mar) a long simulation: asked about first with how long it takes (and a quicker

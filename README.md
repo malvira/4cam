@@ -41,6 +41,14 @@ program.
   endmill moving helically along X, then finishes it in one helical pass.
 - `helical_knurl`: a diamond knurl, cut as families of helical V grooves over a conical body.
 - `flank_chamfer`: chamfers an edge with the flank of a V-bit while the part turns.
+- `parting`: cuts the part off the bar (or grooves it down to a radius) with a flat end mill
+  or a V-bit. The tool feeds in helically as the part turns, its depth per turn and its feed
+  falling towards the axis (`taper`). It can leave a `sliver` core to break by hand, cut a
+  groove wider than the tool in steps along X, and chamfer the part's edge first. Its `x` is
+  the groove's part-side edge, picked by clicking the part (snapped to a band's end within
+  1 mm), typed, or the part's back by default. Operations after a full cut-off are warned
+  about. `examples/knob/knob_parting.marcam.toml` cuts the knob off (golden
+  `tests/golden/knob_3_parting.nc`).
 - `rotary_rough`: roughs bar stock down to the mesh plus an `allowance`.
   - It cuts in radial levels `step_down` apart; each level is a helix advancing `step_x`
     per turn.

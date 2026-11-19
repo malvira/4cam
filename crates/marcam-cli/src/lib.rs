@@ -890,7 +890,9 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
         let shapes_part = prog.operations.iter().any(|o| {
             matches!(
                 o,
-                marcam::job::Operation::HelicalKnurl(_) | marcam::job::Operation::FlankChamfer(_)
+                marcam::job::Operation::HelicalKnurl(_)
+                    | marcam::job::Operation::FlankChamfer(_)
+                    | marcam::job::Operation::Parting(_)
             )
         });
         let png = out.join(format!("{name}_stock.png"));

@@ -284,6 +284,7 @@ pub enum Operation {
     Rough3d(Raster3d),
     Engrave(Engrave),
     Vcarve(Vcarve),
+    Parting(Parting),
 }
 
 /// One of several features a facing, pocket or contour works on, each in turn (the ones
@@ -688,6 +689,7 @@ impl Operation {
             Operation::RotaryFinish(o) => Some(o.ramp_angle),
             Operation::RotaryRough(o) => Some(o.ramp_angle),
             Operation::Bore(o) => Some(o.ramp_angle),
+            Operation::Parting(o) => Some(o.ramp_angle),
             _ => None,
         }
     }
@@ -707,6 +709,7 @@ impl Operation {
             Operation::Vcarve(o) => (o.smoothing, true),
             Operation::Contour(o) => (o.smoothing, true),
             Operation::Pocket(o) => (o.smoothing, false),
+            Operation::Parting(o) => (o.smoothing, false),
             _ => return 0.0,
         };
         own.unwrap_or(if finishing { 0.005 } else { 0.01 }).max(0.0)
@@ -727,6 +730,7 @@ impl Operation {
             Operation::RotaryTurning(o) => o.tool,
             Operation::HelicalKnurl(o) => o.tool,
             Operation::FlankChamfer(o) => o.tool,
+            Operation::Parting(o) => o.tool,
         }
     }
 }
@@ -819,6 +823,64 @@ pub struct FlankChamfer {
     /// [`crate::smoothing`]); None: the type's default; 0: off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing: Option<f64>,
+}
+
+/// Parting (rotary): a groove cut radially into the turning bar at `x` with a flat end mill or
+/// a V-bit, in a helical infeed (the radius falls as A turns), its depth per turn and its feed
+/// tapering towards the axis, to a full cut-off (leaving a sliver to break, if asked) or down
+/// to a radius. A groove wider than the tool is cut in steps along X; the part-side edge can
+/// be chamfered first.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Parting {
+    pub tool: u32,
+    /// Axial position of the groove's part-side edge: the part is on the +X side (towards the
+    /// front), the groove runs from here towards -X.
+    pub x: f64,
+    /// Groove width along X (mm); 0 or less than the tool: the tool's width.
+    #[serde(default)]
+    pub width: f64,
+    /// X step between the passes of a wider groove, as a fraction of the tool width.
+    #[serde(default = "default_parting_step")]
+    pub step_x: f64,
+    /// Radius of the material at the groove (the part's, or the stock's when absent): the
+    /// infeed starts just above it, the chamfer is measured from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    /// Radius to stop at; 0: a full cut-off.
+    #[serde(default)]
+    pub stop_radius: f64,
+    /// Full cut-off: leave a core of this radius (mm) holding the part, to break off by hand;
+    /// 0: right through.
+    #[serde(default)]
+    pub sliver: f64,
+    /// Radial depth per turn at the outside (mm).
+    pub depth_per_rev: f64,
+    /// Depth per turn and feed at the axis, as a fraction of their values at the outside
+    /// (they fall linearly with the radius, so the shrinking core is cut gently).
+    #[serde(default = "default_parting_taper")]
+    pub taper: f64,
+    /// Chamfer the part-side edge by this much (mm along X) before parting; 0: none. A V-bit
+    /// cuts it with its flank, a flat end mill in small steps.
+    #[serde(default)]
+    pub chamfer: f64,
+    /// Angular length of each move (degrees).
+    #[serde(default = "default_segment_deg")]
+    pub segment_deg: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+    /// See [`FlankChamfer::ramp_angle`].
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
+    /// Smoothing tolerance (mm); None: the type's default; 0: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
+}
+
+fn default_parting_step() -> f64 {
+    0.8
+}
+fn default_parting_taper() -> f64 {
+    0.4
 }
 
 /// Raster direction for [`RotaryFinish`].

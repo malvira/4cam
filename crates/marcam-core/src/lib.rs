@@ -122,6 +122,7 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::Rough3d(_) => "rough3d",
         Operation::Engrave(_) => "engrave",
         Operation::Vcarve(_) => "vcarve",
+        Operation::Parting(_) => "parting",
     }
 }
 
@@ -491,6 +492,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             (Operation::HelicalKnurl(_) | Operation::FlankChamfer(_), _) => {
                 return Err(wrong("vbit"))
             }
+            (Operation::Parting(_), ToolShape::Flat { .. } | ToolShape::Vbit { .. }) => None,
+            (Operation::Parting(_), _) => return Err(wrong("flat or vbit")),
             (
                 Operation::RotaryFinish(_)
                 | Operation::RotaryRough(_)
@@ -593,6 +596,20 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             }
             (Operation::FlankChamfer(o), ToolShape::Vbit { angle, .. }) => {
                 strategy::flank_chamfer(&mut b, angle, safe_r, o)
+            }
+            (Operation::Parting(o), shape) => {
+                let t = match shape {
+                    ToolShape::Vbit { angle, .. } => strategy::PartingTool::Vbit {
+                        half_angle: angle / 2.0,
+                    },
+                    ToolShape::Flat { diameter } => strategy::PartingTool::Flat {
+                        radius: diameter / 2.0,
+                    },
+                    _ => unreachable!("tool shape validated above"),
+                };
+                let r_min = strategy::parting(&mut b, t, job.stock.radius, safe_r, o)
+                    .map_err(|e| Error::Invalid(format!("program {}: parting: {e}", prog.name)))?;
+                check_flute(tool, job.stock.radius, r_min)?;
             }
             (Operation::RotaryFinish(o), _) => {
                 let mesh = ctx.surface(&prog.name)?;
@@ -907,10 +924,44 @@ fn plan_cached(
         cache,
     };
     let mut next_op = 0;
-    job.programs
+    let mut tps: Vec<Toolpath> = job
+        .programs
         .iter()
         .map(|p| plan_program(&mut ctx, p, &mut next_op))
-        .collect()
+        .collect::<Result<_, _>>()?;
+    cut_off_warnings(job, &mut tps);
+    Ok(tps)
+}
+
+/// A full cut-off ([`job::Parting`] through to the axis) leaves nothing on the bar: operations
+/// after it (in its program or a later one) would cut air, or the remainder. Its program says
+/// so in a warning.
+fn cut_off_warnings(job: &Job, tps: &mut [Toolpath]) {
+    let ops: Vec<(usize, &Operation)> = job
+        .programs
+        .iter()
+        .enumerate()
+        .flat_map(|(p, prog)| prog.operations.iter().map(move |o| (p, o)))
+        .collect();
+    let Some(k) = ops
+        .iter()
+        .position(|(_, o)| matches!(o, Operation::Parting(c) if c.stop_radius <= 0.0))
+    else {
+        return;
+    };
+    let after = ops.len() - k - 1;
+    if after == 0 {
+        return;
+    }
+    let (p, Operation::Parting(c)) = ops[k] else {
+        return;
+    };
+    if let Some(tp) = tps.get_mut(p) {
+        tp.notes.push(format!(
+            "(Warning: {after} operation(s) come after the cut-off at X{:.3}: the part is off the bar by then. Put the cut-off last.)",
+            c.x
+        ));
+    }
 }
 
 /// Load and orient the job's `part.mesh` (path relative to `base_dir`), if any.

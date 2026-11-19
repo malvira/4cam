@@ -300,6 +300,27 @@ fn ops_registry_and_upgrade() {
 }
 
 #[test]
+fn the_knob_cut_off_matches_its_golden_and_leaves_the_others_unchanged() {
+    let out = out_dir("parting");
+    let o = bin()
+        .args(["run", "examples/knob/knob_parting.marcam.toml", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    let s = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "{s}");
+    assert!(s.contains("op 4 parting"), "{s}");
+    for name in ["knob_1_profile", "knob_2_knurl", "knob_3_parting"] {
+        let ours = std::fs::read(out.join(format!("{name}.nc"))).unwrap();
+        let golden = std::fs::read_to_string(root().join(format!("tests/golden/{name}.nc")))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert_eq!(ours, golden.as_bytes(), "{name} differs from its golden");
+    }
+    std::fs::remove_dir_all(&out).ok();
+}
+
+#[test]
 fn two_setup_project_runs_every_setup() {
     let out = out_dir("setups");
     let o = bin()

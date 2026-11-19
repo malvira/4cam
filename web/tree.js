@@ -671,6 +671,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     else if (pk.sel.has(x.id)) pk.sel.delete(x.id);
     else pk.sel.add(x.id);
     await applySel();
+    // parting on a band: where the click is along X, snapped to the band's end within 1 mm
+    const op = opById(t.selected);
+    if (op?.type === "parting" && pk.sel.has(x.id) && /band$/.test(x.kind) && region.point && Array.isArray(x.data.x)) {
+      const [lo, hi] = x.data.x;
+      const px = region.point.x;
+      const snap = [lo, hi].find((e) => Math.abs(e - px) < 1.0);
+      op.x = Math.round((snap ?? px) * 1000) / 1000;
+      pk.notes = [snap !== undefined ? `at the band's ${snap === lo ? "back" : "front"}, X${op.x.toFixed(3)}` : `at X${op.x.toFixed(3)}, where you clicked`];
+      renderEditor();
+    }
     return { ...region, pickable: x };
   }
 

@@ -969,6 +969,7 @@ pub fn accepts(op_type: &str) -> &'static [&'static str] {
         "rotary_rough" | "rotary_turning" => &["cylindrical_band", "revolved_band", "surface"],
         "helical_knurl" => &["revolved_band", "cylindrical_band"],
         "flank_chamfer" => &["circular_edge"],
+        "parting" => &["revolved_band", "cylindrical_band", "circular_edge"],
         "engrave" | "vcarve" => &["flat_face", "side_face", "cylindrical_band"],
         _ => &[],
     }
@@ -1285,6 +1286,27 @@ pub fn apply(
             };
             v.insert("body_back".into(), json!([round_um(x[0]), r[0]]));
             v.insert("body_front".into(), json!([round_um(x[1]), r[1]]));
+        }
+        "parting" => {
+            // snapped to the picked edge, or to the back (X min) of a picked band, where the
+            // material is as high as the band's radius there
+            let p = picks[0];
+            if picks.len() > 1 {
+                notes.push("one parting cut: at the first one picked".into());
+            }
+            let (x, r) = if p.kind == "circular_edge" {
+                (f(p, "x"), f(p, "r"))
+            } else {
+                let r = match p.data["r_ends"].as_array() {
+                    Some(e) => e[0].as_f64().unwrap_or(0.0),
+                    None => p.data["r"][1].as_f64().unwrap_or(0.0),
+                };
+                (p.data["x"][0].as_f64().unwrap_or(0.0), r)
+            };
+            v.insert("x".into(), json!(round_um(x)));
+            if r > 0.0 {
+                v.insert("top".into(), json!(round_um(r)));
+            }
         }
         "flank_chamfer" => {
             let p = picks[0];
