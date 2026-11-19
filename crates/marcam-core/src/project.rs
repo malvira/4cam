@@ -211,6 +211,8 @@ pub struct Setup {
 impl Project {
     /// Read a 0.2 project, or a 0.1 job (upgraded). Returns whether it was upgraded.
     pub fn from_json_any(text: &str) -> Result<(Project, bool), String> {
+        // (TOML or JSON: see project_file)
+        let text = &*crate::project_file::to_json_text(text)?;
         let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
         match v.get("schema_version").and_then(Value::as_str) {
             Some(job::SCHEMA_VERSION) => {
@@ -778,6 +780,7 @@ pub fn jobs_from_any_with(
     libraries: &[ToolLibrary],
     meshes: &dyn Fn(&MeshSource) -> Option<crate::Mesh>,
 ) -> Result<Vec<(String, Job)>, String> {
+    let text = &*crate::project_file::to_json_text(text)?;
     let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
     if v.get("schema_version").and_then(Value::as_str) == Some(job::SCHEMA_VERSION) {
         return Ok(vec![(

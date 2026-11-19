@@ -6,7 +6,7 @@ a tiny ES-module wrapper: no dependencies, Node 18+ and browsers. JSON in, JSON 
 ```js
 import { init } from "marcam";
 const cam = await init();
-const project = JSON.parse(await (await fetch("knob.project.json")).text());
+const project = JSON.parse(await (await fetch("knob.marcam.toml")).text());
 const result = cam.planAndPost(project);          // machine: the project's, else the Makera Z1
 for (const p of result.programs) console.log(p.name, p.lines, "lines,", p.issues.length, "issues");
 ```

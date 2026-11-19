@@ -76,7 +76,7 @@ assert.deepEqual(types.map((t) => t.kind).sort(), ["bore", "contour", "drill", "
 const chk = cam.checkProject(JSON.parse(readFileSync(join(root, "examples", "knob", "knob.job.json"), "utf8")));
 assert.equal(chk.upgraded, true);
 assert.deepEqual(chk.problems, []);
-const proj = JSON.parse(readFileSync(join(root, "examples", "knob", "knob.project.json"), "utf8"));
+const proj = cam.checkProject(readFileSync(join(root, "examples", "knob", "knob.marcam.toml"), "utf8")).project;
 const pr = cam.planAndPost(proj, "makera-z1");
 assert.deepEqual(pr.programs.map((p) => p.lines), [21787, 15146]);
 console.log(`registry: ${types.length} operation types; 0.2 project plans like the 0.1 job`);
@@ -96,7 +96,7 @@ const fr = cam.faceRegions(proj, "profile");
 assert.equal(fr.regions.length, 8);
 console.log("knurl wizard reproduces the cut G-code; 8 face regions");
 // 3-axis plate on the Carvera: XYZ polylines (kinds 2/3), box stock, clean programs
-const plate = JSON.parse(readFileSync(join(root, "examples", "plate", "plate.project.json"), "utf8"));
+const plate = cam.checkProject(readFileSync(join(root, "examples", "plate", "plate.marcam.toml"), "utf8")).project;
 const dome = new Uint8Array(readFileSync(join(root, "examples", "plate", "dome.stl")));
 const pl = cam.planAndPost(plate, "", dome, { max_points: 20000 });
 assert.ok(!pl.error, pl.error);
@@ -200,7 +200,7 @@ console.log(`3-axis plate: ${pl.programs.map((p) => `${p.name} ${p.lines} lines`
   console.log(`stubby tool: ${hit.map((c) => `${c.count} collisions, deepest ${c.max_depth.toFixed(2)} mm`).join("; ")}`);
 }
 // indexed 3+1 on the knob: plans clean, playback path carries Y and A for every segment
-const kidx = JSON.parse(readFileSync(join(root, "examples", "knob", "knob_indexed.project.json"), "utf8"));
+const kidx = cam.checkProject(readFileSync(join(root, "examples", "knob", "knob_indexed.marcam.toml"), "utf8")).project;
 const ki = cam.planAndPost(kidx, "makera-z1");
 assert.ok(!ki.error, ki.error);
 assert.deepEqual(ki.programs.map((p) => p.issues.length), [0, 0, 0]);
@@ -220,7 +220,7 @@ assert.equal(sv.count, 1);
 assert.deepEqual(sv.paths[0].map((q) => q.join(",")).sort(), ["5,15", "25,15", "25,5", "5,5", "5,15"].sort());
 assert.ok(cam.svgPaths("not svg", {}).error);
 // wrapped engraving on the Z1 (ring example)
-const ring = JSON.parse(readFileSync(join(root, "examples", "ring", "ring.project.json"), "utf8"));
+const ring = cam.checkProject(readFileSync(join(root, "examples", "ring", "ring.marcam.toml"), "utf8")).project;
 const rg = cam.planAndPost(ring, "makera-z1");
 assert.ok(!rg.error, rg.error);
 assert.deepEqual(rg.programs.map((p) => p.issues.length), [0]);

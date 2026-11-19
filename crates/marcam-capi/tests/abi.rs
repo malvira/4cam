@@ -77,7 +77,7 @@ fn version_and_registry() {
 
 #[test]
 fn plan_post_estimate_simulate_the_knob() {
-    let project = std::fs::read_to_string(root().join("examples/knob/knob.project.json")).unwrap();
+    let project = std::fs::read_to_string(root().join("examples/knob/knob.marcam.toml")).unwrap();
     let p = CString::new(project.clone()).unwrap();
     // SAFETY: valid strings, no mesh.
     let r = take(unsafe {

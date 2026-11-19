@@ -183,7 +183,7 @@ fn threaded_simulation_is_bit_identical() {
     // the indexed knob: turning, knurl, chamfer, then indexed 3+1 flat and hole
     let text = std::fs::read_to_string(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/knob/knob_indexed.project.json"),
+            .join("../../examples/knob/knob_indexed.marcam.toml"),
     )
     .unwrap();
     let libs = marcam::profiles::builtin_libraries();

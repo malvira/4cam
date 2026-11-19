@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 fn plate() -> (Job, PathBuf) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/plate");
-    let text = std::fs::read_to_string(dir.join("plate.project.json")).unwrap();
+    let text = std::fs::read_to_string(dir.join("plate.marcam.toml")).unwrap();
     let libs = marcam::profiles::builtin_libraries();
     let mut jobs =
         marcam::project::jobs_from_any_with(&text, &libs, &|src| src.load(&dir).ok()).unwrap();

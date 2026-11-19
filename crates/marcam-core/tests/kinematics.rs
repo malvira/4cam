@@ -146,7 +146,7 @@ fn general_moves_are_solved_for_the_machine() {
 
 #[test]
 fn the_indexed_knob_runs_on_a_left_handed_machine_with_a_negated() {
-    let text = include_str!("../../../examples/knob/knob_indexed.project.json");
+    let text = include_str!("../../../examples/knob/knob_indexed.marcam.toml");
     let libs = marcam::profiles::builtin_libraries();
     let job = marcam::project::jobs_from_any_with(text, &libs, &|_| None)
         .unwrap()

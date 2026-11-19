@@ -1017,13 +1017,18 @@ try {
     // Save (asks for a name, downloads one file with the mesh in it), then New, then Open it
     const before = new Set(readdirSync(downloads));
     await js("document.getElementById('projectSave').click(); true");
-    const saved = await waitFor(() => readdirSync(downloads).find((f) => !before.has(f) && f.endsWith(".marcam.json")), "the saved project", 15000);
-    const savedText = readFileSync(join(downloads, saved), "utf8");
-    const savedObj = JSON.parse(savedText);
+    const saved = await waitFor(() => readdirSync(downloads).find((f) => !before.has(f) && f.endsWith(".marcam") && !f.endsWith(".crdownload")), "the saved project", 15000);
+    await sleep(300);
+    const savedBytes = readFileSync(join(downloads, saved));
+    // (Mar) one .marcam file: a zip of project.toml (TOML) and the part
+    const inside = await js(`await (async () => { const b = Uint8Array.from(atob("${savedBytes.toString("base64")}"), (c) => c.charCodeAt(0)); const { result } = await window.__marcam.engine("bundleRead", b);
+      return { kind: result.project.setups[0].kind, files: result.files.map((f) => [f.name, atob(f.bytes).length]) }; })()`);
     const clean1 = await js("document.getElementById('projectDirty').classList.contains('hidden')");
-    check("Save: one .marcam.json with the project and its STL embedded; the unsaved mark goes",
-      saved === `${name1}.marcam.json` && savedObj.format === "marcam-project" && Object.keys(savedObj.meshes)[0] === "knob.stl" && Buffer.from(savedObj.meshes["knob.stl"], "base64").length === 84 + 50 * 10080 && clean1 && savedObj.project.setups[0].kind === "rotary",
-      `${saved}; ${Object.keys(savedObj.meshes || {})}`);
+    check("Save: one .marcam file (a zip of project.toml and the part STL); the unsaved mark goes",
+      saved === `${name1}.marcam` && savedBytes[0] === 0x50 && savedBytes[1] === 0x4b && savedBytes.includes(Buffer.from("project.toml")) && inside.kind === "rotary" &&
+      inside.files.some(([n, l]) => n === "knob.stl" && l === 84 + 50 * 10080) && clean1,
+      `${saved}; ${JSON.stringify(inside)}`);
+    const savedText = savedBytes;
     await js("document.getElementById('projectNew').click(); true");
     await inDialog({ cancel: true });
     const dialogsBefore = cdp.dialogs.length;

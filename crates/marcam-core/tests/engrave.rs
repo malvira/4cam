@@ -211,7 +211,7 @@ fn example(name: &str) -> (Job, std::path::PathBuf) {
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples")
         .join(name);
-    let text = std::fs::read_to_string(dir.join(format!("{name}.project.json"))).unwrap();
+    let text = std::fs::read_to_string(dir.join(format!("{name}.marcam.toml"))).unwrap();
     let libs = marcam::profiles::builtin_libraries();
     let mut jobs =
         marcam::project::jobs_from_any_with(&text, &libs, &|src| src.load(&dir).ok()).unwrap();

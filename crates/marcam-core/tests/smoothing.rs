@@ -92,7 +92,7 @@ fn rotary_programs_smoothed_stay_on_the_part() {
 
 #[test]
 fn the_plate_smoothed_verifies_clears_the_holder_and_does_not_gouge() {
-    let (job, dir) = load("examples/plate/plate.project.json");
+    let (job, dir) = load("examples/plate/plate.marcam.toml");
     let mesh = load_mesh(&job, &dir).unwrap();
     let m = marcam::profiles::builtin_machine("makera-carvera-4axis").unwrap();
     let raw = plan_with_mesh(&with_smoothing(job.clone(), Some(0.0)), mesh.as_ref()).unwrap();
@@ -132,7 +132,7 @@ fn the_plate_smoothed_verifies_clears_the_holder_and_does_not_gouge() {
 
 #[test]
 fn a_shaped_pocket_gets_arcs_only_when_smoothed() {
-    let (job, _) = load("examples/plaque/plaque.project.json");
+    let (job, _) = load("examples/plaque/plaque.marcam.toml");
     let m = marcam::profiles::builtin_machine("makera-carvera-4axis").unwrap();
     let arcs = |job: &Job| {
         plan_with_mesh(job, None).ok().map(|tps| {

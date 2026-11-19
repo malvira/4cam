@@ -6,7 +6,8 @@ supported API. Everything else is internal and may change.
 
 ## The document
 
-The document is a JSON project, `"schema_version": "0.2"`. It holds:
+The document is a project, `schema_version = "0.2"`, written as TOML (see "Project files"
+below; JSON reads too). It holds:
 
 - models: a revolved profile and/or a mesh file. A mesh model can instead be a grayscale
   image (PNG or PGM) with `"image": {"width", "height", "depth", "base", "invert", "wrap"}`:
@@ -21,10 +22,74 @@ The document is a JSON project, `"schema_version": "0.2"`. It holds:
   operation types (`face`, `pocket` (a rectangle, or any closed `paths` with islands),
   `drill`, `contour`, `raster3d`); bar setups take the
   rotary ones, and also the 3-axis types with `index_a` (deg): indexed 3+1, cut with the
-  part turned to that A. A vise setup rejects a non-zero `index_a`. Example: `examples/plate/plate.project.json`.
+  part turned to that A. A vise setup rejects a non-zero `index_a`. Example: `examples/plate/plate.marcam.toml`.
 
 0.1 jobs upgrade automatically. Machine profiles and tool libraries are separate JSON files
 (`docs/profiles.md`).
+
+### Project files
+
+marcam writes projects as TOML and reads TOML or JSON (JSON forever: `.marcam.json`,
+`.project.json` and 0.1 `.job.json` files keep opening). The model is the same in both forms.
+
+- **`name.marcam.toml`**: the project. Part files (STL, 3MF, STEP, a relief's image) stay
+  beside it, named by relative path (`file = "knob.stl"`). Keys come in the model's order;
+  operations are `[[setups.operations]]` tables; unset fields are not written; numbers are
+  written as typed (3.175, not 3.1750000000000003). Comments (`# ...`) are allowed and
+  ignored. Lengths are mm, angles degrees, feeds mm/min unless a key says otherwise.
+- **`name.marcam`**: the single-file form the web app saves: a zip of `project.toml` and the
+  part files it names (and `view.json`, the web view: which toolpaths are hidden). Any zip
+  tool opens it.
+
+A short one:
+
+```toml
+schema_version = "0.2"
+name = "knob"
+
+[[models]]
+id = "part"
+kind = "profile"
+points = [[-20.0, 10.0], [-10.0, 8.0], [0.0, 6.0]]   # X (back to front), radius
+
+[[tools]]
+number = 1
+description = "3.175 mm flat"
+kind = "flat"
+diameter = 3.175
+flute_length = 15
+
+[[setups]]
+id = "s"
+kind = "rotary"
+stock = { shape = "cylinder", radius = 11.0, length = 30.0 }
+clearance = 3.0
+part = ["part"]
+spindle_rpm = 12000
+
+[[setups.operations]]
+id = "op1"
+type = "rotary_turning"
+tool = 1
+rough_depth = 0.4
+rough_step = 1.0
+rough_feed = 300.0
+finish_allowance = 0.15
+finish_step = 0.4
+finish_feed = 250.0
+plunge_feed = 60.0
+
+[[setups.outputs]]
+name = "knob"
+title = "turned"
+operations = ["op1"]
+```
+
+Every function below that takes a document takes it as TOML text, JSON text or a parsed
+object. Rust: `marcam::project_file` (`to_json_text`, `project_to_toml`, `write_bundle`,
+`read_bundle`); WebAssembly: `toToml(doc)`, `bundleWrite(doc, files)`, `bundleRead(bytes)`;
+Python: `marcam.to_toml(project)`; CLI: `marcam convert <file> [--json] [--bundle x.marcam]`
+(and `marcam upgrade` writes TOML unless `--json`).
 
 ## Rust (`marcam` crate)
 

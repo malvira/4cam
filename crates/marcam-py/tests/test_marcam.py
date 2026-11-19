@@ -78,6 +78,16 @@ def test_picking():
     assert marcam.call("pickables", project, {}, stl)["setup"] == "vise"
 
 
+def test_toml_projects():
+    # a TOML project (what marcam writes) plans like its JSON; to_toml writes one
+    text = (ROOT / "examples" / "knob" / "knob.marcam.toml").read_text()
+    a = marcam.plan_and_post(text, max_points=1000)
+    t = marcam.to_toml(marcam.example_job())
+    assert t.startswith("# marcam project") and "[[setups.operations]]" in t
+    b = marcam.plan_and_post(t, max_points=1000)
+    assert [p["gcode"] for p in a["programs"]] == [p["gcode"] for p in b["programs"]]
+
+
 def test_replace_model():
     import json
     fx = ROOT / "tests" / "fixtures" / "picking"

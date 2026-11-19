@@ -1,5 +1,5 @@
 // Plan a marcam project from C#: P/Invoke into the C library, JSON in and out.
-//   dotnet run -- examples/knob/knob.project.json
+//   dotnet run -- examples/knob/knob.marcam.toml
 using System.Runtime.InteropServices;
 using System.Text.Json;
 

@@ -21,7 +21,7 @@ fn examples() -> Vec<(String, Job, Option<Mesh>, PathBuf)> {
         for f in std::fs::read_dir(&d).unwrap().flatten() {
             let p = f.path();
             let name = p.file_name().unwrap().to_string_lossy().to_string();
-            if !(name.ends_with(".project.json") || name.ends_with(".job.json")) {
+            if !(name.ends_with(".marcam.toml") || name.ends_with(".job.json")) {
                 continue;
             }
             let text = std::fs::read_to_string(&p).unwrap();

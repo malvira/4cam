@@ -75,7 +75,7 @@ goldens are still byte-identical.
 
    A setup is planned by lowering it to a 0.1 job, so the goldens stay identical.
 2. **Operation registry. Done:** `crates/marcam-core/src/ops.rs` describes each type (parameters with units, defaults and limits; tool shapes; geometry; machine needs; whether it shapes the part on purpose). `marcam ops list|show|check`, WASM `opTypes`/`checkProject`. A test keeps the specs in step with the engine.
-3. **Setups. Done (rotary):** `marcam run` plans every setup (each with its own machine); a setup with `"stock": {"shape": "from_previous"}` starts from the previous setup's simulated stock (`project::simulate_project`); validation rejects a first setup that carries stock and duplicate output names. Example: `examples/knob/knob_two_setups.project.json`. Not yet: work-offset changes between setups (re-chucking at a different X or A), non-rotary holding.
+3. **Setups. Done (rotary):** `marcam run` plans every setup (each with its own machine); a setup with `"stock": {"shape": "from_previous"}` starts from the previous setup's simulated stock (`project::simulate_project`); validation rejects a first setup that carries stock and duplicate output names. Example: `examples/knob/knob_two_setups.marcam.toml`. Not yet: work-offset changes between setups (re-chucking at a different X or A), non-rotary holding.
 4. **Geometry selection. Done (prototype):** `crates/marcam-core/src/geometry.rs` splits a model into face regions at sharp edges (30°), with ids that survive reordering and STL round trips, and a shape guess (plane, cylinder, cone, freeform). An operation's `geometry` (faces, axial range, angular range) becomes a containment boundary in X and A; the drop-cutter still checks the whole model, so selections never gouge neighbouring faces. `marcam faces`, WASM `face_regions` (with per-triangle region ids for picking).
 
    **Face-bounded rasters. Done:** faces picked on a mesh model limit `raster3d` (vise,
@@ -107,7 +107,7 @@ goldens are still byte-identical.
      path) and `raster3d` (drop-cutter zigzag over the mesh in step-down levels, rows linked at
      depth, descents steeper than the ramp angle slowed to the plunge feed) in `strategy/three_axis.rs`, with registry
      entries and engine defaults from the block;
-   - `sim3::Heightmap3` simulates them. A test plans `examples/plate/plate.project.json`
+   - `sim3::Heightmap3` simulates them. A test plans `examples/plate/plate.marcam.toml`
      (Carvera, 60x40x10 block, dome fixture) and checks each operation's result in the cut
      block: faced depth, pocket floor and walls, hole depth and width, outline depth outside
      and none inside, no gouge on the dome, no rapids through material, 0 verifier issues;
@@ -221,7 +221,7 @@ goldens are still byte-identical.
   operations take `index_a` (deg). The planner turns A there at the safe radius, runs the
   3-axis strategy around the bar (raster3d on the part turned by A), and returns to Y0. The
   rotary simulation cuts with the tool offset in Y (`sim::stamp_indexed`). Example
-  `examples/knob/knob_indexed.project.json`: a D-flat on the shaft at A0 and a cross hole at
+  `examples/knob/knob_indexed.marcam.toml`: a D-flat on the shaft at A0 and a cross hole at
   A90 after the knob's turning and knurl, whose G-code stays identical to the goldens. Tests
   check the flat's chord shape, the hole's depth and width, 0 rapids through stock, the
   verifier and the machine limits (Y travel included).

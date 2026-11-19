@@ -1,6 +1,6 @@
 /* Plan a marcam project from C: print the engine's version, then plan and post the project
  * and print the start of the result. Build: see docs/embedding.md (or scripts/test-capi.sh).
- *   plan examples/knob/knob.project.json */
+ *   plan examples/knob/knob.marcam.toml */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

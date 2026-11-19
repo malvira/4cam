@@ -26,7 +26,7 @@ fn which_operations_fit_each_kind() {
 fn the_project_check_names_what_does_not_fit() {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../examples/knob/knob_indexed.project.json"
+        "/../../examples/knob/knob_indexed.marcam.toml"
     ))
     .unwrap();
     let (mut p, _) = Project::from_json_any(&text).unwrap();

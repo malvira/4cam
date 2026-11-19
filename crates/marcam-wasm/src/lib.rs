@@ -1358,11 +1358,19 @@ pub mod api {
 
     pub fn call(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Value {
         let s = |v: &[u8]| String::from_utf8_lossy(v).into_owned();
+        // a project or job: TOML or JSON (the functions read JSON)
+        let d = |v: &[u8]| {
+            let t = String::from_utf8_lossy(v).into_owned();
+            match marcam::project_file::to_json_text(&t) {
+                Ok(j) => j.into_owned(),
+                Err(_) => t,
+            }
+        };
         match name {
             "version" => version(),
             "example_job" => serde_json::from_str(EXAMPLE_JOB).unwrap_or(Value::Null),
             "machine" => machine(&s(a)),
-            "plan_and_post" => plan_and_post(&s(a), &s(b), c, ""),
+            "plan_and_post" => plan_and_post(&d(a), &s(b), c, ""),
             "plan_and_post_opts" => {
                 // a = job, b = {"machine": ..., "max_points": ...}, c = mesh
                 let o: Value = serde_json::from_slice(b).unwrap_or(Value::Null);
@@ -1371,17 +1379,17 @@ pub mod api {
                     Value::Null => String::new(),
                     v => v.to_string(),
                 };
-                plan_and_post(&s(a), &m, c, &s(b))
+                plan_and_post(&d(a), &m, c, &s(b))
             }
-            "simulate" => simulate(&s(a), &s(b), c),
+            "simulate" => simulate(&d(a), &s(b), c),
             "profile_list" => profile_list(),
-            "face_regions" => face_regions(&s(a), &s(b), c),
-            "wizard_knurl" => wizard_knurl(&s(a), &s(b), c),
+            "face_regions" => face_regions(&d(a), &s(b), c),
+            "wizard_knurl" => wizard_knurl(&d(a), &s(b), c),
             "body_project" => body_project(&s(a), b),
-            "op_defaults" => op_defaults(&s(a), &s(b), c),
-            "pickables" => pickables(&s(a), &s(b), c),
-            "apply_picks" => apply_picks(&s(a), &s(b), c),
-            "replace_model" => replace_model(&s(a), &s(b), c),
+            "op_defaults" => op_defaults(&d(a), &s(b), c),
+            "pickables" => pickables(&d(a), &s(b), c),
+            "apply_picks" => apply_picks(&d(a), &s(b), c),
+            "replace_model" => replace_model(&d(a), &s(b), c),
             "op_types" => {
                 // each type with the pickable kinds it takes (marcam::pickables::accepts)
                 let mut v = serde_json::to_value(marcam::ops::registry()).unwrap_or(Value::Null);
@@ -1391,22 +1399,64 @@ pub mod api {
                 }
                 v
             }
-            "check_project" => match marcam::project::Project::from_json_any(&s(a)) {
+            "check_project" => match marcam::project::Project::from_json_any(&d(a)) {
                 Ok((p, upgraded)) => {
                     json!({"project": p, "upgraded": upgraded, "problems": p.check_operations()})
                 }
                 Err(e) => err(e),
             },
-            "sim_open" => sim_open(&s(a), &s(b), c),
+            "sim_open" => sim_open(&d(a), &s(b), c),
             "sim_seek" => sim_seek(s(a).trim().parse().unwrap_or(0)),
             "sim_close" => sim_close(),
             "import_profile" => import_profile(a, &s(b)),
-            "mesh_triangles" => mesh_triangles(&s(a), &s(b), c),
+            "mesh_triangles" => mesh_triangles(&d(a), &s(b), c),
             "svg_paths" => svg_paths(&s(a), &s(b)),
             "estimate_gcode" => estimate_gcode(&s(a), &s(b)),
-            "sim_grid" => sim_grid(&s(a), &s(b), c),
-            "gpu_open" => gpu_open(&s(a), &s(b), c),
+            "sim_grid" => sim_grid(&d(a), &s(b), c),
+            "gpu_open" => gpu_open(&d(a), &s(b), c),
             "gpu_stats" => gpu_stats(&s(a), c),
+            // project files: TOML text, and the single-file bundle (.marcam)
+            "to_toml" => match marcam::project::Project::from_json_any(&d(a)) {
+                Ok((p, _)) => match marcam::project_file::project_to_toml(&p) {
+                    Ok(t) => json!({ "text": t }),
+                    Err(e) => err(e),
+                },
+                Err(e) => err(e),
+            },
+            "bundle_write" => {
+                // a = the project, b = [[name, length], ...] of the files concatenated in c
+                let list: Vec<(String, usize)> = serde_json::from_slice(b).unwrap_or_default();
+                let toml = match marcam::project::Project::from_json_any(&d(a)) {
+                    Ok((p, _)) => match marcam::project_file::project_to_toml(&p) {
+                        Ok(t) => t,
+                        Err(e) => return err(e),
+                    },
+                    Err(e) => return err(e),
+                };
+                let mut files = Vec::new();
+                let mut at = 0;
+                for (name, n) in list {
+                    let Some(bytes) = c.get(at..at + n) else {
+                        return err("bundle_write: the files are shorter than their lengths");
+                    };
+                    files.push((name, bytes.to_vec()));
+                    at += n;
+                }
+                json!({ "bytes": b64(&marcam::project_file::write_bundle(&toml, &files)) })
+            }
+            "bundle_read" => match marcam::project_file::read_bundle(c) {
+                Ok((text, files)) => match marcam::project_file::to_json_text(&text)
+                    .map(|t| serde_json::from_str::<Value>(&t))
+                {
+                    Ok(Ok(project)) => json!({
+                        "project": project,
+                        "files": files.iter().map(|(n, b)| json!({"name": n, "bytes": b64(b)})).collect::<Vec<_>>(),
+                    }),
+                    Ok(Err(e)) => err(format!("project.toml: {e}")),
+                    Err(e) => err(e),
+                },
+                Err(e) => err(e),
+            },
             other => err(format!("unknown function {other:?}")),
         }
     }

@@ -9,7 +9,12 @@ use pyo3::types::PyString;
 /// JSON text of a job given as `str` (JSON) or any JSON-serialisable object (e.g. a dict).
 fn json_text(py: Python<'_>, v: &Bound<'_, PyAny>) -> PyResult<String> {
     if let Ok(s) = v.cast::<PyString>() {
-        return Ok(s.to_string());
+        // a project file's text: TOML (what marcam writes) or JSON
+        let s = s.to_string();
+        return Ok(match ::marcam::project_file::to_json_text(&s) {
+            Ok(j) => j.into_owned(),
+            Err(_) => s,
+        });
     }
     let json = py.import("json")?;
     json.call_method1("dumps", (v,))?.extract()
@@ -165,6 +170,13 @@ fn pickables(
     to_py(py, v)
 }
 
+/// A project (dict, TOML or JSON text) as TOML text, the way marcam writes project files.
+#[pyfunction]
+fn to_toml(py: Python<'_>, project: &Bound<'_, PyAny>) -> PyResult<String> {
+    let doc = json_text(py, project)?;
+    ::marcam::project_file::convert_to_toml(&doc).map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// Replace a mesh model with a new part (`mesh`: its bytes or a path; `file`: the name the
 /// project gives it): placement, setups, tools and operations kept, every operation's picks
 /// found again. Returns `{"project": {...}, "operations": [{"setup", "op", "ok", "error"}]}`;
@@ -248,5 +260,6 @@ fn marcam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pickables, m)?)?;
     m.add_function(wrap_pyfunction!(apply_picks, m)?)?;
     m.add_function(wrap_pyfunction!(replace_model, m)?)?;
+    m.add_function(wrap_pyfunction!(to_toml, m)?)?;
     Ok(())
 }

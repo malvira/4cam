@@ -15,8 +15,8 @@ fn main() {
     );
     println!("| example | grid | cells | CPU 1 thread ms | CPU all threads ms | GPU ms |\n| --- | --- | ---: | ---: | ---: | ---: |");
     for (name, dir, file) in [
-        ("knob", "knob", "knob.project.json"),
-        ("ring", "ring", "ring.project.json"),
+        ("knob", "knob", "knob.marcam.toml"),
+        ("ring", "ring", "ring.marcam.toml"),
     ] {
         let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples")

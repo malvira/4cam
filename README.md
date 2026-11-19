@@ -146,10 +146,10 @@ browser.
     axis (simultaneous), Indexed 3+1 (the bar at fixed angles) or 3-axis vise. It also takes
     the part (an STL, its units, its axis or up direction, with a placement preview) and the
     stock (from the part with a margin, or given). The STL can also come later.
-  - **Open**: a `.marcam.json` project file, or a `.project.json` / `.job.json`; or drop the
-    file on the page.
-  - **Save** / **Save as**: one `.marcam.json` file with the part mesh embedded, so it opens
-    whole anywhere.
+  - **Open**: a `.marcam` project (or a `.marcam.toml`, or an older `.marcam.json` /
+    `.project.json` / `.job.json`); or drop the file on the page.
+  - **Save** / **Save as**: one `.marcam` file (a zip of the project as TOML and its part),
+    so it opens whole anywhere.
   - **Import STL** (or drop one), binary or ASCII, mm or inch, through the same dialog, with
     the current setup's type pre-selected:
     - The part is placed: on the rotary axis, its front at X0; or Z up on the vise.

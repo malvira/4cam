@@ -160,7 +160,7 @@ fn profile(name: &str, dir: &str, file: &str, machine: &str) {
 fn main() {
     let _ = Path::new(".");
     println!("| example | stage | ms | size |\n| --- | --- | ---: | --- |");
-    profile("knob (Z1)", "knob", "knob.project.json", "makera-z1-4axis");
+    profile("knob (Z1)", "knob", "knob.marcam.toml", "makera-z1-4axis");
     profile(
         "knob mesh finish (Z1)",
         "knob",
@@ -170,14 +170,14 @@ fn main() {
     profile(
         "plate (Carvera)",
         "plate",
-        "plate.project.json",
+        "plate.marcam.toml",
         "makera-carvera-4axis",
     );
     profile(
         "plaque (Carvera)",
         "plaque",
-        "plaque.project.json",
+        "plaque.marcam.toml",
         "makera-carvera-4axis",
     );
-    profile("ring (Z1)", "ring", "ring.project.json", "makera-z1-4axis");
+    profile("ring (Z1)", "ring", "ring.marcam.toml", "makera-z1-4axis");
 }

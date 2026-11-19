@@ -234,12 +234,12 @@ fn examples_stay_near_their_floor() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
     let libs = marcam::profiles::builtin_libraries();
     for file in [
-        "knob/knob.project.json",
-        "knob/knob_finish.project.json",
-        "knob/knob_indexed.project.json",
-        "plate/plate.project.json",
-        "ring/ring.project.json",
-        "plaque/plaque.project.json",
+        "knob/knob.marcam.toml",
+        "knob/knob_finish.marcam.toml",
+        "knob/knob_indexed.marcam.toml",
+        "plate/plate.marcam.toml",
+        "ring/ring.marcam.toml",
+        "plaque/plaque.marcam.toml",
     ] {
         let path = Path::new(root).join(file);
         let dir = path.parent().unwrap().to_path_buf();

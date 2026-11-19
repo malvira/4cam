@@ -378,6 +378,15 @@ async function loadExample(name) {
   }
 }
 
+/** A project or job file's text (TOML or JSON) as the document object the page keeps. */
+async function parseProjectText(text) {
+  const t = text.replace(/^﻿/, "").trimStart();
+  if (t.startsWith("{")) return JSON.parse(t);
+  // TOML: the engine reads it (the same document model)
+  return (await engine("checkProject", text)).result.project;
+}
+window.__marcam.parseProjectText = parseProjectText;
+
 async function loadExampleInto(name) {
   await resetProject("");
   if (name === "knob") {
@@ -386,15 +395,15 @@ async function loadExampleInto(name) {
     setMesh(null, "");
   } else {
     const [file, mesh] = {
-      plate: ["plate/plate.project.json", "plate/dome.stl"],
-      knob_indexed: ["knob/knob_indexed.project.json", null],
-      plaque: ["plaque/plaque.project.json", "plaque/plaque.png"],
-      ring: ["ring/ring.project.json", null],
+      plate: ["plate/plate.marcam.toml", "plate/dome.stl"],
+      knob_indexed: ["knob/knob_indexed.marcam.toml", null],
+      plaque: ["plaque/plaque.marcam.toml", "plaque/plaque.png"],
+      ring: ["ring/ring.marcam.toml", null],
     }[name] || ["knob/knob_finish.job.json", "knob/knob.stl"];
     const [job, stl] = await Promise.all([
       fetch(`../examples/${file}`).then((r) => {
         if (!r.ok) throw new Error(`examples/${file} not found (serve the repository root)`);
-        return r.json();
+        return r.text().then(parseProjectText);
       }),
       mesh ? fetch(`../examples/${mesh}`).then((r) => (r.ok ? r.arrayBuffer() : null)) : null,
     ]);

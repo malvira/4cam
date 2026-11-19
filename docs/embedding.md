@@ -1,8 +1,9 @@
 # Embedding marcam
 
 marcam is meant to be embedded the way slicers embed a slicing engine: one engine, the same
-defaults and checks everywhere, called with JSON. Each language below gets the same
-documents, the project in and the results out (`docs/api.md` lists the fields). Every
+defaults and checks everywhere. Each language below gets the same documents: the project in
+(a project file's text, TOML as marcam writes it or JSON, or an object) and the results out
+as JSON (`docs/api.md` lists the fields and the project file forms). Every
 quickstart has a runnable copy in `examples/embed/`, and `sh scripts/test-embed.sh` runs
 them all on the knob example.
 
@@ -82,7 +83,7 @@ marcam_free(r);
     byte[]? mesh, nuint meshLen, [MarshalAs(UnmanagedType.LPUTF8Str)] string? opts);
 [DllImport("marcam_c")] static extern void marcam_free(IntPtr s);
 
-IntPtr p = marcam_plan_and_post(File.ReadAllText("knob.project.json"), null, null, 0, null);
+IntPtr p = marcam_plan_and_post(File.ReadAllText("knob.marcam.toml"), null, null, 0, null);
 try { using var doc = JsonDocument.Parse(Marshal.PtrToStringUTF8(p)!); /* doc.RootElement */ }
 finally { marcam_free(p); }
 ```
@@ -93,7 +94,7 @@ Put `marcam_c.dll` next to the add-in, or on the DLL search path.
 
 ```python
 import json, marcam
-project = json.load(open("knob.project.json"))
+project = json.load(open("knob.marcam.toml"))
 result = marcam.plan_and_post(project, mesh=None)   # mesh: a path or bytes
 for p in result["programs"]:
     print(p["name"], p["lines"], "lines,", len(p["issues"]), "issues")
@@ -123,9 +124,9 @@ const sim = cam.simulate(project, { res: "normal" }, meshBytes);
 ## The command line
 
 ```sh
-marcam run knob.project.json --out out/          # G-code, previews, checks; exit code 1 on problems
-marcam simulate knob.project.json --sim-res normal
-marcam ops defaults rotary_finish knob.project.json
+marcam run knob.marcam.toml --out out/          # G-code, previews, checks; exit code 1 on problems
+marcam simulate knob.marcam.toml --sim-res normal
+marcam ops defaults rotary_finish knob.marcam.toml
 ```
 
 ## Threads and memory

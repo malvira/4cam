@@ -151,8 +151,8 @@ fn job_json_round_trips() {
 
 #[test]
 fn knob_project_0_2_gives_the_same_gcode() {
-    // the upgraded 0.2 project (examples/knob/knob.project.json) plans byte-identically
-    let text = std::fs::read_to_string(root().join("examples/knob/knob.project.json")).unwrap();
+    // the upgraded 0.2 project (examples/knob/knob.marcam.toml) plans byte-identically
+    let text = std::fs::read_to_string(root().join("examples/knob/knob.marcam.toml")).unwrap();
     let jobs = marcam::project::jobs_from_any(&text, &[]).unwrap();
     assert_eq!(jobs.len(), 1);
     let machine = Machine::makera_z1();

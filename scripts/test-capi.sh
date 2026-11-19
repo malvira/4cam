@@ -6,14 +6,14 @@ set -e
 cd "$(dirname "$0")/.."
 cargo build -q -p marcam-capi --release
 EXE=$(cargo run -q -p marcam-capi --release --example cc_run -- examples/embed/c/plan.c target/release target/capi | tail -1)
-OUT=$("$EXE" examples/knob/knob.project.json)
+OUT=$("$EXE" examples/knob/knob.marcam.toml)
 echo "$OUT"
 echo "$OUT" | grep -q '"name":"marcam"'
 echo "$OUT" | grep -q '"gcode":"(Knob radial profile'
 if command -v dotnet >/dev/null 2>&1; then
   LIB=$(pwd)/target/release
   OUT=$(cd examples/embed/csharp && PATH="$LIB:$PATH" LD_LIBRARY_PATH="$LIB" DYLD_LIBRARY_PATH="$LIB" \
-    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet run -c Release -- ../../knob/knob.project.json)
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet run -c Release -- ../../knob/knob.marcam.toml)
   echo "$OUT"
   echo "$OUT" | grep -q "knob_1_profile: 21787 lines, 0 issue(s)"
 else

@@ -140,7 +140,7 @@ fn lines_are_moves(
 
 #[test]
 fn rotary_holder_hits_the_knob_body() {
-    let job = load("examples/knob/knob.project.json");
+    let job = load("examples/knob/knob.marcam.toml");
     let m = builtin_machine("makera-z1-4axis").unwrap();
     let tps = plan_with_mesh(&job, None).unwrap();
     // as given (12 mm flutes, default stickout 17 mm): clear
@@ -188,7 +188,7 @@ fn rotary_holder_hits_the_knob_body() {
 
 #[test]
 fn three_axis_shank_and_holder_in_the_plate_pocket() {
-    let job = load("examples/plate/plate.project.json");
+    let job = load("examples/plate/plate.marcam.toml");
     let dir = root().join("examples/plate");
     let mesh = marcam::load_mesh(&job, &dir).unwrap();
     let tps = plan_with_mesh(&job, mesh.as_ref()).unwrap();
@@ -231,7 +231,7 @@ fn three_axis_shank_and_holder_in_the_plate_pocket() {
 
 #[test]
 fn indexed_holder_on_the_knob() {
-    let job = load("examples/knob/knob_indexed.project.json");
+    let job = load("examples/knob/knob_indexed.marcam.toml");
     let m = builtin_machine("makera-z1-4axis").unwrap();
     let tps = plan_with_mesh(&job, None).unwrap();
     for rep in collision_check(&job, &tps, &m.post).unwrap() {

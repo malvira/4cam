@@ -164,7 +164,7 @@ fn passes_follow_the_angle_and_one_way_climb_runs_against_u() {
 
 fn plaque() -> (Job, Mesh) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/plaque");
-    let text = std::fs::read_to_string(dir.join("plaque.project.json")).unwrap();
+    let text = std::fs::read_to_string(dir.join("plaque.marcam.toml")).unwrap();
     let libs = marcam::profiles::builtin_libraries();
     let mut jobs =
         marcam::project::jobs_from_any_with(&text, &libs, &|src| src.load(&dir).ok()).unwrap();

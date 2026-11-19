@@ -31,8 +31,12 @@ fn default_clearance() -> f64 {
 
 impl Job {
     /// Parse a job from JSON text.
+    /// A 0.1 job from its file's text: JSON, or the same as TOML.
     pub fn from_json(text: &str) -> Result<Job, serde_json::Error> {
-        serde_json::from_str(text)
+        match crate::project_file::to_json_text(text) {
+            Ok(t) => serde_json::from_str(&t),
+            Err(e) => Err(serde::de::Error::custom(e)),
+        }
     }
 
     /// Radius (Z) at which X and A rapids are safe.

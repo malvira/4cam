@@ -15,7 +15,8 @@ fn root() -> PathBuf {
 fn with_faces(path: &str, op: &str, model: &str, ids: &[&str], set: Value) -> (Job, marcam::Mesh) {
     let text = std::fs::read_to_string(root().join(path)).unwrap();
     let dir = root().join(path).parent().unwrap().to_path_buf();
-    let mut v: Value = serde_json::from_str(&text).unwrap();
+    let mut v: Value =
+        serde_json::from_str(&marcam::project_file::to_json_text(&text).unwrap()).unwrap();
     for o in v["setups"][0]["operations"].as_array_mut().unwrap() {
         if o["id"] == op {
             o["geometry"] = json!([{"kind": "faces", "model": model, "ids": ids}]);
@@ -39,7 +40,7 @@ const CAP_R: f64 = 6.0;
 #[test]
 fn raster_on_the_dome_cap_only() {
     let (job, mesh) = with_faces(
-        "examples/plate/plate.project.json",
+        "examples/plate/plate.marcam.toml",
         "op5",
         "dome",
         &["f049d19c2"],
@@ -97,7 +98,7 @@ fn rotary_finish_on_one_cone_of_the_knob() {
     // the knob's 814.9 mm2 cone, X -15..-0.8, radius 10 down to 8.107
     for (op, pattern) in [("op2", "along"), ("op3", "around")] {
         let (job, mesh) = with_faces(
-            "examples/knob/knob_finish.project.json",
+            "examples/knob/knob_finish.marcam.toml",
             op,
             "mesh",
             &["fbbf34e63"],
@@ -154,8 +155,9 @@ fn rotary_finish_on_one_cone_of_the_knob() {
 #[test]
 fn selections_that_do_not_apply_are_refused() {
     // raster3d takes faces only
-    let text = std::fs::read_to_string(root().join("examples/plate/plate.project.json")).unwrap();
-    let mut v: Value = serde_json::from_str(&text).unwrap();
+    let text = std::fs::read_to_string(root().join("examples/plate/plate.marcam.toml")).unwrap();
+    let mut v: Value =
+        serde_json::from_str(&marcam::project_file::to_json_text(&text).unwrap()).unwrap();
     for o in v["setups"][0]["operations"].as_array_mut().unwrap() {
         if o["id"] == "op5" {
             o["geometry"] = json!([{"kind": "axial_range", "x": [40.0, 50.0]}]);
@@ -169,7 +171,7 @@ fn selections_that_do_not_apply_are_refused() {
     // an unknown face is named
     let (job, mesh) = {
         let (j, m) = with_faces(
-            "examples/plate/plate.project.json",
+            "examples/plate/plate.marcam.toml",
             "op5",
             "dome",
             &["f049d19c2"],

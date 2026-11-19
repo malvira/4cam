@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")/.."
 PY=${PYTHON:-python}
-KNOB=examples/knob/knob.project.json
+KNOB=examples/knob/knob.marcam.toml
 want() { echo "$1" | grep -q "$2" || { echo "missing \"$2\" in:"; echo "$1"; exit 1; }; }
 
 OUT=$(cargo run -q -p marcam-embed-example -- $KNOB)

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Project files are TOML (2026-11-19)
+
+Projects are written as TOML (`name.marcam.toml`), easier to read and edit by hand: the
+model's key order, `[[setups.operations]]` tables, no unset fields, numbers as typed,
+comments allowed. Part files stay beside it by relative path; the web app saves one
+`name.marcam` file (a zip of `project.toml` and the part). JSON keeps reading: `.marcam.json`,
+`.project.json` and 0.1 `.job.json` files open as before; `--json` writes JSON. The examples'
+projects are now `examples/*/*.marcam.toml` (the 0.1 `knob.job.json` stays, for the goldens).
+New: `marcam convert`, `marcam::project_file`, Python `marcam.to_toml`, WebAssembly `toToml`,
+`bundleWrite`, `bundleRead`. See docs/api.md, "Project files".
+
 ### Renamed: 4cam is now marcam (2026-11-17)
 
 The GitHub repository is now [malvira/marcam](https://github.com/malvira/marcam). Everything

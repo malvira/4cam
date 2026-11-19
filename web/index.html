@@ -17,8 +17,8 @@
 <nav id="projectBar" aria-label="Project">
   <details class="menu" id="menuFile"><summary>File</summary><div class="menu-items">
     <button id="projectNew" type="button" title="Start an empty project">New</button>
-    <button id="projectOpen" type="button" title="Open a .marcam.json project (or a .project.json / .job.json)">Open...</button>
-    <button id="projectSave" type="button" title="Save the project, with its part mesh, as one .marcam.json file">Save</button>
+    <button id="projectOpen" type="button" title="Open a .marcam project (or a .marcam.toml, or an older .marcam.json / .project.json / .job.json)">Open...</button>
+    <button id="projectSave" type="button" title="Save the project and its part as one .marcam file (a zip of project.toml and the part)">Save</button>
     <button id="projectSaveAs" type="button">Save as...</button>
     <hr>
     <button id="menuImport" type="button" title="Import an STL or a STEP file as the part (or drop it on the page)">Import part (STL, STEP)...</button>
@@ -32,7 +32,7 @@
     <div class="small"><strong>marcam</strong> <span id="version" class="muted"></span><br><span class="muted">4th-axis rotary CAM</span></div>
     <div class="small muted">Drag to orbit, scroll to zoom; the cube turns the view.</div>
   </div></details>
-  <input id="projectOpenFile" type="file" accept=".json,application/json" hidden>
+  <input id="projectOpenFile" type="file" accept=".marcam,.toml,.json,application/zip,application/json" hidden>
   <span class="projname"><span id="projectName">untitled</span><span id="projectDirty" class="dirty hidden" aria-label="unsaved changes">&#9679; unsaved</span></span>
   <button id="importStl" type="button" class="primary" title="Import an STL or a STEP file as the part (or drop it on the page)">Import STL...</button>
   <input id="importStlFile" type="file" accept=".stl,.step,.stp" hidden>

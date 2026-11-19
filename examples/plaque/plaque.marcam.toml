@@ -1,0 +1,154 @@
+# marcam project (TOML). Lengths in mm, angles in degrees, feeds in mm/min unless a
+# key says otherwise. Comments are allowed and ignored. See docs/api.md.
+
+schema_version = "0.2"
+name = "relief plaque with engraving (Carvera vise)"
+
+[[models]]
+id = "relief"
+name = "plaque.png"
+kind = "mesh"
+file = "plaque.png"
+axis = "x"
+translate = [5.0, 5.0, 0.0]
+
+[models.image]
+width = 80.0
+height = 60.0
+depth = 3.0
+base = -4.0
+invert = false
+wrap = false
+max_pixels = 300
+
+[[tools]]
+number = 1
+library = "makera-starter"
+tool = "spiral-o-metal-3.175x12"
+
+[[tools]]
+number = 3
+library = "makera-starter"
+tool = "ball-metal-3.175x10"
+
+[[tools]]
+number = 4
+library = "makera-starter"
+tool = "vbit-90-3.175"
+
+[[setups]]
+id = "vise1"
+name = "Vise, relief face"
+machine = "makera-carvera-4axis"
+clearance = 3.0
+part = ["relief"]
+spindle_rpm = 12000
+
+[setups.stock]
+shape = "box"
+min = [0.0, 0.0, -15.0]
+max = [90.0, 90.0, 0.0]
+
+[setups.holding]
+kind = "vise"
+tailstock = false
+
+[[setups.operations]]
+id = "op1"
+name = "Rough the relief"
+enabled = true
+type = "rough3d"
+tool = 1
+index_a = 0.0
+x_range = [5.0, 85.0]
+y_range = [5.0, 65.0]
+stepover = 1.25
+sample = 0.4
+step_down = 1.5
+floor = -4.0
+leave = 0.25
+tolerance = 0.01
+angle = 0.0
+pattern = "zigzag"
+direction = "climb"
+scallop = 0.0
+feed = 300.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+
+[[setups.operations]]
+id = "op2"
+name = "Finish the relief"
+enabled = true
+type = "raster3d"
+tool = 3
+index_a = 0.0
+x_range = [5.0, 85.0]
+y_range = [5.0, 65.0]
+stepover = 0.356
+sample = 0.25
+step_down = 4.0
+floor = -4.0
+leave = 0.0
+tolerance = 0.005
+angle = 45.0
+pattern = "zigzag"
+direction = "climb"
+scallop = 0.01
+feed = 600.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+
+[[setups.operations]]
+id = "op3"
+name = "Title"
+enabled = true
+type = "engrave"
+tool = 4
+paths = []
+text = "RELIEF MARCAM"
+text_height = 5.0
+text_at = [8.0, 72.0]
+text_rotate = 0.0
+depth = 0.4
+step_down = 0.2
+feed = 300.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+
+[[setups.operations]]
+id = "op4"
+name = "Star"
+enabled = true
+type = "vcarve"
+tool = 4
+paths = [[[78.0, 86.0], [75.943, 80.832], [70.392, 80.472], [74.671, 76.918], [73.298, 71.528], [78.0, 74.5], [82.702, 71.528], [81.329, 76.918], [85.608, 80.472], [80.057, 80.832], [78.0, 86.0]]]
+text_height = 5.0
+text_at = [0.0, 0.0]
+text_rotate = 0.0
+text_weight = 0.12
+max_depth = 1.5
+stepover = 0.1
+sample = 0.1
+tolerance = 0.005
+feed = 300.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+
+[[setups.outputs]]
+name = "plaque_1_rough"
+title = "Plaque: 3D roughing (T1 flat)"
+reset_a = false
+operations = ["op1"]
+
+[[setups.outputs]]
+name = "plaque_2_finish"
+title = "Plaque: 45 deg parallel finish, 0.01 mm scallop (T3 ball)"
+reset_a = false
+operations = ["op2"]
+
+[[setups.outputs]]
+name = "plaque_3_engrave"
+title = "Plaque: engraved title and V-carved star (T4 V-bit)"
+reset_a = false
+operations = ["op3", "op4"]

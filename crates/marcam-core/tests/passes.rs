@@ -121,12 +121,12 @@ fn depth_over_step_of_two_and_a_half_is_three_passes() {
 fn no_pass_repeats_the_one_before_it() {
     let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples"));
     for file in [
-        "knob/knob.project.json",
-        "knob/knob_finish.project.json",
-        "knob/knob_indexed.project.json",
-        "plate/plate.project.json",
-        "ring/ring.project.json",
-        "plaque/plaque.project.json",
+        "knob/knob.marcam.toml",
+        "knob/knob_finish.marcam.toml",
+        "knob/knob_indexed.marcam.toml",
+        "plate/plate.marcam.toml",
+        "ring/ring.marcam.toml",
+        "plaque/plaque.marcam.toml",
     ] {
         let path = root.join(file);
         let text = std::fs::read_to_string(&path).unwrap();
@@ -153,8 +153,9 @@ fn no_pass_repeats_the_one_before_it() {
 #[test]
 fn an_unroughed_parallel_finish_cuts_the_surface_once() {
     let plate = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/plate"));
-    let text = std::fs::read_to_string(plate.join("plate.project.json")).unwrap();
-    let mut doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let text = std::fs::read_to_string(plate.join("plate.marcam.toml")).unwrap();
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&marcam::project_file::to_json_text(&text).unwrap()).unwrap();
     // only the dome finish, none of the other operations
     let project = marcam::project::Project::from_json_any(&doc.to_string())
         .unwrap()

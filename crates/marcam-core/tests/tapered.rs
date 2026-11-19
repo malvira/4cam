@@ -155,7 +155,7 @@ fn tapered(number: u32) -> Tool {
 
 #[test]
 fn dome_raster_with_a_tapered_ball_does_not_gouge() {
-    let (mut job, dir) = load("examples/plate/plate.project.json");
+    let (mut job, dir) = load("examples/plate/plate.marcam.toml");
     // the dome's raster (T3, a ball) cut with the tapered ball instead
     let t3 = job.tools.iter_mut().find(|t| t.number == 3).unwrap();
     *t3 = tapered(3);
@@ -186,7 +186,7 @@ fn dome_raster_with_a_tapered_ball_does_not_gouge() {
 
 #[test]
 fn knob_rotary_finish_with_a_tapered_ball_does_not_gouge() {
-    let (mut job, dir) = load("examples/knob/knob_finish.project.json");
+    let (mut job, dir) = load("examples/knob/knob_finish.marcam.toml");
     let t3 = job.tools.iter_mut().find(|t| t.number == 3).unwrap();
     *t3 = tapered(3);
     let mesh = marcam::load_mesh(&job, &dir).unwrap().unwrap();

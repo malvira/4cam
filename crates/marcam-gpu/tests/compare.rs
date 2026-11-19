@@ -50,8 +50,8 @@ fn gpu_stock_matches_the_cpu_within_the_quantization() {
     };
     eprintln!("GPU: {}", gpu.name);
     for (name, job) in [
-        ("knob", example("knob", "knob.project.json")),
-        ("ring", example("ring", "ring.project.json")),
+        ("knob", example("knob", "knob.marcam.toml")),
+        ("ring", example("ring", "ring.marcam.toml")),
     ] {
         let (max, tags, n) = compare(&gpu, &job, 0.1, 240);
         eprintln!(
@@ -66,7 +66,7 @@ fn gpu_stock_matches_the_cpu_within_the_quantization() {
 
 #[test]
 fn indexed_jobs_fall_back_to_the_cpu() {
-    let job = example("knob", "knob_indexed.project.json");
+    let job = example("knob", "knob_indexed.marcam.toml");
     let tps = marcam::plan(&job).unwrap();
     let grid = marcam::sim_grid(&job, None, 0.2, 120).unwrap();
     let cutter = |n: u32| marcam::cutter_for(n, job.tool(n)?.shape).ok();
@@ -90,8 +90,8 @@ fn gpu_block_matches_the_cpu_on_the_plate_and_plaque() {
         return;
     };
     for (dir, file) in [
-        ("plate", "plate.project.json"),
-        ("plaque", "plaque.project.json"),
+        ("plate", "plate.marcam.toml"),
+        ("plaque", "plaque.marcam.toml"),
     ] {
         let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples")

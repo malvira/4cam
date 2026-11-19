@@ -218,7 +218,8 @@ fn run_checks_machine_limits_and_uses_library_tools() {
     assert!(s.contains("feeds reach F5209"), "{s}");
     // tools from the built-in library, machine named in the job, a spindle the Air can't do
     let job = std::fs::read_to_string(root().join("examples/knob/knob.job.json")).unwrap();
-    let mut v: serde_json::Value = serde_json::from_str(&job).unwrap();
+    let mut v: serde_json::Value =
+        serde_json::from_str(&marcam::project_file::to_json_text(&job).unwrap()).unwrap();
     v["machine"] = "makera-carvera-air-4axis".into();
     v["spindle_rpm"] = 15000.into();
     v["tools"] = serde_json::json!([
@@ -272,7 +273,7 @@ fn ops_registry_and_upgrade() {
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(v["tool_shapes"], serde_json::json!(["vbit"]));
     let o = bin()
-        .args(["ops", "check", "examples/knob/knob.project.json"])
+        .args(["ops", "check", "examples/knob/knob.marcam.toml"])
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
@@ -285,7 +286,11 @@ fn ops_registry_and_upgrade() {
         .output()
         .unwrap();
     assert!(o.status.success());
-    let p: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
+    // (written as TOML)
+    let p: serde_json::Value = serde_json::from_str(
+        &marcam::project_file::to_json_text(&std::fs::read_to_string(&f).unwrap()).unwrap(),
+    )
+    .unwrap();
     assert_eq!(p["schema_version"], "0.2");
     assert_eq!(
         p["setups"][0]["outputs"][1]["operations"],
@@ -298,7 +303,7 @@ fn ops_registry_and_upgrade() {
 fn two_setup_project_runs_every_setup() {
     let out = out_dir("setups");
     let o = bin()
-        .args(["run", "examples/knob/knob_two_setups.project.json", "--out"])
+        .args(["run", "examples/knob/knob_two_setups.marcam.toml", "--out"])
         .arg(&out)
         .output()
         .unwrap();
@@ -323,7 +328,7 @@ fn faces_list_and_face_selection_in_a_project() {
     let o = bin()
         .args([
             "faces",
-            "examples/knob/knob_finish.project.json",
+            "examples/knob/knob_finish.marcam.toml",
             "--model",
             "mesh",
         ])
@@ -342,8 +347,9 @@ fn faces_list_and_face_selection_in_a_project() {
         .unwrap()
         .to_string();
     let text =
-        std::fs::read_to_string(root().join("examples/knob/knob_finish.project.json")).unwrap();
-    let mut p: serde_json::Value = serde_json::from_str(&text).unwrap();
+        std::fs::read_to_string(root().join("examples/knob/knob_finish.marcam.toml")).unwrap();
+    let mut p: serde_json::Value =
+        serde_json::from_str(&marcam::project_file::to_json_text(&text).unwrap()).unwrap();
     let ops = p["setups"][0]["operations"].as_array_mut().unwrap();
     ops[1]["geometry"] = serde_json::json!([{"kind": "faces", "model": "mesh", "ids": [taper]}]);
     let dir = out_dir("faces");
@@ -380,8 +386,9 @@ fn faces_list_and_face_selection_in_a_project() {
 #[test]
 fn knurl_wizard_rebuilds_the_knob() {
     // strip the operations from the knob project, let the wizard add them back, run it
-    let text = std::fs::read_to_string(root().join("examples/knob/knob.project.json")).unwrap();
-    let mut p: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let text = std::fs::read_to_string(root().join("examples/knob/knob.marcam.toml")).unwrap();
+    let mut p: serde_json::Value =
+        serde_json::from_str(&marcam::project_file::to_json_text(&text).unwrap()).unwrap();
     p["setups"][0]["operations"] = serde_json::json!([]);
     p["setups"][0]["outputs"] = serde_json::json!([]);
     let dir = out_dir("wizard");
@@ -418,8 +425,9 @@ fn knurl_wizard_rebuilds_the_knob() {
 #[test]
 fn ops_defaults_for_every_type_are_valid_and_plan() {
     let dir = out_dir("defaults");
-    let text = std::fs::read_to_string(root().join("examples/knob/knob.project.json")).unwrap();
-    let mut p: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let text = std::fs::read_to_string(root().join("examples/knob/knob.marcam.toml")).unwrap();
+    let mut p: serde_json::Value =
+        serde_json::from_str(&marcam::project_file::to_json_text(&text).unwrap()).unwrap();
     for (k, kind) in [
         "rotary_turning",
         "rotary_rough",
@@ -431,7 +439,7 @@ fn ops_defaults_for_every_type_are_valid_and_plan() {
     .enumerate()
     {
         let o = bin()
-            .args(["ops", "defaults", kind, "examples/knob/knob.project.json"])
+            .args(["ops", "defaults", kind, "examples/knob/knob.marcam.toml"])
             .output()
             .unwrap();
         assert!(

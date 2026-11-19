@@ -1,10 +1,11 @@
 // Plan a marcam project from Node and print its programs.
-//   node plan.mjs project.json [mesh.stl]
+//   node plan.mjs project.marcam.toml [mesh.stl]
 import { readFileSync } from "node:fs";
 import { init } from "marcam";
 
 const cam = await init();
-const project = JSON.parse(readFileSync(process.argv[2], "utf8"));
+// the project file's text, TOML or JSON (an object works too)
+const project = readFileSync(process.argv[2], "utf8");
 const mesh = process.argv[3] ? readFileSync(process.argv[3]) : undefined;
 const result = cam.planAndPost(project, "", mesh); // "": the project's machine
 if (result.error) throw new Error(result.error);

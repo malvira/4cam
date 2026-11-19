@@ -1,0 +1,124 @@
+# marcam project (TOML). Lengths in mm, angles in degrees, feeds in mm/min unless a
+# key says otherwise. Comments are allowed and ignored. See docs/api.md.
+
+schema_version = "0.2"
+name = "knob (two setups)"
+
+[[models]]
+id = "profile"
+name = "revolved profile"
+kind = "profile"
+points = [[-21.7, 3.0], [-18.0, 3.0], [-18.0, 5.0], [-15.0, 5.0], [-15.0, 10.0], [-0.8, 8.106666666666667], [0.0, 7.2]]
+beyond_front = 7.2
+
+[[tools]]
+number = 1
+description = "3.175 mm single-flute flat endmill, 12 mm flute, aluminium"
+kind = "flat"
+diameter = 3.175
+flute_length = 12.0
+
+[[tools]]
+number = 2
+description = "90 deg V-bit, tip must be on the axis centreline (Y0)"
+kind = "vbit"
+angle = 90.0
+diameter = 3.175
+
+[[setups]]
+id = "setup1"
+name = "Turning"
+clearance = 3.0
+part = ["profile"]
+spindle_rpm = 12000
+
+[setups.stock]
+shape = "cylinder"
+radius = 12.5
+length = 100.0
+
+[setups.holding]
+kind = "rotary_chuck"
+tailstock = false
+
+[[setups.operations]]
+id = "op1"
+enabled = true
+type = "rotary_turning"
+tool = 1
+rough_depth = 0.4
+rough_step = 1.0
+rough_feed = 300.0
+finish_allowance = 0.15
+finish_step = 0.4
+finish_feed = 250.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+segment_deg = 6.0
+grid = 0.02
+footprint_step = 0.01
+smoothing = 0.0
+
+[[setups.outputs]]
+name = "knob_1_profile"
+title = "Knob radial profile - rough + finish"
+reset_a = false
+operations = ["op1"]
+
+[[setups]]
+id = "setup2"
+name = "Knurl (re-chucked)"
+clearance = 3.0
+part = ["profile"]
+spindle_rpm = 12000
+
+[setups.stock]
+shape = "from_previous"
+radius = 12.5
+length = 100.0
+
+[setups.holding]
+kind = "rotary_chuck"
+tailstock = false
+
+[[setups.operations]]
+id = "op2"
+enabled = true
+type = "helical_knurl"
+tool = 2
+body_back = [-15.0, 10.0]
+body_front = [0.0, 8.0]
+count = 30
+helix_angle = 30.0
+fill = 0.95
+passes = [0.6, 1.0]
+families = [1, -1]
+runout = 0.6
+samples = 120
+approach_clearance = 0.5
+feed = 200.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+smoothing = 0.0
+
+[[setups.operations]]
+id = "op3"
+enabled = true
+type = "flank_chamfer"
+tool = 2
+edge = [0.0, 7.2]
+tip_offset = 0.5
+passes = [0.2, 0.0]
+revolutions = 2.0
+segment_deg = 6.0
+feed = 200.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+smoothing = 0.0
+
+[[setups.outputs]]
+name = "knob_2_knurl"
+title = "Knob diamond knurl"
+notes = ["Pattern is rotationally symmetric: A start position does not matter"]
+reset_a = true
+operations = ["op2", "op3"]

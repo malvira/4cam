@@ -293,8 +293,31 @@ export function setupProject(ctx) {
     return true;
   }
 
+  /** A bundle (.marcam): its project.toml, the part file it names, its view (view.json). */
+  async function openBundle(bytes, fileName) {
+    const { result } = await engine("bundleRead", bytes);
+    const un = (b64s) => Uint8Array.from(atob(b64s), (c) => c.charCodeAt(0));
+    const wanted = meshFileOf(result.project);
+    const part = result.files.find((f) => f.name === wanted) ?? result.files.find((f) => /\.(stl|3mf|step|stp|png|pgm)$/i.test(f.name));
+    const viewFile = result.files.find((f) => f.name === "view.json");
+    let view = null;
+    try {
+      view = viewFile ? JSON.parse(new TextDecoder().decode(un(viewFile.bytes))) : null;
+    } catch {}
+    await openParsed({ project: result.project, mesh: part ? un(part.bytes) : null, meshName: part?.name || "", view }, fileName);
+  }
+
   async function openText(text, fileName) {
-    const { project, mesh, meshName, view } = readProjectFile(text);
+    // TOML (a project as marcam writes it) or JSON (a .marcam.json, a project or a job)
+    const t = text.replace(/^\uFEFF/, "").trimStart();
+    if (!t.startsWith("{")) {
+      const project = await window.__marcam.parseProjectText(text);
+      return openParsed({ project, mesh: null, meshName: "", view: null }, fileName);
+    }
+    return openParsed(readProjectFile(text), fileName);
+  }
+
+  async function openParsed({ project, mesh, meshName, view }, fileName) {
     const name = project.name || slug(fileName || "project");
     await resetProject("");
     writeJob(project, { load: true });
@@ -347,14 +370,17 @@ export function setupProject(ctx) {
     showError("");
     setStatus(`Opening ${file.name}...`, "busy");
     try {
-      await openText(await file.text(), file.name);
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      // a bundle: a zip (project.toml and its part files)
+      if (bytes[0] === 0x50 && bytes[1] === 0x4b) await openBundle(bytes, file.name);
+      else await openText(new TextDecoder().decode(bytes), file.name);
     } catch (e) {
       showError(`${file.name}: ${e.message}`);
       setStatus("Open failed", "error");
     }
   }
 
-  function save(asNew) {
+  async function save(asNew) {
     showError("");
     let project;
     try {
@@ -364,16 +390,27 @@ export function setupProject(ctx) {
     }
     let name = p.name;
     if (asNew || !p.fileName) {
-      const asked = window.prompt("Save the project as:", p.fileName || `${slug(p.name)}.marcam.json`);
+      const asked = window.prompt("Save the project as:", p.fileName && /\.marcam$/i.test(p.fileName) ? p.fileName : `${slug(p.name)}.marcam`);
       if (!asked) return;
-      p.fileName = /\.json$/i.test(asked) ? asked : `${asked}.marcam.json`;
-      name = p.fileName.replace(/(\.marcam)?\.json$/i, "").replace(/\.project$/i, "");
+      // one file: the project (TOML) and its part, zipped (.marcam)
+      p.fileName = /\.marcam$/i.test(asked) ? asked : `${asked.replace(/(\.marcam)?\.(json|toml)$/i, "")}.marcam`;
+      name = p.fileName.replace(/\.marcam$/i, "");
       if (project.schema_version === "0.2") project.name = name;
       writeJob(project, { load: true });
     }
     const src = state.meshSource && state.meshSource.name === meshFileOf(project) ? state.meshSource : null;
-    const file = projectFile(project, src ? src.bytes : state.mesh, meshFileOf(project) || state.meshName.split(" ")[0] || "part.stl", { hidden: [...state.hidden] });
-    const blob = new Blob([JSON.stringify(file, null, 1)], { type: "application/json" });
+    const files = [];
+    const partBytes = src ? src.bytes : state.mesh;
+    if (partBytes) files.push({ name: meshFileOf(project) || state.meshName.split(" ")[0] || "part.stl", bytes: partBytes });
+    // which toolpaths are hidden (the view): beside the project
+    if (state.hidden?.size) files.push({ name: "view.json", bytes: new TextEncoder().encode(JSON.stringify({ hidden: [...state.hidden] })) });
+    let zip;
+    try {
+      zip = (await engine("bundleWrite", project, files)).result.bytes;
+    } catch (e) {
+      return showError(`Save: ${e.message}`);
+    }
+    const blob = new Blob([Uint8Array.from(atob(zip), (c) => c.charCodeAt(0))], { type: "application/zip" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = p.fileName;
@@ -788,8 +825,8 @@ export function setupProject(ctx) {
     if (!f) return;
     ev.preventDefault();
     if (/\.(stl|step|stp)$/i.test(f.name)) await importMesh(f);
-    else if (/\.json$/i.test(f.name)) await openFile(f);
-    else showError(`${f.name}: drop an .stl or a .step to import it, or a .marcam.json / .project.json to open it`);
+    else if (/\.(marcam|toml|json)$/i.test(f.name)) await openFile(f);
+    else showError(`${f.name}: drop an .stl or a .step to import it, or a .marcam (or .marcam.toml, .json) project to open it`);
   });
   window.addEventListener("beforeunload", (ev) => {
     if (p.dirty) {
@@ -805,5 +842,5 @@ export function setupProject(ctx) {
     if (f) await replaceModel(f);
   });
 
-  return { changed, clean, mayDiscard, newProject, openText, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, dropUndo, keepUndo, dialog, state: p };
+  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, dropUndo, keepUndo, dialog, state: p };
 }

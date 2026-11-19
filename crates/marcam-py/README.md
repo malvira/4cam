@@ -5,7 +5,7 @@ JSON in, JSON out: the same documents as the C, WebAssembly and CLI interfaces.
 
 ```python
 import marcam, json
-project = json.load(open("knob.project.json"))
+project = json.load(open("knob.marcam.toml"))
 result = marcam.plan_and_post(project)            # machine: the project's, else the Makera Z1
 for p in result["programs"]:
     print(p["name"], p["lines"], "lines,", len(p["issues"]), "issues")

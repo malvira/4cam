@@ -70,6 +70,20 @@ export async function load(source) {
     // the parameters picked features set on an operation: {type, ids, setup?, tool?, index_a?}
     applyPicks: (doc, opts, meshBytes) => call("apply_picks", doc, opts || {}, meshBytes),
     replaceModel: (doc, opts, meshBytes) => call("replace_model", doc, opts || {}, meshBytes),
+    // project files: the project as TOML text; the single-file bundle (.marcam, a zip of
+    // project.toml and the files it names) written from [{ name, bytes }] and read back
+    toToml: (doc) => call("to_toml", doc),
+    bundleWrite: (doc, files) => {
+      const list = (files || []).map((f) => [f.name, f.bytes.length]);
+      const all = new Uint8Array(list.reduce((n, [, l]) => n + l, 0));
+      let at = 0;
+      for (const f of files || []) {
+        all.set(f.bytes, at);
+        at += f.bytes.length;
+      }
+      return call("bundle_write", doc, list, all);
+    },
+    bundleRead: (bytes) => call("bundle_read", null, null, bytes),
     // convert a profile file (marcam JSON, Fusion .tools/.json/.mch/.f3d) -> {kind, profile, notes}
     importProfile: (bytes, name) => call("import_profile", bytes, name || "profile.json"),
     meshTriangles: (job, opts, meshBytes) => call("mesh_triangles", job, opts || {}, meshBytes),

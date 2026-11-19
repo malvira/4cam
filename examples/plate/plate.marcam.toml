@@ -1,0 +1,159 @@
+# marcam project (TOML). Lengths in mm, angles in degrees, feeds in mm/min unless a
+# key says otherwise. Comments are allowed and ignored. See docs/api.md.
+
+schema_version = "0.2"
+name = "plate (3-axis, Carvera vise)"
+
+[[models]]
+id = "dome"
+name = "dome.stl"
+kind = "mesh"
+file = "dome.stl"
+axis = "x"
+translate = [0.0, 0.0, 0.0]
+
+[[tools]]
+number = 1
+library = "makera-starter"
+tool = "spiral-o-metal-3.175x12"
+
+[[tools]]
+number = 3
+library = "makera-starter"
+tool = "ball-metal-3.175x10"
+
+[[tools]]
+number = 4
+library = "makera-starter"
+tool = "vbit-90-3.175"
+
+[[setups]]
+id = "vise1"
+name = "Vise, top side"
+machine = "makera-carvera-4axis"
+clearance = 3.0
+part = ["dome"]
+spindle_rpm = 12000
+
+[setups.stock]
+shape = "box"
+min = [0.0, 0.0, -10.0]
+max = [60.0, 40.0, 0.0]
+
+[setups.holding]
+kind = "vise"
+tailstock = false
+
+[[setups.operations]]
+id = "op1"
+name = "Face the top"
+enabled = true
+type = "face"
+tool = 1
+index_a = 0.0
+depth = 0.5
+step_down = 0.5
+stepover = 0.6
+feed = 300.0
+plunge_feed = 60.0
+
+[[setups.operations]]
+id = "op2"
+name = "Pocket"
+enabled = true
+type = "pocket"
+tool = 1
+index_a = 0.0
+rect = [5.0, 5.0, 25.0, 35.0]
+depth = 3.0
+top = -0.5
+step_down = 1.0
+stepover = 0.5
+feed = 300.0
+plunge_feed = 60.0
+
+[[setups.operations]]
+id = "op3"
+name = "Holes"
+enabled = true
+type = "drill"
+tool = 1
+index_a = 0.0
+points = [[40.0, 6.0], [54.0, 6.0], [40.0, 34.0], [54.0, 34.0]]
+depth = 4.0
+top = -0.5
+peck = 1.5
+retract = 1.0
+feed = 60.0
+
+[[setups.operations]]
+id = "op4"
+name = "Outline"
+enabled = true
+type = "contour"
+tool = 1
+index_a = 0.0
+path = [[2.0, 2.0], [58.0, 2.0], [58.0, 38.0], [2.0, 38.0]]
+side = "outside"
+depth = 2.0
+top = -0.5
+step_down = 1.0
+feed = 300.0
+plunge_feed = 60.0
+
+[[setups.operations]]
+id = "op5"
+name = "Dome"
+enabled = true
+type = "raster3d"
+tool = 3
+index_a = 0.0
+x_range = [37.0, 55.0]
+y_range = [11.0, 29.0]
+stepover = 0.3
+sample = 0.2
+step_down = 1.5
+floor = -4.5
+leave = 0.0
+tolerance = 0.005
+angle = 0.0
+pattern = "zigzag"
+direction = "climb"
+scallop = 0.0
+feed = 400.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+
+[[setups.operations]]
+id = "op6"
+name = "Bore"
+enabled = true
+type = "bore"
+tool = 1
+index_a = 0.0
+points = [[30.0, 31.0]]
+diameter = 6.0
+depth = 10.5
+top = 0.0
+helix_pitch = 0.5
+stepover = 0.4
+finish_allowance = 0.1
+spring_passes = 1
+direction = "climb"
+arcs = true
+tolerance = 0.002
+feed = 300.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+
+[[setups.outputs]]
+name = "plate_1_flat"
+title = "Plate: face, pocket, holes, outline (T1 flat)"
+reset_a = false
+operations = ["op1", "op2", "op3", "op6", "op4"]
+
+[[setups.outputs]]
+name = "plate_2_dome"
+title = "Plate: dome (T3 ball)"
+reset_a = false
+operations = ["op5"]

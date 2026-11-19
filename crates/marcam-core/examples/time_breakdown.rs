@@ -1,6 +1,6 @@
 //! Where an example's estimated machining time goes.
 //!
-//! `cargo run --release -p marcam-core --example time_breakdown -- examples/knob/knob.project.json ...`
+//! `cargo run --release -p marcam-core --example time_breakdown -- examples/knob/knob.marcam.toml ...`
 //!
 //! For each program it prints:
 //! - floor: the time at the programmed feeds and the rapid rates, with no acceleration and no

@@ -1,0 +1,125 @@
+# marcam project (TOML). Lengths in mm, angles in degrees, feeds in mm/min unless a
+# key says otherwise. Comments are allowed and ignored. See docs/api.md.
+
+schema_version = "0.2"
+name = "knob_finish"
+
+[[models]]
+id = "profile"
+name = "revolved profile"
+kind = "profile"
+points = [[-21.7, 3.0], [-18.0, 3.0], [-18.0, 5.0], [-15.0, 5.0], [-15.0, 10.0], [-0.8, 8.106666666666667], [0.0, 7.2]]
+beyond_front = 7.2
+
+[[models]]
+id = "mesh"
+name = "knob.stl"
+kind = "mesh"
+file = "knob.stl"
+axis = "x"
+translate = [0.0, 0.0, 0.0]
+
+[[tools]]
+number = 1
+description = "3.175 mm single-flute flat endmill, 12 mm flute, aluminium"
+kind = "flat"
+diameter = 3.175
+flute_length = 12.0
+
+[[tools]]
+number = 3
+description = "3.175 mm ball endmill, 12 mm flute"
+kind = "ball"
+diameter = 3.175
+flute_length = 12.0
+
+[[setups]]
+id = "setup1"
+name = "Rotary setup"
+clearance = 3.0
+part = ["profile", "mesh"]
+spindle_rpm = 12000
+
+[setups.stock]
+shape = "cylinder"
+radius = 12.5
+length = 100.0
+
+[setups.holding]
+kind = "rotary_chuck"
+tailstock = false
+
+[[setups.operations]]
+id = "op1"
+enabled = true
+type = "rotary_rough"
+tool = 1
+x_range = [-21.0, 0.0]
+step_down = 0.5
+step_x = 1.0
+allowance = 0.15
+sample_deg = 6.0
+tolerance = 0.005
+min_radius = 0.0
+feed = 300.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+
+[[setups.operations]]
+id = "op2"
+enabled = true
+type = "rotary_finish"
+tool = 3
+pattern = "along"
+x_range = [-21.0, 0.6]
+a_range = [0.0, 360.0]
+stepover_deg = 3.0
+sample_mm = 0.1
+sample_deg = 2.0
+leave = 0.0
+tolerance = 0.005
+min_radius = 0.0
+clean_walls = true
+feed = 400.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+
+[[setups.operations]]
+id = "op3"
+enabled = true
+type = "rotary_finish"
+tool = 1
+pattern = "around"
+x_range = [0.5, -20.0]
+a_range = [0.0, 360.0]
+stepover_mm = 0.4
+sample_mm = 0.1
+sample_deg = 3.0
+leave = 0.0
+tolerance = 0.005
+min_radius = 0.0
+clean_walls = true
+feed = 300.0
+plunge_feed = 60.0
+ramp_angle = 30.0
+
+[[setups.outputs]]
+name = "knob_3_mesh_rough"
+title = "Knob mesh rough - flat, radial levels"
+notes = ["Roughs from bar stock to the mesh, leaving 0.15 mm for finishing"]
+reset_a = false
+operations = ["op1"]
+
+[[setups.outputs]]
+name = "knob_4_finish_along"
+title = "Knob mesh finish - ball, rasters along X"
+notes = ["Run after knob_3_mesh_rough"]
+reset_a = false
+operations = ["op2"]
+
+[[setups.outputs]]
+name = "knob_5_finish_around"
+title = "Knob mesh finish - flat, helix around X"
+notes = ["Run after knob_3_mesh_rough"]
+reset_a = false
+operations = ["op3"]

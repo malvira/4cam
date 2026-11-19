@@ -14,7 +14,7 @@ fn root() -> PathBuf {
 
 fn knob_indexed() -> Job {
     let text =
-        std::fs::read_to_string(root().join("examples/knob/knob_indexed.project.json")).unwrap();
+        std::fs::read_to_string(root().join("examples/knob/knob_indexed.marcam.toml")).unwrap();
     let libs = marcam::profiles::builtin_libraries();
     let mut jobs = marcam::project::jobs_from_any_with(&text, &libs, &|_| None).unwrap();
     jobs.remove(0).1
@@ -147,8 +147,9 @@ fn every_3_axis_type_defaults_and_plans_on_a_rotary_setup() {
 
 #[test]
 fn a_vise_setup_rejects_an_index_angle() {
-    let text = std::fs::read_to_string(root().join("examples/plate/plate.project.json")).unwrap();
-    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let text = std::fs::read_to_string(root().join("examples/plate/plate.marcam.toml")).unwrap();
+    let mut v: serde_json::Value =
+        serde_json::from_str(&marcam::project_file::to_json_text(&text).unwrap()).unwrap();
     v["setups"][0]["operations"][0]["index_a"] = 90.0.into();
     let libs = marcam::profiles::builtin_libraries();
     let jobs = marcam::project::jobs_from_any_with(&v.to_string(), &libs, &|_| None).unwrap();

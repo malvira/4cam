@@ -21,3 +21,5 @@ flate2 = "1"
 ruzstd = "0.9.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# project files are TOML (key order kept as the model gives it)
+toml = { version = "0.9", features = ["preserve_order"] }

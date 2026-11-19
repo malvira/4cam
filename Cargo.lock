@@ -716,6 +716,7 @@ dependencies = [
  "ruzstd",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -747,6 +748,7 @@ dependencies = [
 name = "marcam-py"
 version = "0.1.0"
 dependencies = [
+ "marcam-core",
  "marcam-step",
  "marcam-wasm",
  "pyo3",

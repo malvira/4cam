@@ -23,6 +23,7 @@ pub mod pickables;
 pub mod post;
 pub mod profiles;
 pub mod project;
+pub mod project_file;
 pub mod relief;
 pub mod render;
 pub mod replace;

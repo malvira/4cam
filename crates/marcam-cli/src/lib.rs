@@ -26,7 +26,11 @@ USAGE:
       features are gone (or match ambiguously) are put in error: kept, left out of
       the G-code until picked again. Writes the project (--out, else in place) and
       prints each operation's outcome; exits 1 when some are in error.
-  marcam upgrade <job.json> [--out <project.json>]
+  marcam convert <file> [--out <file.marcam.toml>] [--json] [--bundle <file.marcam>]
+      A project or job (TOML, JSON, or a .marcam bundle) as a TOML project (the format
+      marcam writes); --json writes JSON instead; --bundle writes a single-file bundle with
+      the part files it names.
+  marcam upgrade <job.json> [--out <project.marcam.toml>] [--json]
       Convert a 0.1 job to a 0.2 project (models, tools, setups, operations).
       run/simulate/toolpath accept either version.
   marcam faces <job-or-project.json> [--model <id>] [--crease <deg>]
@@ -132,8 +136,49 @@ impl Opts {
     }
 }
 
+/// A project or job file's text: TOML or JSON as it is, a bundle's (.marcam) project.toml.
 fn read(path: &str) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    if marcam::project_file::is_bundle(&bytes) {
+        let (text, _) =
+            marcam::project_file::read_bundle(&bytes).map_err(|e| format!("{path}: {e}"))?;
+        return Ok(text);
+    }
+    String::from_utf8(bytes).map_err(|_| format!("{path}: not a text file"))
+}
+
+/// The folder a project's files are found in: its own, or, for a bundle (.marcam), a
+/// temporary folder its files are taken out to.
+fn project_dir(path: &str) -> PathBuf {
+    let own = Path::new(path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let Ok(bytes) = std::fs::read(path) else {
+        return own;
+    };
+    if !marcam::project_file::is_bundle(&bytes) {
+        return own;
+    }
+    let Ok((_, files)) = marcam::project_file::read_bundle(&bytes) else {
+        return own;
+    };
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    let dir = std::env::temp_dir().join(format!("marcam-bundle-{:016x}", h.finish()));
+    for (name, data) in files {
+        // (paths inside the bundle only: no "..")
+        if name.split(['/', '\\']).any(|c| c == "..") {
+            continue;
+        }
+        let f = dir.join(&name);
+        if let Some(parent) = f.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(f, data);
+    }
+    dir
 }
 
 /// Read a job (0.1) or project (0.2; its setups are planned one after another as one job
@@ -163,10 +208,7 @@ fn cmd_wizard_knurl(o: &Opts) -> Result<ExitCode, String> {
         Some(f) => serde_json::from_str(&read(f)?).map_err(|e| format!("{f}: {e}"))?,
         None => Default::default(),
     };
-    let dir = Path::new(path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let dir = project_dir(path);
     let models = p.models.clone();
     let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
         marcam::project::ModelKind::Mesh(src) => src.load(&dir).ok(),
@@ -195,7 +237,7 @@ fn cmd_faces(o: &Opts) -> Result<ExitCode, String> {
     let path = o.one_input()?;
     let (p, _) = marcam::project::Project::from_json_any(&read(path)?)
         .map_err(|e| format!("{path}: {e}"))?;
-    let dir = Path::new(path).parent().unwrap_or(Path::new("."));
+    let dir = &*project_dir(path);
     let crease: f64 = o.flag("crease").map_or(Ok(30.0), |v| {
         v.parse().map_err(|_| format!("--crease: {v}"))
     })?;
@@ -268,10 +310,7 @@ fn cmd_ops(args: &[String]) -> Result<ExitCode, String> {
                 .map(str::to_string)
                 .or_else(|| p.setups.first().map(|s| s.id.clone()))
                 .ok_or("no setups")?;
-            let dir = Path::new(path)
-                .parent()
-                .unwrap_or(Path::new("."))
-                .to_path_buf();
+            let dir = project_dir(path);
             let models = p.models.clone();
             let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
                 marcam::project::ModelKind::Mesh(src) => src.load(&dir).ok(),
@@ -323,10 +362,7 @@ fn cmd_replace_model(o: &Opts) -> Result<ExitCode, String> {
             "expected <project.json> <model-id> <new mesh file>\n\n{USAGE}"
         ));
     };
-    let dir = Path::new(path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let dir = project_dir(path);
     let (p, _) = marcam::project::Project::from_json_any(&read(path)?)
         .map_err(|e| format!("{path}: {e}"))?;
     let project = serde_json::to_value(&p).map_err(|e| e.to_string())?;
@@ -380,6 +416,50 @@ fn cmd_replace_model(o: &Opts) -> Result<ExitCode, String> {
     })
 }
 
+fn cmd_convert(o: &Opts) -> Result<ExitCode, String> {
+    let path = o.one_input()?;
+    let (p, upgraded) = marcam::project::Project::from_json_any(&read(path)?)
+        .map_err(|e| format!("{path}: {e}"))?;
+    let v = serde_json::to_value(&p).map_err(|e| e.to_string())?;
+    if let Some(out) = o.flag("bundle") {
+        // the project and the part files it names, from beside it (or from its bundle)
+        let dir = project_dir(path);
+        let mut files = Vec::new();
+        for m in &p.models {
+            if let marcam::project::ModelKind::Mesh(src) = &m.kind {
+                let bytes =
+                    std::fs::read(dir.join(&src.file)).map_err(|e| format!("{}: {e}", src.file))?;
+                files.push((src.file.replace('\\', "/"), bytes));
+            }
+        }
+        let toml = marcam::project_file::project_to_toml(&p)?;
+        std::fs::write(out, marcam::project_file::write_bundle(&toml, &files))
+            .map_err(|e| format!("{out}: {e}"))?;
+        println!("wrote {out} (project.toml and {} file(s))", files.len());
+        return Ok(ExitCode::SUCCESS);
+    }
+    let text = if o.has("json") {
+        serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n"
+    } else {
+        marcam::project_file::project_to_toml(&p)?
+    };
+    match o.flag("out") {
+        Some(out) => {
+            std::fs::write(out, &text).map_err(|e| format!("{out}: {e}"))?;
+            println!(
+                "wrote {out}{}",
+                if upgraded {
+                    " (upgraded from a 0.1 job)"
+                } else {
+                    ""
+                }
+            );
+        }
+        None => print!("{text}"),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn cmd_upgrade(o: &Opts) -> Result<ExitCode, String> {
     let path = o.one_input()?;
     let (p, upgraded) = marcam::project::Project::from_json_any(&read(path)?)
@@ -393,9 +473,12 @@ fn cmd_upgrade(o: &Opts) -> Result<ExitCode, String> {
     if upgraded {
         p.name = name.to_string();
     }
-    let text = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?
-        + "
-";
+    // TOML (what marcam writes), or JSON with --json
+    let text = if o.has("json") {
+        serde_json::to_string_pretty(&p).map_err(|e| e.to_string())? + "\n"
+    } else {
+        marcam::project_file::project_to_toml(&p)?
+    };
     match o.flag("out") {
         Some(out) => {
             std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
@@ -428,7 +511,8 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "estimate" => cmd_estimate(&parse(rest, &["machine"])?),
         "pickables" => cmd_pickables(&parse(rest, &["setup", "model", "index", "type", "json?"])?),
         "toolpath" => cmd_toolpath(&parse(rest, &[])?),
-        "upgrade" => cmd_upgrade(&parse(rest, &["out"])?),
+        "upgrade" => cmd_upgrade(&parse(rest, &["out", "json?"])?),
+        "convert" => cmd_convert(&parse(rest, &["out", "json?", "bundle"])?),
         "replace-model" => cmd_replace_model(&parse(rest, &["out", "json?"])?),
         "ops" => cmd_ops(rest),
         "faces" => cmd_faces(&parse(rest, &["model", "crease"])?),
@@ -454,10 +538,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
 fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
     let job_path = o.one_input()?;
     let reg = profiles_cmd::Registry::load();
-    let dir = Path::new(job_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let dir = project_dir(job_path);
     let meshes = |src: &marcam::job::MeshSource| src.load(&dir).ok();
     let jobs = marcam::project::jobs_from_any_with(&read(job_path)?, &reg.libraries(), &meshes)
         .map_err(|e| format!("{job_path}: {e}"))?;
@@ -600,10 +681,7 @@ fn cmd_pickables(o: &Opts) -> Result<ExitCode, String> {
     use marcam::pickables;
     let path = o.one_input()?;
     let (p, _) = marcam::project::Project::from_json_any(&read(path)?)?;
-    let dir = Path::new(path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let dir = project_dir(path);
     let index = match o.flag("index") {
         Some(v) => v
             .parse::<f64>()
@@ -736,7 +814,7 @@ fn plan_job_with_mesh(
     job: &Job,
     job_path: &str,
 ) -> Result<(Vec<marcam::Toolpath>, Option<Mesh>), String> {
-    let dir = Path::new(job_path).parent().unwrap_or(Path::new("."));
+    let dir = &*project_dir(job_path);
     let mesh = load_mesh(job, dir).map_err(|e| e.to_string())?;
     let tps = plan_with_mesh(job, mesh.as_ref()).map_err(|e| e.to_string())?;
     Ok((tps, mesh))
