@@ -250,7 +250,7 @@ const A = {
   async importStl(r, which, kind) {
     const [name, path] = which ? STLS.find((x) => x[0] === which) : r.pick(STLS);
     kind = kind || r.pick(name === "knob.stl" ? ["rotary", "indexed", "vise"] : ["vise", "indexed"]);
-    await js(`window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "monkey", models: [], tools: [], setups: [] } }))}, "monkey.marcam.json").then(() => true)`);
+    await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "monkey", models: [], tools: [], setups: [] } }))}, "monkey.marcam.json").then(() => true)`);
     await settle();
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${b64(path)}"), (c) => c.charCodeAt(0))], "${name}")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     await waitFor(() => js("document.getElementById('setupDialog').open"), "the import dialog", 15000);
@@ -346,7 +346,7 @@ const A = {
           if (hit && want.has(t.regions.list[t.regions.of[hit.faceIndex]].id)) return [(c.x + 1) / 2 * el.clientWidth, (1 - c.y) / 2 * el.clientHeight, target.label]; }
         return null; })()`);
       if (at) {
-        await js(`window.__marcam.tree.pickAt(${at[0]}, ${at[1]}).then(() => true)`);
+        await js(`await window.__marcam.tree.pickAt(${at[0]}, ${at[1]}).then(() => true)`);
         what = at[2];
       } else what = "a feature out of view";
     }
@@ -380,7 +380,7 @@ const A = {
     const [a, b] = [r.pick(ids), r.pick(ids)];
     if (a === b) return null;
     const after = r.int(2) === 1;
-    await js(`window.__marcam.tree.moveOp('${a}', '${b}', ${after}).then(() => true)`);
+    await js(`await window.__marcam.tree.moveOp('${a}', '${b}', ${after}).then(() => true)`);
     await settle(100);
     return `move ${a} ${after ? "after" : "before"} ${b}`;
   },
@@ -444,7 +444,7 @@ const A = {
       const meshes = {}; const mf = project.models?.find((m) => m.kind === 'mesh')?.file;
       if (mf && st.mesh) { let bin = ''; for (let i = 0; i < st.mesh.length; i += 8192) bin += String.fromCharCode(...st.mesh.subarray(i, i + 8192)); meshes[mf] = btoa(bin); }
       return { format: 'marcam-project', version: 1, project, meshes, view: { hidden: [...st.hidden] } }; })())`);
-    await js(`window.__marcam.project.openText(${JSON.stringify(text)}, "reopened.marcam.json").then(() => true)`);
+    await js(`await window.__marcam.project.openText(${JSON.stringify(text)}, "reopened.marcam.json").then(() => true)`);
     await settle(400);
     const after = await js("document.getElementById('job').value");
     const same = JSON.stringify(JSON.parse(before)) === JSON.stringify(JSON.parse(after));

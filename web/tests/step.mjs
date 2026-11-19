@@ -27,7 +27,7 @@ try {
   // import a STEP file of a box with a hole, on a vise
   const importStep = async (name, kind) => {
     const b64 = readFileSync(join(root, "tests", "fixtures", "step", name)).toString("base64");
-    await js(`window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "step", models: [], tools: [], setups: [] } }))}, "step.marcam.json").then(() => true)`);
+    await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "step", models: [], tools: [], setups: [] } }))}, "step.marcam.json").then(() => true)`);
     await app.settle();
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${b64}"), (c) => c.charCodeAt(0))], "${name}")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     await waitFor(() => js("document.getElementById('setupDialog').open"), "the import dialog", 120000);
@@ -67,7 +67,7 @@ try {
   const savedFile = JSON.parse(saved);
   const savedName = Object.keys(savedFile.meshes)[0];
   const isStepSaved = atob(savedFile.meshes[savedName]).startsWith("ISO-10303-21");
-  await js(`window.__marcam.project.openText(${JSON.stringify(saved)}, "box.marcam.json").then(() => true)`);
+  await js(`await window.__marcam.project.openText(${JSON.stringify(saved)}, "box.marcam.json").then(() => true)`);
   await app.settle(500);
   const regions2 = await js("await window.__marcam.engine('faceRegions', JSON.parse(document.getElementById('job').value), 'part', window.__marcam.state.mesh).then(({ result }) => result.regions.map((r) => r.id))");
   check("the project keeps the STEP, and reopened it has the same face ids",
