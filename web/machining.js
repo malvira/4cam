@@ -23,7 +23,7 @@ const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 2
 const DISPLAY_MAX = 1_000_000;
 const PLAY_MAX = 250_000;
 
-export function setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend }) {
+export function setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock }) {
   const m = {
     open: false,
     session: null, // sim_open result (+ decoded arrays)
@@ -354,6 +354,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         applyRows(result);
         if (result.pos === want || m.target === want) break;
       }
+    } catch (e) {
+      // cancelled (the playback went with the engine's worker): nothing more to show
+      if (e.message !== "cancelled") throw e;
     } finally {
       m.busy = false;
     }
@@ -367,7 +370,16 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     } catch (e) {
       return showError(e.message);
     }
-    setStatus("Opening machining simulation...", "busy");
+    // one simulation at a time (the engine does one thing at a time, and two on the GPU at
+    // once can stall it): after the one running
+    if (!simLock) return openLocked(job);
+    return simLock.run("playback", () => {
+      setStatus("Opening machining simulation...", "busy");
+      return openLocked(job);
+    });
+  }
+
+  async function openLocked(job) {
     if (confirmSimRes && !(await confirmSimRes())) {
       setStatus("Machining simulation not started", "done");
       return;
@@ -423,6 +435,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       document.body.dataset.machining = "open";
       setStatus(`Machining simulation: ${result.segments.toLocaleString("en")} moves, ${result.ops.length} operations`, "done");
     } catch (e) {
+      if (e.message === "cancelled") return setStatus("Machining simulation cancelled", "done");
       showError(e.message);
       setStatus("Machining simulation failed", "error");
     }
@@ -530,5 +543,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
   });
 
-  return { open, close, seek, reset, applyHidden, colorOf, state: m };
+  /** The engine's worker was ended (a cancel): its playback is gone, so this one closes. */
+  function lost() {
+    if (m.session || m.open) close();
+    m.session = null;
+  }
+
+  return { open, close, seek, reset, applyHidden, colorOf, lost, state: m };
 }

@@ -95,6 +95,9 @@ pub fn engrave(b: &mut Builder, s: Surface, safe: f64, op: &Engrave) -> Result<(
     b.comment("--- engrave ---");
     for path in &paths {
         for &l in &levels {
+            if crate::budget::over() {
+                break;
+            }
             let d = -l;
             go_to(b, s, safe, place(s, path[0], d), op.plunge_feed);
             for q in &path[1..] {
@@ -142,6 +145,9 @@ pub fn vcarve(
     let n = (((region.hi[1] - region.lo[1]) / step).ceil() as usize).max(1);
     b.comment("--- V-carve ---");
     for k in 0..=n {
+        if crate::budget::over() {
+            break;
+        }
         let y = region.lo[1] + (region.hi[1] - region.lo[1]) * k as f64 / n as f64;
         let mut spans = region.spans(y);
         if k % 2 == 1 {

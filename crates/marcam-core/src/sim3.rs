@@ -23,6 +23,8 @@ pub struct Heightmap3 {
     pub op: Vec<u16>,
     /// Bottom of the block.
     pub bottom: f64,
+    /// Top of the block (cutting only lowers it): moves wholly above it are not sampled.
+    pub top: f64,
 }
 
 impl Heightmap3 {
@@ -38,6 +40,7 @@ impl Heightmap3 {
             z: vec![stock.max[2]; nx * ny],
             op: vec![0; nx * ny],
             bottom: stock.min[2],
+            top: stock.max[2],
         }
     }
 
@@ -163,32 +166,68 @@ pub fn apply_segment3(
     step: f64,
 ) -> SegmentEffect {
     let mut e = SegmentEffect::default();
-    let (Some(c), Some(a)) = (cutter, seg.from) else {
+    let (Some(c), Some(from)) = (cutter, seg.from) else {
         return e;
     };
-    let b = seg.to;
-    let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
-    let n = ((len / step).ceil() as usize).max(1);
-    for k in 0..=n {
-        let t = k as f64 / n as f64;
-        let (cut, rows) = hm.stamp(
-            c,
-            a[0] + (b[0] - a[0]) * t,
-            a[1] + (b[1] - a[1]) * t,
-            a[2] + (b[2] - a[2]) * t,
-            seg.op,
-        );
-        e.samples += 1;
-        if let Some((lo, hi)) = rows {
-            e.rows = Some(e.rows.map_or((lo, hi), |(p, q)| (p.min(lo), q.max(hi))));
-        }
-        if seg.rapid && cut > 0 {
-            e.rapid_hit = true;
-        } else {
-            e.cells_cut += cut;
+    // only where the tip is below the block's top; far under the block it cuts what it
+    // would a millimetre under it
+    let low = hm.bottom - 1.0 - c.height(c.radius());
+    let pieces = crate::sim::clip_height(from, seg.to, 2, low, hm.top)
+        .unwrap_or_else(|| vec![(from, seg.to)]);
+    for (a, b) in pieces {
+        let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
+        let n = ((len / step).ceil() as usize).max(1);
+        for k in 0..=n {
+            let t = k as f64 / n as f64;
+            let (cut, rows) = hm.stamp(
+                c,
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                a[2] + (b[2] - a[2]) * t,
+                seg.op,
+            );
+            e.samples += 1;
+            if let Some((lo, hi)) = rows {
+                e.rows = Some(e.rows.map_or((lo, hi), |(p, q)| (p.min(lo), q.max(hi))));
+            }
+            if seg.rapid && cut > 0 {
+                e.rapid_hit = true;
+            } else {
+                e.cells_cut += cut;
+            }
         }
     }
     e
+}
+
+/// About how many cell visits simulating `segs` on a block heightmap of `cell` mm cells,
+/// from `bottom` to `top`, takes (see [`crate::sim::work_estimate`]; no heightmap is made).
+pub fn work_estimate3(
+    cell: f64,
+    bottom: f64,
+    top: f64,
+    segs: &[Segment],
+    cutter_for: &dyn Fn(u32) -> Option<Cutter>,
+    step: f64,
+) -> f64 {
+    let mut total = 0.0;
+    for seg in segs {
+        let (Some(c), Some(from)) = (seg.tool.and_then(cutter_for), seg.from) else {
+            continue;
+        };
+        let rad = c.radius();
+        let side = (2.0 * rad / cell).floor() + 1.0;
+        let low = bottom - 1.0 - c.height(rad);
+        let pieces = crate::sim::clip_height(from, seg.to, 2, low, top)
+            .unwrap_or_else(|| vec![(from, seg.to)]);
+        for (a, b) in pieces {
+            let len =
+                ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
+            // (and a stamp's own cost, whatever its size: about 64 cells' worth)
+            total += ((len / step).ceil().max(1.0) + 1.0) * (side * side + 64.0);
+        }
+    }
+    total
 }
 
 /// Remove material along a 3-axis toolpath (see [`crate::sim::simulate`]).

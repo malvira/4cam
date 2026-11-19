@@ -277,14 +277,17 @@ impl DropCutter {
         // the part direction under the tool: rotated angle φ + a == 90°
         let phi = (PI / 2.0 - a).rem_euclid(TAU);
         let ix = (x - self.x0) / self.bx;
-        if ix < 0.0 || ix >= self.nx as f64 {
+        // (past the planning budget: the operation is failing, see crate::budget)
+        if crate::budget::over() || ix < 0.0 || ix >= self.nx as f64 {
             return floor;
         }
         let j = ((phi / TAU * self.nphi as f64) as usize).min(self.nphi - 1);
         let (s, c) = a.sin_cos();
         let r = self.cutter.radius();
         let mut best = floor;
+        let mut looked = crate::budget::PER_QUERY;
         for &k in &self.bins[ix as usize * self.nphi + j] {
+            looked += 1;
             let tri = &self.tris[k as usize];
             if tri.r_max <= best {
                 break;
@@ -317,6 +320,7 @@ impl DropCutter {
             }
             best = best.max(drop_triangle_above(&self.cutter, &lt, best));
         }
+        crate::budget::spend(looked);
         best
     }
 }

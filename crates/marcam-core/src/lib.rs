@@ -5,6 +5,7 @@
 
 pub mod archive;
 pub mod body;
+pub mod budget;
 pub mod collision;
 pub mod dropcutter;
 pub mod engrave;
@@ -381,6 +382,16 @@ pub fn is_surface_op(op: &Operation) -> bool {
     matches!(op, Operation::Engrave(_) | Operation::Vcarve(_))
 }
 
+/// The error for an operation past its planning budget ([`budget`]).
+fn too_fine(program: &str, op: &Operation) -> Error {
+    Error::Invalid(format!(
+        "program {program}: {} is set too fine to plan: it needs more than {} million moves or {} billion surface checks (minutes, and more memory than the app has). Raise its stepover (or scallop), sample spacing, step-down or helix pitch, or narrow its range",
+        op_name(op),
+        budget::MOVE_LIMIT / 1_000_000,
+        budget::OP_LIMIT as f64 / 1e9
+    ))
+}
+
 fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Toolpath, Error> {
     let job = ctx.job;
     // a vise setup (box stock) runs only 3-axis operations; a rotary setup runs both, the
@@ -445,6 +456,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
     let mut current: Option<u32> = None;
     let mut first_tool = None;
     for op in &prog.operations {
+        // the work it may take (see budget): counted until the end of this iteration
+        let _budget = budget::Guard::start(budget::OP_LIMIT);
         b.ramp_tan = op
             .ramp_angle()
             .map_or(0.0, |deg| deg.clamp(0.0, 89.0).to_radians().tan());
@@ -576,6 +589,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             }
             (Operation::HelicalKnurl(o), ToolShape::Vbit { angle, .. }) => {
                 strategy::helical_knurl(&mut b, angle, safe_r, o)
+                    .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?
             }
             (Operation::FlankChamfer(o), ToolShape::Vbit { angle, .. }) => {
                 strategy::flank_chamfer(&mut b, angle, safe_r, o)
@@ -752,6 +766,10 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     }
                     _ => unreachable!(),
                 }
+                // (past the budget: failing, nothing to smooth)
+                if budget::over() {
+                    return Err(too_fine(&prog.name, op));
+                }
                 // smoothed in the machine frame, before any conversion to general moves
                 if smooth_tol > 0.0 {
                     let mut tail = b.moves.split_off(indexed_from);
@@ -771,6 +789,18 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 }
             }
             _ => unreachable!("tool shape validated above"),
+        }
+        if budget::over() {
+            return Err(too_fine(&prog.name, op));
+        }
+        // a number that is not one (a strategy dividing by a zero radius, say) is stopped
+        // here, with the operation named, before anything downstream sizes work by it
+        if let Some(m) = b.moves[op_start..].iter().find(|m| !m.is_finite()) {
+            return Err(Error::Invalid(format!(
+                "program {}: {} made a move that is not a number ({m:?}): check its parameters",
+                prog.name,
+                op_name(op)
+            )));
         }
         // rotary operations and engravings: smoothed here (3-axis ones above)
         if smooth_tol > 0.0 && !is_three_axis(op) {

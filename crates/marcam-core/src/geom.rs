@@ -62,6 +62,10 @@ impl RevolvedProfile {
     /// Lowest tool-centre radius for a flat endmill at `x`: the highest profile point under
     /// the flat bottom, sampled at `offsets` (gouge-free).
     pub fn flat_drop(&self, x: f64, offsets: &[f64]) -> f64 {
+        // (past the planning budget: the operation is failing, see crate::budget)
+        if !crate::budget::spend(crate::budget::PER_QUERY + offsets.len() as u64) {
+            return self.stock_r;
+        }
         offsets
             .iter()
             .map(|o| self.radius(x + o))

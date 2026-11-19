@@ -21,6 +21,12 @@ fn example(dir: &str, file: &str) -> Job {
 /// GPU and CPU stocks after the whole job: largest height difference, and the share of cut
 /// cells whose tags differ.
 fn compare(gpu: &Gpu, job: &Job, dx: f64, na: usize) -> (f64, f64, usize) {
+    let (max, tags, n, _) = compare_cells(gpu, job, dx, na);
+    (max, tags, n)
+}
+
+/// [`compare`], with the share of cells more than 3 µm apart.
+fn compare_cells(gpu: &Gpu, job: &Job, dx: f64, na: usize) -> (f64, f64, usize, f64) {
     let tps = marcam::plan(job).unwrap();
     let grid = marcam::sim_grid(job, None, dx, na).unwrap();
     let cutter = |n: u32| marcam::cutter_for(n, job.tool(n)?.shape).ok();
@@ -39,7 +45,18 @@ fn compare(gpu: &Gpu, job: &Job, dx: f64, na: usize) -> (f64, f64, usize) {
         .fold(0.0, f64::max);
     let cut = cpu.op.iter().filter(|&&t| t != 0).count().max(1);
     let tags = cpu.op.iter().zip(&g.op).filter(|(a, b)| a != b).count();
-    (max, tags as f64 / cut as f64, n)
+    let apart = cpu
+        .r
+        .iter()
+        .zip(&g.r)
+        .filter(|(a, b)| (*a - *b).abs() > 0.003)
+        .count();
+    (
+        max,
+        tags as f64 / cut as f64,
+        n,
+        apart as f64 / cpu.r.len().max(1) as f64,
+    )
 }
 
 #[test]
@@ -169,4 +186,112 @@ fn gpu_reports_the_rapids_that_cut_like_the_cpu() {
         .unwrap();
     assert_eq!(st.rapid_hits.len(), 1);
     assert_eq!(hits, st.rapid_hits);
+}
+
+/// Seeded random revolved parts (steps, a radius of 0, profiles written either way round) with
+/// the rotary operations at their defaults, some pushed about: the GPU's stock matches the
+/// CPU's on every one (MARCAM_FUZZ_CASES for more).
+#[test]
+fn gpu_matches_the_cpu_on_random_parts() {
+    let Some(gpu) = Gpu::new() else {
+        eprintln!("no hardware GPU: skipped (the CPU simulation is used)");
+        return;
+    };
+    let cases: u64 = std::env::var("MARCAM_FUZZ_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6);
+    let mut state = 0x5eedu64;
+    let mut f = move || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut compared = 0;
+    for seed in 0..cases {
+        let stock_r = 4.0 + 10.0 * f();
+        let len = 10.0 + 40.0 * f();
+        let n = 2 + (f() * 8.0) as usize;
+        let mut xs: Vec<f64> = (0..n).map(|_| -len * f()).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut pts: Vec<[f64; 2]> = Vec::new();
+        for x in xs {
+            pts.push([
+                x,
+                if f() < 0.1 {
+                    0.0
+                } else {
+                    stock_r * (0.3 + 0.7 * f())
+                },
+            ]);
+            if f() < 0.2 {
+                pts.push([x, stock_r * (0.3 + 0.7 * f())]);
+            }
+        }
+        if f() < 0.3 {
+            pts.reverse();
+        }
+        let flat = 1.0 + 5.0 * f();
+        let doc = serde_json::json!({
+            "schema_version": "0.2", "name": "gpu fuzz",
+            "models": [{"id": "part", "kind": "profile", "points": pts}],
+            "tools": [
+                {"number": 1, "description": "flat", "kind": "flat", "diameter": flat, "flute_length": stock_r + 5.0},
+                {"number": 2, "description": "vbit", "kind": "vbit", "angle": 60.0 + 60.0 * f(), "diameter": 6.0, "flute_length": stock_r + 5.0},
+            ],
+            "setups": [{"id": "s", "name": "s", "kind": "rotary", "stock": {"shape": "cylinder", "radius": stock_r, "length": len + 5.0},
+                        "clearance": 3.0, "part": ["part"], "spindle_rpm": 12000, "operations": [],
+                        "outputs": [{"name": "p", "title": "p", "operations": []}]}],
+        });
+        let (mut p, _) = marcam::project::Project::from_json_any(&doc.to_string()).unwrap();
+        let libs = marcam::profiles::builtin_libraries();
+        let mut ops = Vec::new();
+        for (kind, tool) in [
+            ("rotary_turning", 1),
+            ("helical_knurl", 2),
+            ("flank_chamfer", 2),
+        ] {
+            if kind != "rotary_turning" && f() < 0.5 {
+                continue;
+            }
+            let Ok(mut v) = p.op_defaults(kind, "s", Some(tool), &[], &libs, None, &|_| None)
+            else {
+                continue;
+            };
+            if kind == "rotary_turning" && f() < 0.5 {
+                v["rough_step"] =
+                    serde_json::json!(v["rough_step"].as_f64().unwrap_or(1.0) * (0.3 + 2.0 * f()));
+            }
+            v["id"] = serde_json::json!(format!("op{}", ops.len() + 1));
+            ops.push(v);
+        }
+        let mut d: serde_json::Value = serde_json::to_value(&p).unwrap();
+        d["setups"][0]["outputs"][0]["operations"] =
+            serde_json::json!(ops.iter().map(|o| o["id"].clone()).collect::<Vec<_>>());
+        d["setups"][0]["operations"] = serde_json::json!(ops);
+        p = serde_json::from_value(d).unwrap();
+        let job = p.setup_job(&p.setups[0], &libs).unwrap();
+        if marcam::plan(&job).is_err() {
+            eprintln!("case {seed}: not planned (fine)");
+            continue;
+        }
+
+        let (max, tags, _, apart) = compare_cells(&gpu, &job, 0.1, 240);
+        eprintln!(
+            "case {seed}: {} points, max height difference {max:.4} mm, {:.4}% cells over 3 um apart, {:.3}% tags differ",
+            pts.len(),
+            100.0 * apart,
+            100.0 * tags
+        );
+        // a cell the tool's edge only grazes can fall on either side in f32 (GPU) and f64
+        // (CPU), by up to the wall it grazes: a very few may differ
+        assert!(
+            apart <= 1e-4 && max <= 0.5,
+            "case {seed}: {max} mm, {apart}"
+        );
+        assert!(tags < 0.01, "case {seed}: {tags}");
+        compared += 1;
+    }
+    assert!(compared > 0, "no case was planned");
 }

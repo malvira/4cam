@@ -17,6 +17,9 @@ pub fn flank_chamfer(b: &mut Builder, vbit_angle: f64, safe_r: f64, op: &FlankCh
         b.rapid_x(x_tip);
         b.plunge(r_tip, op.plunge_feed);
         for _ in 0..n {
+            if crate::budget::over() {
+                break;
+            }
             let a = b.a + op.segment_deg;
             b.cut(x_tip, r_tip, a, op.feed, op.plunge_feed);
         }

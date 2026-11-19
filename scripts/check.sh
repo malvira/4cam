@@ -39,5 +39,7 @@ node web/tests/project.test.mjs
 node web/tests/e2e.mjs
 # stateful UI tests: scripted scenarios and the seeded monkey (fixed seeds)
 node web/tests/stress.mjs
+# the simulation fuzz in the browser (fixed seeds; the engine-level one runs with cargo test)
+node web/tests/simfuzz.mjs
 if [ -z "$MARCAM_SKIP_STEP" ]; then sh scripts/check-step.sh; else echo "STEP checks skipped (MARCAM_SKIP_STEP)"; fi
 echo "ALL CHECKS PASSED"

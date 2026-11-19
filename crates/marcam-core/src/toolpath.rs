@@ -71,6 +71,38 @@ pub enum Move {
 }
 
 /// Toolpath of one program (one output file).
+impl Move {
+    /// Whether every number in it is finite (a NaN or an infinity is a strategy's error).
+    pub fn is_finite(&self) -> bool {
+        let f = |v: f64| v.is_finite();
+        let o = |v: Option<f64>| v.is_none_or(f64::is_finite);
+        match self {
+            Move::Comment { .. } | Move::ToolChange { .. } => true,
+            Move::Operation { arcs, .. } => o(*arcs),
+            Move::Rapid3 { x, y, z } => o(*x) && o(*y) && o(*z),
+            Move::Line3 {
+                x,
+                y,
+                z,
+                axis,
+                feed,
+            } => [*x, *y, *z, *feed].into_iter().chain(*axis).all(f),
+            Move::Pose { tip, axis, feed } => {
+                tip.iter().chain(axis).all(|v| v.is_finite()) && o(*feed)
+            }
+            Move::Rapid { x, r, a } => o(*x) && o(*r) && o(*a),
+            Move::Plunge { r, feed } => f(*r) && f(*feed),
+            Move::Cut {
+                x,
+                r,
+                a,
+                feed,
+                plunge_cap,
+            } => [*x, *r, *a, *feed].into_iter().all(f) && !plunge_cap.is_nan(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Toolpath {
     pub name: String,
@@ -171,7 +203,9 @@ impl Builder {
         if let Some(a) = a {
             self.a = a;
         }
-        self.moves.push(Move::Rapid { x, r, a });
+        if crate::budget::keep_move() {
+            self.moves.push(Move::Rapid { x, r, a });
+        }
     }
 
     pub fn rapid_r(&mut self, r: f64) {
@@ -194,7 +228,9 @@ impl Builder {
         if let Some(v) = z {
             p[2] = v;
         }
-        self.moves.push(Move::Rapid3 { x, y, z });
+        if crate::budget::keep_move() {
+            self.moves.push(Move::Rapid3 { x, y, z });
+        }
     }
 
     /// 3-axis feed move; dropped when shorter than 1e-6 mm.
@@ -206,6 +242,10 @@ impl Builder {
             }
         }
         self.p3 = Some([x, y, z]);
+        // (past the planning budget the moves are not kept: see crate::budget)
+        if !crate::budget::keep_move() {
+            return;
+        }
         self.moves.push(Move::Line3 {
             x,
             y,
@@ -217,7 +257,9 @@ impl Builder {
 
     pub fn plunge(&mut self, r: f64, feed: f64) {
         self.r = Some(r);
-        self.moves.push(Move::Plunge { r, feed });
+        if crate::budget::keep_move() {
+            self.moves.push(Move::Plunge { r, feed });
+        }
     }
 
     /// Feed move; dropped when its true length is below 1e-6 mm.
@@ -236,13 +278,15 @@ impl Builder {
         } else {
             plunge_cap
         };
-        self.moves.push(Move::Cut {
-            x,
-            r,
-            a,
-            feed,
-            plunge_cap,
-        });
+        if crate::budget::keep_move() {
+            self.moves.push(Move::Cut {
+                x,
+                r,
+                a,
+                feed,
+                plunge_cap,
+            });
+        }
         self.x = Some(x);
         self.r = Some(r);
         self.a = a;

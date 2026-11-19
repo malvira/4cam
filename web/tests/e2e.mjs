@@ -2042,6 +2042,51 @@ try {
       fresh.pocket === 450 && fresh.depth === 0.4 && fresh.face === 500 && shown === "aluminium", `${JSON.stringify(fresh)} ${shown}`);
   }
 
+  // 8t. (Mar) a long simulation: asked about first with how long it takes (and a quicker
+  // setting), a ring in a corner of the 3D view shows it going, a click on it cancels; one
+  // simulation at a time; the engine works again after
+  {
+    await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await clickGenerate();
+    await waitDone("the knob planned", 120000);
+    const sel = (v) => js(`const s = document.getElementById('simRes'); s.value = '${v}'; s.dispatchEvent(new Event('change')); true`);
+    // on the CPU (a GPU would be quick, and is not asked about)
+    const gpuWas = await js("document.getElementById('simGpu').checked");
+    await js("const g = document.getElementById('simGpu'); g.checked = false; g.dispatchEvent(new Event('change')); true");
+    await sel("ultra");
+    const nDialogs = cdp.dialogs.length;
+    cdp.dialogAnswer = true;
+    await js("document.getElementById('simulate').click(); true");
+    await waitFor(() => js("!!document.getElementById('simRing') && !document.getElementById('simRing').classList.contains('hidden')"), "the progress ring", 60000);
+    const asked = cdp.dialogs.slice(nDialogs).map((d) => d.message).join(" | ");
+    await sleep(1500);
+    const ring = await js("(() => { const r = document.getElementById('simRing'); const b = r.getBoundingClientRect(), v = document.getElementById('view3d').getBoundingClientRect(); return { label: r.getAttribute('aria-label'), p: +getComputedStyle(r).getPropertyValue('--p'), w: b.width, inView: b.left >= v.left && b.bottom <= v.bottom }; })()");
+    await shot("21b_sim_ring");
+    // a second simulation meanwhile waits (and the cancel drops it too)
+    const plays0 = await js("window.__marcam.calls.simOpen || 0");
+    await js("window.__marcam.machining.open(); true");
+    await sleep(300);
+    const second = await js("({ status: document.getElementById('status').textContent, opens: window.__marcam.calls.simOpen || 0 })");
+    // cancel: the ring goes, the status says so, nothing is left busy
+    await js("document.getElementById('simRing').click(); true");
+    await waitFor(() => js("document.getElementById('simRing').classList.contains('hidden') && !window.__marcam.simLock.busy"), "the cancelled simulation", 15000);
+    await sleep(500);
+    const after = await js("({ status: document.getElementById('status').textContent, error: document.getElementById('error').textContent, opens: window.__marcam.calls.simOpen || 0, waiting: window.__marcam.simLock.waiting })");
+    check("a long simulation is asked about first, with its time and a quicker setting; a ring in the 3D view shows its progress; a second one meanwhile waits; a click on the ring cancels both",
+      /Ultra|ultra/.test(asked) && /about \d+ (s|min)/.test(asked) && /(Fine|Normal|Coarse): about/.test(asked) && /click to cancel/.test(ring.label) && ring.p > 0 && ring.w >= 16 && ring.w <= 28 && ring.inView &&
+      second.opens === plays0 && /Waiting for the simulation that is running/.test(second.status) && after.opens === plays0 && /cancelled/i.test(after.status) && !after.error,
+      `${asked} | ${JSON.stringify(ring)} | ${JSON.stringify(second)} | ${JSON.stringify(after)}`);
+    // the engine works again: a coarse simulation runs to the end
+    await sel("coarse");
+    await js("document.getElementById('simulate').click(); true");
+    await waitFor(() => js("/Simulated in/.test(document.getElementById('status').textContent)"), "a simulation after the cancel", 120000);
+    const ok2 = await js("({ stocks: window.__marcam.state.sim?.stocks?.length || 0, ring: document.getElementById('simRing').classList.contains('hidden') })");
+    check("after a cancel the engine works again (a new simulation runs, the ring gone when done)", ok2.stocks > 0 && ok2.ring, JSON.stringify(ok2));
+    await sel("normal");
+    await js(`const g = document.getElementById('simGpu'); g.checked = ${gpuWas}; g.dispatchEvent(new Event('change')); true`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

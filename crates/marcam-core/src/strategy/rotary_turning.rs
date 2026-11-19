@@ -94,6 +94,9 @@ pub fn rotary_turning(
     let mut direction = 1;
     b.comment("--- roughing ---");
     for &level in &levels {
+        if crate::budget::over() {
+            break;
+        }
         let mask: Vec<bool> = z_need.iter().map(|&z| z < level - 1e-6).collect();
         for (mut xa, mut xb) in intervals(&mask, &xs) {
             // The drop table already accounts for the tool radius, so the interval is exactly

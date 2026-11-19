@@ -238,6 +238,9 @@ pub fn rotary_finish_on(
                 .collect();
             start(b, xs[0], angles[0]);
             for (i, &a) in angles.iter().enumerate() {
+                if crate::budget::over() {
+                    break;
+                }
                 let forward = i % 2 == 0;
                 let pass: Vec<f64> = if forward {
                     xs.clone()
@@ -245,6 +248,9 @@ pub fn rotary_finish_on(
                     xs.iter().rev().copied().collect()
                 };
                 for &x in &pass {
+                    if crate::budget::over() {
+                        break;
+                    }
                     go(b, x, a);
                 }
                 if let Some(&next) = angles.get(i + 1) {

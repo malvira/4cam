@@ -22,17 +22,87 @@ try {
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------- engine (worker RPC)
-const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+let worker = null;
 let nextId = 1;
 const pending = new Map();
-worker.onmessage = (ev) => {
-  const { id, ok, result, error, ms } = ev.data;
-  const p = pending.get(id);
-  if (!p) return;
-  pending.delete(id);
-  ok ? p.resolve({ result, ms }) : p.reject(new Error(error));
-};
-worker.onerror = (ev) => setStatus(`Engine failed to start: ${ev.message || "see console"}`, "error");
+/** The engine's worker: started at load, and again after a cancel (which ends the old one,
+ *  with whatever it was doing: the only way to stop a call in WebAssembly). */
+function startWorker() {
+  worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+  worker.onmessage = (ev) => {
+    const { id, ok, result, error, ms } = ev.data;
+    const p = pending.get(id);
+    if (!p) return;
+    pending.delete(id);
+    simCallDone(p.cmd);
+    ok ? p.resolve({ result, ms }) : p.reject(new Error(error));
+  };
+  worker.onerror = (ev) => setStatus(`Engine failed to start: ${ev.message || "see console"}`, "error");
+}
+startWorker();
+/** Stop what the engine is doing (a long simulation): its worker is ended and a new one
+ *  started; every call waiting on it fails with "cancelled". Its playback and plan cache go
+ *  with it (they are made again when next needed). */
+function cancelEngine() {
+  simLock.drop();
+  worker.terminate();
+  const waiting = [...pending.values()];
+  pending.clear();
+  simRing.active = 0;
+  showSimRing();
+  startWorker();
+  state.epoch = (state.epoch || 0) + 1;
+  window.__marcam.machining?.lost?.();
+  for (const p of waiting) p.reject(new Error("cancelled"));
+}
+
+// ---- the simulation's progress: a ring in a corner of the 3D view while the engine
+// simulates (from its time estimate); a click on it cancels
+const SIM_CMDS = new Set(["simulate", "simOpen", "simSeek", "gpuOpen"]);
+const simRing = { active: 0, t0: 0, estimate: 0, timer: 0 };
+function simCallStart(cmd) {
+  if (!SIM_CMDS.has(cmd)) return;
+  if (!simRing.active++) simRing.t0 = performance.now();
+  if (!simRing.timer) simRing.timer = setInterval(showSimRing, 200);
+}
+function simCallDone(cmd) {
+  if (!SIM_CMDS.has(cmd) || !simRing.active) return;
+  simRing.active--;
+  showSimRing();
+}
+function showSimRing() {
+  let el = $("simRing");
+  if (!simRing.active) {
+    el?.classList.add("hidden");
+    clearInterval(simRing.timer);
+    simRing.timer = 0;
+    return;
+  }
+  const s = (performance.now() - simRing.t0) / 1000;
+  // shown once it takes a moment
+  if (s < 0.4) return;
+  if (!el) {
+    el = document.createElement("button");
+    el.id = "simRing";
+    el.type = "button";
+    el.className = "sim-ring";
+    el.addEventListener("click", () => {
+      cancelEngine();
+      setStatus("Simulation cancelled", "done");
+    });
+    $("view3d").appendChild(el);
+  }
+  // from the estimate (never quite full until done); without one, a turning quarter
+  const est = simRing.estimate;
+  const f = est > 0 ? Math.min(0.97, s / est) : null;
+  el.classList.remove("hidden");
+  el.classList.toggle("spin", f === null);
+  el.style.setProperty("--p", f === null ? "0.25" : f.toFixed(3));
+  const left = est > 0 ? Math.max(0, Math.ceil(est - s)) : null;
+  const label = `Simulating${f !== null ? ` (${Math.round(f * 100)}%, about ${left} s left)` : ""}: click to cancel`;
+  el.title = label;
+  el.setAttribute("aria-label", label);
+}
 /** Engine calls by command, since the page loaded (window.__marcam.calls). */
 const calls = {};
 function engine(cmd, ...args) {
@@ -40,8 +110,9 @@ function engine(cmd, ...args) {
   // the person's tool libraries: their tools' cutting data for new operations' defaults
   if ((cmd === "opDefaults" || cmd === "setMaterial") && args[1] && !args[1].libraries) args[1] = { ...args[1], libraries: libraries() };
   const id = nextId++;
+  simCallStart(cmd);
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    pending.set(id, { resolve, reject, cmd });
     worker.postMessage({ id, cmd, args });
   });
 }
@@ -55,7 +126,7 @@ const state = {
   tab: 0,
   three: null, // lazily loaded three.js view
 };
-window.__marcam = { state, engine, calls };
+window.__marcam = { state, engine, calls, cancelEngine, simRing };
 
 function setStatus(text, mode = "") {
   $("status").textContent = text;
@@ -601,16 +672,43 @@ async function updateSimResInfo() {
   }
 }
 
-/** Before a simulation: refuse grids over the limit, ask about very large ones. */
-async function confirmSimRes() {
+const fmtSeconds = (s) => (s < 90 ? `${Math.max(1, Math.ceil(s))} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
+/** Simulations expected to take longer than this (seconds) are asked about first. */
+const SIM_ASK_SECONDS = 30;
+
+/** Before a simulation: refuse grids over the limits (cells, time), ask about long ones
+ *  (naming a quicker preset). Sets the progress ring's estimate. */
+async function confirmSimRes(batch = false) {
   await updateSimResInfo();
   const g = state.simGrid;
+  simRing.estimate = 0;
   if (!g) return true;
   if (g.too_large) {
     showError(`The simulation grid would have ${g.cells.toLocaleString("en")} cells (limit 40 million): choose a coarser setting.`);
     return false;
   }
-  if (g.cells > 5e6) return window.confirm(`The simulation grid has ${g.cells.toLocaleString("en")} cells (about ${Math.round(g.engine_mb + g.display_mb)} MB). It may take minutes. Continue?`);
+  // how long: the engine's estimate for this job (the GPU is much quicker: not asked)
+  let t = null;
+  try {
+    const job = readJob();
+    const base = { libraries: libraries(), setup: job.schema_version === "0.2" ? state.tree?.setup : undefined, estimate: true };
+    t = (await engine("simGrid", job, { ...base, ...simOpts() }, state.mesh)).result.time;
+  } catch {}
+  // (the batch simulation takes longer than a playback: the engine says by how much)
+  const k = batch ? t?.batch_factor || 1 : 1;
+  const s = t?.seconds * k;
+  if (!(s > 0)) return true;
+  simRing.estimate = s;
+  const gpu = $("simGpu")?.checked && !!navigator.gpu;
+  const res = $("simRes").value;
+  const what = res === "custom" ? "this resolution" : res;
+  const quicker = ["fine", "normal", "coarse"].find((r) => r !== res && t.presets?.[r] > 0 && k * t.presets[r] < Math.min(s, SIM_ASK_SECONDS));
+  const alt = quicker ? ` (${quicker[0].toUpperCase() + quicker.slice(1)}: about ${fmtSeconds(k * t.presets[quicker])})` : "";
+  if (s > t.max_seconds && !gpu) {
+    showError(`Simulating this at ${what} would take about ${fmtSeconds(s)}: too long. Choose a coarser setting${alt}.`);
+    return false;
+  }
+  if (s > SIM_ASK_SECONDS && !gpu) return window.confirm(`Simulating at ${what} will take about ${fmtSeconds(s)}${alt}. The ring in the corner of the 3D view shows it going; click it to cancel. Continue?`);
   return true;
 }
 
@@ -622,12 +720,47 @@ for (const id of ["simRes", "simDx", "simDeg", "simCell", "simGpu"]) {
 }
 loadSimRes();
 
-async function simulate() {
+/** One simulation at a time (the batch one, a playback opening: see machining.js): the next
+ *  waits for the one running; a cancel drops the waiting ones too. */
+const simLock = {
+  busy: false,
+  waiting: 0,
+  gen: 0,
+  tail: Promise.resolve(),
+  /** Run `fn` once no other simulation runs (not at all if a cancel comes first). */
+  run(kind, fn) {
+    const gen = this.gen;
+    if (this.busy) setStatus("Waiting for the simulation that is running (click the ring in the 3D view to cancel it)", "busy");
+    this.waiting++;
+    const p = this.tail.then(async () => {
+      this.waiting--;
+      if (gen !== this.gen) return;
+      this.busy = kind;
+      try {
+        return await fn();
+      } finally {
+        this.busy = false;
+      }
+    });
+    this.tail = p.catch(() => {});
+    return p;
+  },
+  /** Drop the waiting ones (a cancel). */
+  drop() {
+    this.gen++;
+  },
+};
+
+function simulate() {
+  return simLock.run("batch", simulateLocked);
+}
+
+async function simulateLocked() {
   if (!state.result) await generate();
   if (!state.result) return;
   // busy at once (the grid check below is asynchronous)
   setStatus("Checking the simulation grid...", "busy");
-  if (!(await confirmSimRes())) {
+  if (!(await confirmSimRes(true))) {
     setStatus("Simulation not started", "done");
     return;
   }
@@ -662,8 +795,12 @@ async function simulate() {
     const hits = result.stocks.reduce((n, st) => n + (st.collisions?.count || 0), 0);
     if (s && (s.rapid_hits || s.gouge_cells || hits)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s), ${hits} holder/shank collision(s)`);
   } catch (e) {
-    showError(e.message);
-    setStatus("Simulation failed", "error");
+    if (e.message === "cancelled") {
+      setStatus("Simulation cancelled", "done");
+    } else {
+      showError(e.message);
+      setStatus("Simulation failed", "error");
+    }
   } finally {
     $("generate").disabled = $("simulate").disabled = false;
   }
@@ -675,7 +812,7 @@ function collisionHtml(c) {
   if (!c.count) return `<div class="small" id="holderCheck">Holder/shank check: clear</div>`;
   const rows = c.collisions.slice(0, 20).map((k) =>
     `<li>line ${k.line ?? "?"}: T${k.tool} ${k.contact} ${k.depth.toFixed(3)} mm into the stock${k.rapid ? " (rapid)" : ""}</li>`).join("");
-  return `<div class="issues bad" id="holderCheck">Holder/shank collision: ${c.count} move(s), deepest ${c.max_depth.toFixed(3)} mm<ul>${rows}</ul></div>`;
+  return `<div class="issues bad" id="holderCheck">Holder/shank collision: ${c.count}${c.more ? "+" : ""} move(s), deepest ${c.max_depth.toFixed(3)} mm<ul>${rows}</ul></div>`;
 }
 
 function renderTabs() {
@@ -1581,8 +1718,9 @@ window.__marcam.project = setupProject({
 });
 
 // ---------------------------------------------------------------- machining simulation
-window.__marcam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend });
+window.__marcam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock });
 window.__marcam.updateSimResInfo = updateSimResInfo;
+window.__marcam.simLock = simLock;
 
 // ---------------------------------------------------------------- view hooks (used by the e2e test)
 /** Camera presets: "iso", "front" (looking down the axis from +X), "back" (from -X). `show`

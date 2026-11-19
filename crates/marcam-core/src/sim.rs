@@ -58,6 +58,9 @@ pub struct RadialMap {
     pub r: Vec<f32>,
     /// Which operation last cut each cell: operation id + 1 (0 = never cut).
     pub op: Vec<u16>,
+    /// No cell is above this radius (the stock's starting radius: cutting only lowers it):
+    /// moves wholly above it are not sampled.
+    pub top: f64,
 }
 
 impl RadialMap {
@@ -66,7 +69,14 @@ impl RadialMap {
             grid,
             r: vec![r as f32; grid.len()],
             op: vec![0; grid.len()],
+            top: r,
         }
+    }
+
+    /// [`RadialMap::top`] measured (after filling a map in).
+    fn measured(mut self) -> RadialMap {
+        self.top = self.r.iter().fold(0.0f32, |a, &b| a.max(b)) as f64;
+        self
     }
 
     pub fn at(&self, i: usize, j: usize) -> f64 {
@@ -92,7 +102,7 @@ impl RadialMap {
                 m.r[i * grid.na + j] = r as f32;
             }
         }
-        m
+        m.measured()
     }
 
     /// Finished part from a mesh: outermost hit of each cell's radial ray (0 where none).
@@ -150,8 +160,105 @@ impl RadialMap {
                 }
             }
         }
-        m
+        m.measured()
     }
+}
+
+/// The parts of a straight move from `p` to `q` worth sampling, by its height `h(p) = p[k]`:
+/// where the tip is above `top` nothing is touched (the tool hangs above the stock) and that
+/// part is left out; where it is below `low` the tool already goes through everything it
+/// can reach, so that part is moved up to `low` (it cuts the same). None: the move is
+/// wholly between them (sample it as it is). Some: the pieces, in order (maybe none).
+pub fn clip_height(
+    p: [f64; 3],
+    q: [f64; 3],
+    k: usize,
+    low: f64,
+    top: f64,
+) -> Option<Vec<([f64; 3], [f64; 3])>> {
+    let (hp, hq) = (p[k], q[k]);
+    if hp.min(hq) >= low && hp.max(hq) <= top {
+        return None;
+    }
+    let at = |t: f64| [0, 1, 2].map(|i| p[i] + (q[i] - p[i]) * t);
+    // the move's parameter where its height crosses `top` and `low` (ascending, in (0, 1))
+    let mut cuts = vec![0.0, 1.0];
+    for h in [low, top] {
+        if (hp - h) * (hq - h) < 0.0 {
+            cuts.push((h - hp) / (hq - hp));
+        }
+    }
+    cuts.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+    let mut out = Vec::new();
+    for w in cuts.windows(2) {
+        let (a, b) = (at(w[0]), at(w[1]));
+        let mid = 0.5 * (a[k] + b[k]);
+        if mid > top {
+            continue;
+        }
+        if mid < low {
+            let (mut a, mut b) = (a, b);
+            a[k] = low;
+            b[k] = low;
+            out.push((a, b));
+        } else {
+            out.push((a, b));
+        }
+    }
+    Some(out)
+}
+
+/// Cell visits the simulation may take for one playback or batch run: about 30 s natively,
+/// a minute in the browser. A finer grid than that for the job is refused before it starts
+/// (see [`work_estimate`]).
+pub const WORK_LIMIT: f64 = 1.5e9;
+
+/// About how many cell visits simulating `segs` on a rotary grid `g` (stock no higher than
+/// `top`) takes: the samples each move is stamped at, as the simulation takes them, times
+/// the cells each stamp looks at (and each stamp's own cost). Cheap (no stock is touched), to refuse a grid too fine for
+/// a job before starting.
+pub fn work_estimate(
+    g: Grid,
+    top: f64,
+    segs: &[Segment],
+    cutter_for: &dyn Fn(u32) -> Option<Cutter>,
+    step: f64,
+) -> f64 {
+    let dphi = TAU / g.na as f64;
+    let mut total = 0.0;
+    for seg in segs {
+        let (Some(c), Some(from)) = (seg.tool.and_then(cutter_for), seg.from) else {
+            continue;
+        };
+        let rad = c.radius();
+        let rows = (2.0 * rad / g.dx).floor() + 1.0;
+        let low = -(top + c.height(rad) + 0.01);
+        let k = if seg.index_a.is_some() { 2 } else { 1 };
+        let pieces = clip_height(from, seg.to, k, low, top).unwrap_or_else(|| vec![(from, seg.to)]);
+        for (p, q) in pieces {
+            let len = if seg.index_a.is_some() {
+                ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2)).sqrt()
+            } else {
+                let arc = (0.5 * (p[1] + q[1])).abs() * (q[2] - p[2]).to_radians().abs();
+                (q[0] - p[0]).abs().max((q[1] - p[1]).abs()).max(arc)
+            };
+            let n = (len / step).ceil().max(1.0) + 1.0;
+            let h = 0.5 * (p[k] + q[k]);
+            let angles = if seg.index_a.is_some() {
+                if h > 0.0 {
+                    (2.0 * rad.atan2(h).min(PI / 2.0) / dphi + 2.0).min(g.na as f64)
+                } else {
+                    g.na as f64
+                }
+            } else {
+                let half = if h <= rad { PI / 2.0 } else { (rad / h).asin() };
+                2.0 * half / dphi + 1.0
+            };
+            // (and a stamp's own cost, whatever its size: about 16 cells' worth)
+            total += n * (rows * angles + 16.0);
+        }
+    }
+    total
 }
 
 /// The part over each cell: at the centre, and the lowest and highest radius across the
@@ -380,6 +487,8 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
 /// Rows `row0..row1` of a radial map, with their radii and tags: what one thread stamps.
 pub struct Band<'a> {
     pub g: Grid,
+    /// See [`RadialMap::top`].
+    pub top: f64,
     pub row0: usize,
     pub row1: usize,
     pub r: &'a mut [f32],
@@ -391,6 +500,7 @@ impl RadialMap {
     pub fn band(&mut self) -> Band<'_> {
         Band {
             g: self.grid,
+            top: self.top,
             row0: 0,
             row1: self.grid.nx,
             r: &mut self.r,
@@ -427,6 +537,7 @@ pub fn apply_banded(
     threads: usize,
 ) -> Vec<SegmentEffect> {
     let g = stock.grid;
+    let top = stock.top;
     if threads <= 1 || g.nx < 2 {
         let mut b = stock.band();
         return segs
@@ -448,6 +559,7 @@ pub fn apply_banded(
                 sc.spawn(move || {
                     let mut b = Band {
                         g,
+                        top,
                         row0,
                         row1,
                         r,
@@ -517,15 +629,42 @@ pub fn apply_segment_band(
     if let Some(a) = seg.index_a {
         return apply_indexed(stock, seg, cutter, step, a);
     }
-    let (Some(c), Some([x0, r0, a0])) = (cutter, seg.from) else {
+    let (Some(c), Some(from)) = (cutter, seg.from) else {
         return e;
     };
-    let [x1, r1, a1] = seg.to;
+    // only where the tip is below the stock's top; far past the axis it cuts what it would
+    // just past it
+    let low = -(stock.top + c.height(c.radius()) + 0.01);
+    match clip_height(from, seg.to, 1, low, stock.top) {
+        None => sample_rotary(stock, seg, c, from, seg.to, false, step, &mut e),
+        Some(pieces) => {
+            for (p, q) in pieces {
+                sample_rotary(stock, seg, c, p, q, true, step, &mut e);
+            }
+        }
+    }
+    e
+}
+
+/// The tool's positions along a rotary move from `p` to `q` (x, tip radius, A), at most
+/// `step` apart, stamped (`first`: from its start, else from just after it).
+#[allow(clippy::too_many_arguments)]
+fn sample_rotary(
+    stock: &mut Band,
+    seg: &Segment,
+    c: &Cutter,
+    p: [f64; 3],
+    q: [f64; 3],
+    first: bool,
+    step: f64,
+    e: &mut SegmentEffect,
+) {
+    let ([x0, r0, a0], [x1, r1, a1]) = (p, q);
     // a machine moves all axes linearly together
-    let arc = 0.5 * (r0 + r1) * (a1 - a0).to_radians().abs();
+    let arc = (0.5 * (r0 + r1)).abs() * (a1 - a0).to_radians().abs();
     let len = (x1 - x0).abs().max((r1 - r0).abs()).max(arc);
     let n = ((len / step).ceil() as usize).max(1);
-    for k in 1..=n {
+    for k in (if first { 0 } else { 1 })..=n {
         let t = k as f64 / n as f64;
         let (cut, rows) = stamp(
             stock,
@@ -545,7 +684,6 @@ pub fn apply_segment_band(
             e.cells_cut += cut;
         }
     }
-    e
 }
 
 /// An indexed 3-axis segment: the tool (axis +Z) moves in machine X/Y/Z with A held at `a`.
@@ -557,24 +695,30 @@ fn apply_indexed(
     a: f64,
 ) -> SegmentEffect {
     let mut e = SegmentEffect::default();
-    let (Some(c), Some(p)) = (cutter, seg.from) else {
+    let (Some(c), Some(from)) = (cutter, seg.from) else {
         return e;
     };
-    let q = seg.to;
-    let len = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2)).sqrt();
-    let n = ((len / step).ceil() as usize).max(1);
-    for k in 0..=n {
-        let t = k as f64 / n as f64;
-        let at = [0, 1, 2].map(|i| p[i] + (q[i] - p[i]) * t);
-        let (cut, rows) = stamp_indexed(stock, c, at, a, seg.op);
-        e.samples += 1;
-        if let Some((lo, hi)) = rows {
-            e.rows = Some(e.rows.map_or((lo, hi), |(u, v)| (u.min(lo), v.max(hi))));
-        }
-        if seg.rapid && cut > 0 {
-            e.rapid_hit = true;
-        } else {
-            e.cells_cut += cut;
+    // only where the tip is below the bar's top; far below the axis it cuts what it would
+    // just under the bar
+    let low = -(stock.top + c.height(c.radius()) + 0.01);
+    let pieces =
+        clip_height(from, seg.to, 2, low, stock.top).unwrap_or_else(|| vec![(from, seg.to)]);
+    for (p, q) in pieces {
+        let len = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2)).sqrt();
+        let n = ((len / step).ceil() as usize).max(1);
+        for k in 0..=n {
+            let t = k as f64 / n as f64;
+            let at = [0, 1, 2].map(|i| p[i] + (q[i] - p[i]) * t);
+            let (cut, rows) = stamp_indexed(stock, c, at, a, seg.op);
+            e.samples += 1;
+            if let Some((lo, hi)) = rows {
+                e.rows = Some(e.rows.map_or((lo, hi), |(u, v)| (u.min(lo), v.max(hi))));
+            }
+            if seg.rapid && cut > 0 {
+                e.rapid_hit = true;
+            } else {
+                e.cells_cut += cut;
+            }
         }
     }
     e

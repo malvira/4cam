@@ -4,9 +4,21 @@ use crate::job::HelicalKnurl;
 use crate::numeric::{deg, linspace, rad};
 use crate::toolpath::Builder;
 
-pub fn helical_knurl(b: &mut Builder, vbit_angle: f64, safe_r: f64, op: &HelicalKnurl) {
+pub fn helical_knurl(
+    b: &mut Builder,
+    vbit_angle: f64,
+    safe_r: f64,
+    op: &HelicalKnurl,
+) -> Result<(), String> {
     let [xb, rb] = op.body_back;
     let [xf, rf] = op.body_front;
+    // the grooves turn by tan(helix angle) / radius per mm: a body needs a radius all along
+    let ok = rb.min(rf) >= 0.1 && xf > xb;
+    if !ok {
+        return Err(format!(
+            "the knurl's body runs from [{xb}, {rb}] to [{xf}, {rf}]: it needs its back before its front and a radius of 0.1 mm or more at both ends"
+        ));
+    }
     let body_r = |x: f64| rf + (rb - rf) * (xf - x) / (xf - xb);
     let n = op.count as f64;
     let depth = |x: f64| {
@@ -45,6 +57,9 @@ pub fn helical_knurl(b: &mut Builder, vbit_angle: f64, safe_r: f64, op: &Helical
                 frac * 100.0
             ));
             for k in 0..op.count {
+                if crate::budget::over() {
+                    break;
+                }
                 let a0 = k as f64 * 360.0 / n;
                 let a: Vec<f64> = theta.iter().map(|&t| a0 + fam as f64 * t).collect();
                 b.rapid_r(safe_r);
@@ -58,4 +73,5 @@ pub fn helical_knurl(b: &mut Builder, vbit_angle: f64, safe_r: f64, op: &Helical
             }
         }
     }
+    Ok(())
 }

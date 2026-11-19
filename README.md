@@ -273,7 +273,18 @@ The tests cover:
   the body within 0.06 mm of the part;
 - G93 feed arithmetic;
 - the mesh import formats;
-- the CLI end to end.
+- the CLI end to end;
+- seeded fuzzing of planning and the simulation (`crates/marcam-wasm/tests/fuzz.rs`):
+  random parts and operations pushed to extremes, each planned, posted and played back,
+  failing on a panic, a NaN, too much time or too much memory. A fixed set runs with
+  `cargo test`; `MARCAM_FUZZ_CASES=500` runs more, `MARCAM_FUZZ_SEED=<n> MARCAM_FUZZ_CASES=1`
+  replays one (`web/tests/simfuzz.mjs` is a smaller run in the browser).
+
+Planning and simulating are bounded: an operation set too fine to plan (more than 3 million
+moves, or 300 million units of surface checking) fails in seconds with the reason, and a
+simulation estimated to take longer than 10 minutes in a browser is refused, naming the
+finest resolution that fits (the app asks first about anything over 30 seconds, and shows a
+progress ring in the 3D view that cancels on a click).
 
 ## Layout
 

@@ -439,6 +439,9 @@ pub mod api {
             Ok(t) => t,
             Err(e) => return err(e),
         };
+        if let Some(why) = too_slow(&job, &tps, mesh.as_ref(), &opts, BATCH_FACTOR) {
+            return json!({"error": why, "too_slow": true});
+        }
         if let Some(sb) = job.stock_box {
             return simulate_xyz(&job, &tps, mesh.as_ref(), &sb, &opts);
         }
@@ -537,6 +540,104 @@ pub mod api {
             .max(0.005)
     }
 
+    /// Cell visits a second the simulation makes in a browser (measured on the knob: a little
+    /// under the native rate on one thread): rotary grids, block heightmaps. These estimate a
+    /// playback; the batch simulation (`simulate`) takes about twice as long (the job twice,
+    /// and the collision check).
+    const BROWSER_RATE_ROTARY: f64 = 34e6;
+    const BROWSER_RATE_XYZ: f64 = 170e6;
+    const BATCH_FACTOR: f64 = 2.0;
+    const PLAYBACK: f64 = 1.0;
+    /// Longest simulation started (seconds in a browser, estimated): past it the grid is
+    /// refused with the finest preset that fits (`opts.max_seconds` lowers it).
+    pub const SIM_MAX_SECONDS: f64 = 600.0;
+
+    /// About how long simulating `tps` takes in a browser at `opts`' resolution (seconds).
+    fn sim_seconds(
+        job: &Job,
+        tps: &[Toolpath],
+        mesh: Option<&Mesh>,
+        opts: &Value,
+    ) -> Result<f64, String> {
+        let cutters = cutters_of(job);
+        if let Some(sb) = job.stock_box {
+            let cell = cell_for(&sb, opts);
+            let step = (cell * 0.5).min(0.1);
+            let w = sim3::work_estimate3(
+                cell,
+                sb.min[2],
+                sb.max[2],
+                &sim3::segments3(tps),
+                &cutters,
+                step,
+            );
+            return Ok(w / BROWSER_RATE_XYZ);
+        }
+        let (dx, na) = rotary_res(opts);
+        let g = marcam::sim_grid(job, mesh, dx, na).map_err(|e| e.to_string())?;
+        let w = sim::work_estimate(
+            g,
+            job.stock.radius,
+            &sim::segments(tps),
+            &cutters,
+            (dx * 2.0).min(0.1),
+        );
+        Ok(w / BROWSER_RATE_ROTARY)
+    }
+
+    fn fmt_seconds(s: f64) -> String {
+        if s < 90.0 {
+            format!("{} s", s.ceil().max(1.0))
+        } else if s < 5400.0 {
+            format!("{} min", (s / 60.0).round())
+        } else {
+            format!("{:.1} h", s / 3600.0)
+        }
+    }
+
+    /// Why the simulation is not started at `opts`' resolution (too long), with the finest
+    /// preset that would do: None to go on.
+    fn too_slow(
+        job: &Job,
+        tps: &[Toolpath],
+        mesh: Option<&Mesh>,
+        opts: &Value,
+        factor: f64,
+    ) -> Option<String> {
+        let max = opts["max_seconds"].as_f64().unwrap_or(SIM_MAX_SECONDS);
+        let s = factor * sim_seconds(job, tps, mesh, opts).ok()?;
+        if s <= max {
+            return None;
+        }
+        let at = |res: &str| {
+            let mut o = opts.clone();
+            if let Some(m) = o.as_object_mut() {
+                m.remove("dx");
+                m.remove("na");
+                m.remove("cell");
+                m.insert("res".into(), json!(res));
+            }
+            sim_seconds(job, tps, mesh, &o).ok().map(|t| factor * t)
+        };
+        let fits = ["ultra", "fine", "normal", "coarse"]
+            .into_iter()
+            .find_map(|r| at(r).filter(|&t| t <= max).map(|t| (r, t)));
+        let what = opts["res"]
+            .as_str()
+            .filter(|_| opts["dx"].is_null() && opts["cell"].is_null())
+            .unwrap_or("this resolution");
+        Some(match fits {
+            Some((r, t)) => format!(
+                "simulating this job at {what} would take about {} (longer than {}): choose {r} (about {})",
+                fmt_seconds(s), fmt_seconds(max), fmt_seconds(t)
+            ),
+            None => format!(
+                "simulating this job would take about {} even at coarse (longer than {}): it has too many moves to simulate",
+                fmt_seconds(at("coarse").unwrap_or(s)), fmt_seconds(max)
+            ),
+        })
+    }
+
     /// The simulation grid a document gets at a resolution, without running it: cells and
     /// rough memory (engine and 3D display), so hosts can warn before very fine grids.
     pub fn sim_grid(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
@@ -551,14 +652,43 @@ pub mod api {
             Err(e) => return err(e),
         };
         let mb = |b: f64| (b / 1048576.0 * 10.0).round() / 10.0;
+        // `estimate`: also how long it would take (it plans the job, from the plan cache when
+        // planned already), and at each preset
+        let timing = |job: &Job, mesh: Option<&Mesh>| -> Value {
+            if opts["estimate"] != true {
+                return Value::Null;
+            }
+            let Ok(tps) = plan_for_sim(job, mesh, &opts) else {
+                return Value::Null;
+            };
+            let at = |res: &str| {
+                let mut o = opts.clone();
+                if let Some(m) = o.as_object_mut() {
+                    m.remove("dx");
+                    m.remove("na");
+                    m.remove("cell");
+                    m.insert("res".into(), json!(res));
+                }
+                sim_seconds(job, &tps, mesh, &o).ok()
+            };
+            json!({
+                "seconds": sim_seconds(job, &tps, mesh, &opts).ok(),
+                "max_seconds": SIM_MAX_SECONDS,
+                "batch_factor": BATCH_FACTOR,
+                "presets": {"coarse": at("coarse"), "normal": at("normal"), "fine": at("fine"), "ultra": at("ultra")},
+            })
+        };
         if let Some(sb) = job.stock_box {
             let cell = cell_for(&sb, &opts);
-            let hm = sim3::Heightmap3::new(&sb, cell);
-            let cells = hm.nx * hm.ny;
+            let nx = (((sb.max[0] - sb.min[0]) / cell).ceil() as usize).max(2);
+            let ny = (((sb.max[1] - sb.min[1]) / cell).ceil() as usize).max(2);
+            let cells = nx * ny;
+            let mesh = parse_mesh(&job, mesh).ok().flatten();
             return json!({
-                "kind": "xyz", "cell": cell, "nx": hm.nx, "ny": hm.ny, "cells": cells,
+                "kind": "xyz", "cell": cell, "nx": nx, "ny": ny, "cells": cells,
                 "engine_mb": mb(cells as f64 * 18.0), "display_mb": mb(cells as f64 * 48.0),
                 "too_large": cells > sim::MAX_CELLS, "max_cells": sim::MAX_CELLS,
+                "time": timing(&job, mesh.as_ref()),
             });
         }
         let mesh = match parse_mesh(&job, mesh) {
@@ -571,6 +701,7 @@ pub mod api {
                 "kind": "rotary", "dx": g.dx, "na": g.na, "nx": g.nx, "cells": g.len(),
                 "engine_mb": mb(g.len() as f64 * 18.0), "display_mb": mb(g.len() as f64 * 48.0),
                 "too_large": g.len() > sim::MAX_CELLS, "max_cells": sim::MAX_CELLS,
+                "time": timing(&job, mesh.as_ref()),
             }),
             Err(e) => err(e),
         }
@@ -968,6 +1099,9 @@ pub mod api {
             Ok(t) => t,
             Err(e) => return err(e),
         };
+        if let Some(why) = too_slow(&job, &tps, mesh.as_ref(), &opts, PLAYBACK) {
+            return json!({"error": why, "too_slow": true});
+        }
         if let Some(sb) = job.stock_box {
             return sim_open_xyz(&job, &tps, &sb, &opts, job_json);
         }

@@ -44,6 +44,9 @@ pub fn helix(
     let n_rev = (360.0 / seg) as usize;
     if let Some(zs) = r_start {
         for i in 1..=n_rev {
+            if crate::budget::over() {
+                break;
+            }
             let frac = i as f64 / n_rev as f64;
             let a = b.a + dir * seg;
             b.cut(x0, zs + (rfun(x0) - zs) * frac, a, f.feed, f.plunge_cap);
@@ -57,6 +60,9 @@ pub fn helix(
     if len > 1e-9 {
         let n = ((len / step * 360.0 / seg).ceil() as usize).max(1);
         for i in 1..=n {
+            if crate::budget::over() {
+                break;
+            }
             let x = x0 + (x1 - x0) * i as f64 / n as f64;
             let a = b.a + dir * 360.0 * len / step / n as f64;
             b.cut(x, rfun(x), a, f.feed, f.plunge_cap);

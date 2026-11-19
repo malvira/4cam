@@ -99,6 +99,9 @@ pub fn bore(
     b.comment("--- boring ---");
     for &[cx, cy] in &op.points {
         for &r in &passes {
+            if crate::budget::over() {
+                break;
+            }
             let da = step_angle(r, op.tolerance.max(1e-4));
             // into the start, above the top, then down the helix
             b.rapid3(None, None, Some(safe));

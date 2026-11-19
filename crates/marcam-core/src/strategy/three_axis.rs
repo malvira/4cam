@@ -39,6 +39,9 @@ fn zigzag(b: &mut Builder, area: [f64; 4], z: f64, stepover: f64, feed: f64) {
     let [x0, x1, y0, y1] = area;
     let n = (((y1 - y0) / stepover.max(1e-3)).ceil() as usize).max(1);
     for k in 0..=n {
+        if crate::budget::over() {
+            break;
+        }
         let y = y0 + (y1 - y0) * k as f64 / n as f64;
         let (xa, xb) = if k % 2 == 0 { (x0, x1) } else { (x1, x0) };
         b.line3(xa, y, z, UP, feed);
@@ -74,6 +77,9 @@ pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> 
     let (y0, y1) = (stock.min[1] + r * 0.5, stock.max[1] - r * 0.5);
     b.comment("--- facing ---");
     for z in levels(top, bottom, op.step_down) {
+        if crate::budget::over() {
+            break;
+        }
         enter(b, safe, x0 - r - 1.0, y0, z + 1.0, z, op.plunge_feed);
         b.line3(x0, y0, z, UP, op.feed);
         zigzag(b, [x0, x1, y0, y1], z, op.stepover * d, op.feed);
@@ -112,6 +118,9 @@ pub fn pocket(
     let top = op.top.unwrap_or(stock.max[2]);
     b.comment("--- pocket ---");
     for z in levels(top, top - op.depth, op.step_down) {
+        if crate::budget::over() {
+            break;
+        }
         // ramp in along X at the plunge feed, clear, then one finishing lap of the walls
         enter(
             b,
@@ -169,6 +178,9 @@ pub fn pocket_loops(
     }
     let mut loops: Vec<(f64, Vec<[f64; 2]>)> = Vec::new();
     for &level in &levels {
+        if crate::budget::over() {
+            break;
+        }
         for lp in field.loops(level) {
             let lp = crate::offset::simplify(&lp, POCKET_LOOP_TOL);
             if lp.len() >= 4 {
@@ -240,6 +252,9 @@ fn path_pocket(
     b.comment("--- pocket (outline) ---");
     let mut at = [f64::NAN; 2];
     for z in levels(top, top - op.depth, op.step_down) {
+        if crate::budget::over() {
+            break;
+        }
         for lp in &loops {
             // start where the last loop ended, as near as the loop allows
             let n = lp.len() - 1;
@@ -358,6 +373,9 @@ pub fn contour(
     let top = op.top.unwrap_or(stock.max[2]);
     b.comment("--- contour ---");
     for z in levels(top, top - op.depth, op.step_down) {
+        if crate::budget::over() {
+            break;
+        }
         let [x, y] = path[0];
         enter(b, safe, x, y, z + op.step_down.max(0.5), z, op.plunge_feed);
         for p in path.iter().skip(1).chain(std::iter::once(&path[0])) {
@@ -447,12 +465,17 @@ impl DropCutter3 {
     /// Lowest tip Z at (x, y) that does not cut into the mesh (never below `floor`).
     pub fn z_at(&self, x: f64, y: f64, floor: f64) -> f64 {
         let (i, j) = ((x - self.x0) / self.cell, (y - self.y0) / self.cell);
-        if i < 0.0 || j < 0.0 || i >= self.nx as f64 || j >= self.ny as f64 {
+        // (past the planning budget: the operation is failing, see crate::budget)
+        if crate::budget::over() || i < 0.0 || j < 0.0 || i >= self.nx as f64 || j >= self.ny as f64
+        {
             return floor;
         }
         let mut best = floor;
         let r = self.cutter.radius();
-        for &k in &self.bins[j as usize * self.nx + i as usize] {
+        let bin = &self.bins[j as usize * self.nx + i as usize];
+        // the work: the triangles looked at (at most the bin)
+        crate::budget::spend(crate::budget::PER_QUERY + bin.len() as u64);
+        for &k in bin {
             let bb = &self.boxes[k as usize];
             if bb[0] > x + r || bb[2] < x - r || bb[1] > y + r || bb[3] < y - r {
                 continue;
@@ -563,13 +586,19 @@ pub fn raster3d_on(
             return z;
         }
         let z = dc.z_at(x, y, floor) + op.leave;
-        cache.borrow_mut().insert(key, z);
+        // (past the budget nothing more is kept: the operation is failing)
+        if !crate::budget::over() {
+            cache.borrow_mut().insert(key, z);
+        }
         z
     };
     let top = stock.max[2];
     let feeds = [op.feed, op.plunge_feed];
     b.comment("--- 3D raster ---");
     for level in levels(top, floor + op.leave, op.step_down.max(d * 0.05)) {
+        if crate::budget::over() {
+            break;
+        }
         // a level that holds the tool up nowhere is the surface pass itself: every deeper
         // level would cut exactly the same path again, so it is the last
         let held = std::cell::Cell::new(false);
@@ -585,6 +614,9 @@ pub fn raster3d_on(
         let mut lifted = true;
         let mut emitted = 0usize;
         for k in 0..=n {
+            if crate::budget::over() {
+                break;
+            }
             let wk = w0 + (w1 - w0) * k as f64 / n as f64;
             let row: Vec<[f64; 2]> = if op.angle == 0.0 {
                 let m = (((x1 - x0).abs() / op.sample.max(0.01)).ceil() as usize).max(1);

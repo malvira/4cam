@@ -741,6 +741,7 @@ dependencies = [
  "bytemuck",
  "marcam-core",
  "pollster",
+ "serde_json",
  "wgpu",
 ]
 

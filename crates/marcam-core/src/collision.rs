@@ -32,8 +32,12 @@ pub const CONTACT_TOL: f64 = 0.01;
 /// Tool positions checked along a move are at most this far apart (mm), or the
 /// simulation's step if that is coarser.
 pub const CHECK_STEP: f64 = 0.5;
-/// At most this many collisions are listed per program (all are counted).
+/// At most this many collisions are listed per program.
 pub const MAX_LISTED: usize = 50;
+/// Moves in collision are counted up to this many per program; past it the program is
+/// reported as having more (`more`) and the rest of it is not checked (a program that far
+/// wrong needs changing anyway, and checking every move of it can take minutes).
+pub const MAX_COUNTED: usize = 10_000;
 
 /// What of a tool is above its flutes, with every field filled.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -141,15 +145,28 @@ pub struct Collision {
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct CollisionReport {
     pub program: String,
-    /// Moves with a collision (all of them, even past the listed ones).
+    /// Moves with a collision (even past the listed ones), up to [`MAX_COUNTED`].
     pub count: usize,
-    /// Deepest contact (mm).
+    /// The check stopped at [`MAX_COUNTED`]: more moves may collide.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub more: bool,
+    /// Deepest contact (mm) among those found.
     pub max_depth: f64,
     /// The first [`MAX_LISTED`] collisions, in program order.
     pub collisions: Vec<Collision>,
 }
 
 impl CollisionReport {
+    /// Whether the check has counted [`MAX_COUNTED`] moves and stops.
+    fn full(&self) -> bool {
+        self.count >= MAX_COUNTED
+    }
+
+    /// "12" or "1000+" moves.
+    pub fn count_text(&self) -> String {
+        format!("{}{}", self.count, if self.more { "+" } else { "" })
+    }
+
     fn add(&mut self, c: Collision) {
         self.count += 1;
         self.max_depth = self.max_depth.max(c.depth);
@@ -372,14 +389,37 @@ fn lowest_tip(seg: &Segment) -> f64 {
     seg.from.map_or(z(seg.to), |f| z(f).min(z(seg.to)))
 }
 
+/// The deepest contact along a move, checked at points about `step` (at least
+/// [`CHECK_STEP`]) apart along the path: `since` carries the distance travelled since the
+/// last point checked from one move to the next (`f64::INFINITY`: check the next point), so
+/// a run of tiny moves (a fine helix) is checked every `step` of travel, not at each move.
 fn worst(
     seg: &Segment,
     step: f64,
     tool: u32,
     contact: &dyn Fn([f64; 3], f64) -> Option<(Contact, f64)>,
+    since: &mut f64,
 ) -> Option<Collision> {
+    let step = step.max(CHECK_STEP);
+    let pts = samples(seg, step);
+    // a move longer than `step` is checked at each of its points (its first one too unless
+    // the last check was just before it)
+    let long = pts.len() > 2;
     let mut out: Option<Collision> = None;
-    for (tip, a) in samples(seg, step.max(CHECK_STEP)) {
+    let mut prev: Option<([f64; 3], f64)> = None;
+    for (i, (tip, a)) in pts.into_iter().enumerate() {
+        if let Some((p, pa)) = prev {
+            let arc = 0.5 * (p[2] + tip[2]).abs() * (a - pa).to_radians().abs();
+            let d = ((tip[0] - p[0]).powi(2) + (tip[1] - p[1]).powi(2) + (tip[2] - p[2]).powi(2))
+                .sqrt();
+            *since += d.max(arc);
+        }
+        prev = Some((tip, a));
+        // (the samples are at most `step` apart: a point a whisker short of it counts)
+        if *since < step * 0.999 && !(long && i > 0) {
+            continue;
+        }
+        *since = 0.0;
         if let Some((which, depth)) = contact(tip, a) {
             if out.as_ref().is_none_or(|c| depth > c.depth) {
                 out = Some(Collision {
@@ -435,10 +475,15 @@ pub fn simulate_rotary(
         segs.len()
     };
     let mut k = 0;
+    let mut since = f64::INFINITY;
     while k < end {
-        // a run of moves that cannot touch: cut together
+        // the count full in the last program: its stock is not needed
+        if check_only && rep.full() {
+            break;
+        }
+        // a run of moves that cannot touch (or the rest, once the count is full): cut together
         let mut e = k;
-        while e < end && risky(&segs[e]).is_none() {
+        while e < end && (rep.full() || risky(&segs[e]).is_none()) {
             e += 1;
         }
         if e > k {
@@ -452,13 +497,17 @@ pub fn simulate_rotary(
                 tally(&mut st, seg, &eff);
             }
             k = e;
+            since = f64::INFINITY;
             continue;
         }
         let seg = &segs[k];
         if let Some((t, b)) = risky(seg) {
             let contact = |tip: [f64; 3], a: f64| contact_radial(stock, bar, tip, a, &b);
-            if let Some(c) = worst(seg, step, t, &contact) {
+            if let Some(c) = worst(seg, step, t, &contact, &mut since) {
                 rep.add(c);
+                if rep.full() {
+                    rep.more = segs[k + 1..].iter().any(|s| risky(s).is_some());
+                }
             }
         }
         let eff = sim::apply_segment(stock, seg, cutters[k].as_ref(), step);
@@ -483,14 +532,22 @@ pub fn simulate_block(
         program: tp.name.clone(),
         ..Default::default()
     };
+    let mut since = f64::INFINITY;
     for seg in sim3::segments3(std::slice::from_ref(tp)) {
-        if let Some(t) = seg.tool {
-            if let Some(b) = body_for(t).filter(|b| lowest_tip(&seg) + b.lowest() < top) {
+        let body = seg
+            .tool
+            .and_then(|t| body_for(t).map(|b| (t, b)))
+            .filter(|(_, b)| lowest_tip(&seg) + b.lowest() < top);
+        match body {
+            Some((t, b)) if !rep.full() => {
                 let contact = |tip: [f64; 3], _a: f64| contact_block(hm, top, tip, &b);
-                if let Some(c) = worst(&seg, step, t, &contact) {
+                if let Some(c) = worst(&seg, step, t, &contact, &mut since) {
                     rep.add(c);
                 }
             }
+            // (counted to the cap: more of them could collide)
+            Some(_) => rep.more = true,
+            None => since = f64::INFINITY,
         }
         let c = seg.tool.and_then(cutter_for);
         let eff = sim3::apply_segment3(hm, &seg, c.as_ref(), step);

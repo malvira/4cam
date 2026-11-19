@@ -76,6 +76,9 @@ pub fn rotary_rough(
     let mut direction = 1.0;
     b.comment("--- mesh roughing ---");
     for &level in &levels {
+        if crate::budget::over() {
+            break;
+        }
         let mask: Vec<bool> = need.iter().map(|&z| z < level - 1e-6).collect();
         for (mut xa, mut xb) in intervals(&mask, &xs) {
             if direction < 0.0 {

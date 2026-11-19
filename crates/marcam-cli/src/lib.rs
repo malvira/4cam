@@ -646,7 +646,8 @@ fn run_setup(
             if c.count > 0 {
                 println!(
                     "  HOLDER/SHANK COLLISION: {} move(s), deepest {:.3} mm",
-                    c.count, c.max_depth
+                    c.count_text(),
+                    c.max_depth
                 );
                 for k in c.collisions.iter().take(5) {
                     println!(
@@ -927,7 +928,9 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
         if coll.count > 0 {
             println!(
                 "  HOLDER/SHANK COLLISION: {} move(s), deepest {:.3} mm (first at move {})",
-                coll.count, coll.max_depth, coll.collisions[0].move_index
+                coll.count_text(),
+                coll.max_depth,
+                coll.collisions[0].move_index
             );
         }
         println!("  preview: {}", png.display());
