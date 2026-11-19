@@ -57,14 +57,15 @@ fn manifest_fits_solidcraft_rules() {
     let kinds: Vec<&str> = marcam::ops::registry()
         .iter()
         .map(|t| t.kind)
-        .filter(|k| *k != "rotary_turning")
+        .filter(|k| *k != "rotary_turning" && !marcam_solidcraft::NOT_OFFERED.contains(k))
         .collect();
     assert_eq!(
         entries.len(),
         kinds.len(),
-        "one entry per operation type but turning"
+        "one entry per operation type but turning and the ones left to a project"
     );
     assert_eq!(entry_kind("rotary-turning"), None);
+    assert_eq!(entry_kind("parting"), None);
     assert!(entries.len() <= 32);
     for (e, kind) in entries.iter().zip(&kinds) {
         let name = e["name"].as_str().unwrap();

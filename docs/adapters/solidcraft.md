@@ -47,7 +47,9 @@ spelled `-`:
   operations run indexed, with `index_a`).
 
 `rotary_turning` is left out because it needs a revolved profile, and the plugin gets a
-mesh. `rotary-rough` covers the same work on a mesh.
+mesh. `rotary-rough` covers the same work on a mesh. `parting` is left to a marcam project
+(a cut-off belongs with the part's other operations, and SolidCraft caps a manifest at
+16 KiB, about 1 KiB an entry).
 
 Inputs. Only `bodies` is required; marcam defaults everything else.
 

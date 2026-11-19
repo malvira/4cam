@@ -69,9 +69,14 @@ fn input(field: &str, reason: impl Into<String>) -> Error {
 pub fn offered() -> Vec<ops::OperationType> {
     ops::registry()
         .into_iter()
-        .filter(|t| t.geometry != ["profile"])
+        .filter(|t| t.geometry != ["profile"] && !NOT_OFFERED.contains(&t.kind))
         .collect()
 }
+
+/// Operation types the plugin leaves to a marcam project: parting (a cut-off belongs with
+/// the part's other operations; SolidCraft caps manifests at 16 KiB, and each entry costs
+/// about 1 KiB).
+pub const NOT_OFFERED: [&str; 1] = ["parting"];
 
 /// Entry name for an operation type (`rotary_rough` -> `rotary-rough`).
 pub fn entry_name(kind: &str) -> String {
