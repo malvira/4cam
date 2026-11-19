@@ -459,6 +459,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     placeTool();
   }
 
+  const SEEK_CHUNK = 4000;
   async function seek(n) {
     if (!m.session) return;
     // (the place asked for: a playback opened again meanwhile goes there)
@@ -476,7 +477,13 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     try {
       while (m.session && m.stock && m.target !== m.pos) {
         const session = m.session;
-        const want = m.target;
+        // in steps of at most SEEK_CHUNK moves: a newer place asked for (a scrub during the
+        // long run to the end) is taken up after the step under way, not after the whole run
+        // (back: the engine starts again from the top)
+        const goal = m.target;
+        const from = goal < m.pos ? 0 : m.pos;
+        const want = Math.min(goal, from + SEEK_CHUNK);
+        const before = m.pos;
         let result;
         if (m.gpu) {
           // on the GPU: run the segments, read back only the rows they touched
@@ -496,8 +503,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         if (m.session !== session) continue;
         if (!result) break;
         applyRows(result);
-        // (a newer place asked for meanwhile: on to it; else done, even short of it)
-        if (m.target === want) break;
+        // (the engine stopped short, at the end of the program: done)
+        if (m.pos === before || m.pos < want) break;
       }
     } catch (e) {
       // cancelled (the playback went with the engine's worker): nothing more to show
