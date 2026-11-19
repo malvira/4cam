@@ -345,13 +345,8 @@ impl Project {
                 if !ids.insert(format!("op:{}", o.id)) || !ops.insert(o.id.as_str()) {
                     return Err(format!("operation id {:?} is used twice", o.id));
                 }
-                if !numbers.contains(&o.op.tool()) {
-                    return Err(format!(
-                        "operation {:?}: tool T{} is not defined",
-                        o.id,
-                        o.op.tool()
-                    ));
-                }
+                // (an operation whose tool the project does not have is not an invalid project:
+                // it is left out of planning, see `op_plans`)
             }
             for out in &s.outputs {
                 for id in &out.operations {

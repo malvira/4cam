@@ -62,14 +62,23 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   const opById = (id) =>
     t.draft && t.draft.op.id === id ? t.draft.op : t.retype && t.retype.op.id === id ? t.retype.op : setup()?.operations.find((o) => o.id === id);
   const typeOf = (kind) => t.types.find((x) => x.kind === kind);
-  /** A project tool: "T1 flat 3.175" (library tools by their reference). */
+  /** A project tool as it is: inline, or looked up in its library (built-in or the
+   *  person's): { number, kind, diameter, name }. */
+  function toolInfo(x) {
+    if (!x.library) return { number: x.number, kind: x.kind, diameter: x.diameter ?? x.tip_diameter, name: x.description };
+    const libs = [...(state.registry?.libraries || []), ...(window.__marcam.planArgs?.().libraries || [])];
+    const t = libs.find((l) => l.id === x.library)?.tools.find((y) => y.id === x.tool);
+    return { number: x.number, kind: t?.shape?.kind, diameter: t?.shape?.diameter ?? t?.shape?.tip_diameter, name: t?.name || x.tool };
+  }
+  /** A project tool: "T1 flat 3.175 · Spiral O Metal ..." */
   function toolLabel(x) {
-    const d = x.diameter ?? x.tip_diameter;
-    return `T${x.number} ${x.kind || x.tool || "tool"}${d != null ? ` ${d}` : ""}`;
+    const i = toolInfo(x);
+    return `T${i.number} ${i.kind || "tool"}${i.diameter != null ? ` ${i.diameter}` : ""}${i.name ? ` · ${i.name}` : ""}`;
   }
   /** Why tool `x` does not suit type `ty` ("" when it does). */
   function toolMisfit(ty, x) {
-    if (!ty?.tool_shapes?.length || !x?.kind || ty.tool_shapes.includes(x.kind)) return "";
+    const kind = toolInfo(x).kind;
+    if (!ty?.tool_shapes?.length || !kind || ty.tool_shapes.includes(kind)) return "";
     return `${ty.title} takes ${ty.tool_shapes.join(" or ")} tools`;
   }
   /** Why an operation cannot be planned: its error, or its tool missing from the project. */
@@ -824,7 +833,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const notes = [];
     // the tool: kept if its shape suits the new type
     const tool = (t.doc.tools || []).find((x) => x.number === cur.tool);
-    const shapeOk = !tool?.kind || !ty.tool_shapes?.length || ty.tool_shapes.includes(tool.kind);
+    const toolKind = tool && toolInfo(tool).kind;
+    const shapeOk = !toolKind || !ty.tool_shapes?.length || ty.tool_shapes.includes(toolKind);
     // picked faces: kept if the new type bounds itself by faces
     const facesMode = pickModeOf(ty)?.faces;
     const geometry = (cur.geometry || []).filter((g) => (g.kind === "faces" ? facesMode : g.kind === "axial_range" ? !!pickModeOf(ty)?.legacy : true));
@@ -839,7 +849,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.typeNote = { id: cur.id, text: `Cannot change to ${ty.title}: ${e.message}` };
       return renderEditor();
     }
-    if (!shapeOk) notes.push(`tool ${cur.tool} (${tool.kind}) does not suit ${ty.title}: T${result.tool} instead`);
+    if (!shapeOk) notes.push(`tool ${cur.tool} (${toolKind}) does not suit ${ty.title}: T${result.tool} instead`);
     const next = { id: cur.id, ...result, type: kind };
     for (const k of ["name", "color", "enabled"]) if (cur[k] !== undefined) next[k] = cur[k];
     if (geometry.length) next.geometry = geometry;
