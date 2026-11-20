@@ -1,5 +1,5 @@
 //! 2D contours: climb or conventional milling (an outside contour climb-cut runs
-//! counter-clockwise, spindle clockwise), tabs evenly round the outline or placed by hand
+//! clockwise, spindle clockwise: the wall on the tool's right), tabs evenly round the outline or placed by hand
 //! (a fraction of the way round the outline as written, the same place whichever way the
 //! tool goes), a level at the tabs' top, and the machine's preferred direction for new ones.
 
@@ -63,12 +63,15 @@ fn area_at(moves: &[[f64; 3]], z: f64) -> f64 {
 }
 
 #[test]
-fn climb_runs_an_outside_contour_counter_clockwise_conventional_the_other_way() {
+fn climb_runs_an_outside_contour_clockwise_conventional_the_other_way() {
     let bottom = -2.5;
     let climb = cuts(&plate(|_| {}));
     let conv = cuts(&plate(|c| c.direction = Some("conventional".into())));
-    assert!(area_at(&climb, bottom) > 0.0, "climb: counter-clockwise");
-    assert!(area_at(&conv, bottom) < 0.0, "conventional: clockwise");
+    assert!(area_at(&climb, bottom) < 0.0, "climb: clockwise");
+    assert!(
+        area_at(&conv, bottom) > 0.0,
+        "conventional: counter-clockwise"
+    );
 }
 
 #[test]

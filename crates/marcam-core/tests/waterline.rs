@@ -74,6 +74,13 @@ fn the_dome_is_cut_round_at_constant_heights_on_its_steep_part() {
     }
     // (the STL's facets lie up to about 0.08 inside the true sphere)
     assert!(worst < 0.1, "off the surface by {worst:.3} mm");
+    // climb, spindle clockwise: the wall on the tool's right, round the dome clockwise
+    let turn: f64 = pts
+        .windows(2)
+        .filter(|w| (w[0][2] - w[1][2]).abs() < 1e-9)
+        .map(|w| (w[0][0] - 46.0) * (w[1][1] - 20.0) - (w[1][0] - 46.0) * (w[0][1] - 20.0))
+        .sum();
+    assert!(turn < 0.0, "round the dome counter-clockwise ({turn:.0})");
     // not gouged; the G-code clean
     let g = marcam::gouge_check(&job, &tps, mesh.as_ref()).unwrap();
     assert!(g.iter().all(|r| r.max_depth < 0.02), "{g:?}");

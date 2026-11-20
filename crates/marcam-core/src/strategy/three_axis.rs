@@ -508,9 +508,9 @@ pub fn contour(
         "inside" => offset_polygon(&src, -r),
         _ => src,
     };
-    // Climb milling, spindle clockwise, keeps the material on the tool's right: round an
-    // outline (outside, or on it) counter-clockwise, round a hole clockwise. Conventional:
-    // the other way.
+    // Climb milling, spindle clockwise, keeps the wall it cuts on the tool's right: round an
+    // outline (outside, or on it) clockwise, round a hole counter-clockwise (as a bore).
+    // Conventional: the other way.
     let area: f64 = (0..path.len())
         .map(|i| {
             let (a, b) = (path[i], path[(i + 1) % path.len()]);
@@ -518,7 +518,7 @@ pub fn contour(
         })
         .sum();
     let climb = op.direction.as_deref() != Some("conventional");
-    let want_ccw = (op.side != "inside") == climb;
+    let want_ccw = (op.side == "inside") == climb;
     if (area > 0.0) != want_ccw {
         path.reverse();
     }
@@ -1353,7 +1353,7 @@ pub const WATERLINE_MAX_POINTS: usize = 4_000_000;
 /// 3D waterline finishing: at each level from the part's top down to `floor` (every
 /// `step_down`), the tool goes round where it touches the part at that height: the level's
 /// contour on a grid of drop-cutter heights (`sample` apart), followed with the part on the
-/// tool's left (climb with a clockwise spindle; conventional: the other way). With
+/// tool's right (climb with a clockwise spindle; conventional: the other way). With
 /// `min_slope`, only where the surface is at least that steep (the walls a parallel finish
 /// passes down too far apart); shallow stretches are left for it.
 pub fn waterline(
@@ -1433,7 +1433,7 @@ pub fn waterline(
             break;
         }
         // the level's contour: per cell, oriented segments (edge to edge) with the part
-        // (above the level) on the left
+        // (above the level) on the right when climbing
         let mut segs: Vec<(usize, usize)> = Vec::new();
         for j in 0..ny - 1 {
             for i in 0..nx - 1 {
@@ -1461,7 +1461,7 @@ pub fn waterline(
                     }
                 };
                 for (ea, eb) in pairs {
-                    // the part (above) on the left of a -> b
+                    // which side of a -> b the part (above) is on
                     let (pa, pb) = (edge_point(edges[ea], z), edge_point(edges[eb], z));
                     let corner = (0..4)
                         .find(|&q| up[q])
@@ -1476,7 +1476,7 @@ pub fn waterline(
                         .unwrap();
                     let cross_z = (pb[0] - pa[0]) * (corner[1] - pa[1])
                         - (pb[1] - pa[1]) * (corner[0] - pa[0]);
-                    let (sa, sb) = if (cross_z > 0.0) == climb {
+                    let (sa, sb) = if (cross_z < 0.0) == climb {
                         (edges[ea], edges[eb])
                     } else {
                         (edges[eb], edges[ea])
