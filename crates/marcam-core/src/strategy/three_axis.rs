@@ -64,6 +64,7 @@ pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> 
             feed: op.feed,
             plunge_feed: op.plunge_feed,
             ramp: 0.0,
+            adaptive: false,
             smoothing: None,
             regions: Vec::new(),
         };
@@ -96,6 +97,9 @@ pub fn pocket(
     safe: f64,
     op: &Pocket,
 ) -> Result<(), String> {
+    if op.adaptive {
+        return adaptive_pocket(b, d, stock, safe, op);
+    }
     if !op.paths.is_empty() {
         return path_pocket(b, d, stock, safe, op);
     }
@@ -1725,6 +1729,284 @@ pub fn descent_feed(p0: [f64; 3], p1: [f64; 3], feed: f64, plunge: f64, ramp_tan
             .floor()
             .max(1.0),
     )
+}
+
+/// Grid cells for adaptive clearing: a 24th of the tool (coarser if the area is huge).
+fn adaptive_cell(d: f64, w: f64, l: f64) -> f64 {
+    let mut h = (d / 24.0).clamp(0.02, 0.5);
+    while (w / h) * (l / h) > ADAPTIVE_MAX_CELLS as f64 {
+        h *= 1.25;
+    }
+    h
+}
+
+/// Most grid cells an adaptive clearing works on per level.
+pub const ADAPTIVE_MAX_CELLS: usize = 1_500_000;
+
+/// The moves of a level's adaptive clearing at height `z` (the material from `z_top` down):
+/// rapids over the top between runs, helices at the ramp's angle (or plunges), cuts and
+/// links at depth. It ends at the safe height.
+#[allow(clippy::too_many_arguments)]
+fn emit_adaptive(
+    b: &mut Builder,
+    cl: &crate::strategy::adaptive::Cleared,
+    z: f64,
+    z_top: f64,
+    safe: f64,
+    feed: f64,
+    plunge: f64,
+    ramp: f64,
+    climb: bool,
+) {
+    use crate::strategy::adaptive::Step;
+    let z_start = z_top.max(z) + 0.5;
+    for st in &cl.steps {
+        match st {
+            Step::Down(q) => enter(b, safe, q[0], q[1], z_start, z, plunge),
+            Step::Plunge(q) => enter(b, safe, q[0], q[1], z_start, z, plunge),
+            Step::Helix {
+                centre,
+                radius,
+                start,
+            } => {
+                let side = if climb { 1.0 } else { -1.0 };
+                let n = 36;
+                let lp: Vec<[f64; 2]> = (0..=n)
+                    .map(|i| {
+                        let a = start + side * std::f64::consts::TAU * i as f64 / n as f64;
+                        [centre[0] + radius * a.cos(), centre[1] + radius * a.sin()]
+                    })
+                    .collect();
+                let (k, _) = ramp_along(b, safe, &lp, 0, z_start, z, ramp, feed, plunge);
+                // a whole turn at depth, on round to the start
+                for i in 1..=(n + (n - k) % n) {
+                    let q = lp[(k + i) % n];
+                    b.line3(q[0], q[1], z, UP, feed);
+                }
+            }
+            Step::Cut(pts) | Step::Link(pts) => {
+                for q in pts.iter().skip(1) {
+                    b.line3(q[0], q[1], z, UP, feed);
+                }
+            }
+        }
+    }
+    leave(b, safe);
+}
+
+/// A pocket cleared adaptively: at each depth the tool comes down a helix (or plunges, with
+/// no ramp) and cuts at a steady load (the stepover's width) out to the walls, then laps the
+/// walls once.
+fn adaptive_pocket(
+    b: &mut Builder,
+    d: f64,
+    stock: &StockBox,
+    safe: f64,
+    op: &Pocket,
+) -> Result<(), String> {
+    use crate::strategy::adaptive::{clear_level, Grid, Params};
+    let r = d / 2.0;
+    let paths: Vec<Vec<[f64; 2]>> = if op.paths.is_empty() {
+        let [x0, y0, x1, y1] = op.rect;
+        if op.rect == [0.0; 4] {
+            return Err("a pocket needs a rect or closed paths".into());
+        }
+        let (x0, x1, y0, y1) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+        vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]
+    } else {
+        op.paths.clone()
+    };
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for q in paths.iter().flatten() {
+        for k in 0..2 {
+            lo[k] = lo[k].min(q[k]);
+            hi[k] = hi[k].max(q[k]);
+        }
+    }
+    let h = adaptive_cell(d, hi[0] - lo[0], hi[1] - lo[1]);
+    let field = crate::offset::DistanceField::new(&paths, h, r + 4.0 * h);
+    if field.max() <= r + 1e-6 {
+        return Err(format!(
+            "the pocket is nowhere wide enough for the {d} mm tool"
+        ));
+    }
+    let g = Grid {
+        x0: field.x0,
+        y0: field.y0,
+        h: field.h,
+        nx: field.nx,
+        ny: field.ny,
+    };
+    let allowed: Vec<bool> = field.d.iter().map(|&v| v >= r).collect();
+    let inside: Vec<bool> = field.d.iter().map(|&v| v > 0.0).collect();
+    let mut open = vec![true; g.len()];
+    // (pockets climb-mill)
+    let climb = true;
+    let params = Params {
+        r,
+        ae: (op.stepover * d).clamp(0.02 * d, d),
+        climb,
+        helix: if op.ramp > 0.0 { 0.75 * r } else { 0.0 },
+    };
+    // the walls' laps: climb counter-clockwise round the outline, clockwise round islands
+    let laps: Vec<Vec<[f64; 2]>> = field
+        .loops(r)
+        .into_iter()
+        .map(|l| crate::offset::simplify(&l, POCKET_LOOP_TOL))
+        .filter(|l| l.len() >= 4)
+        .collect();
+    let top = op.top.unwrap_or(stock.max[2]);
+    b.comment("--- pocket (adaptive) ---");
+    let mut plunges = 0;
+    let mut z_top = top;
+    for z in levels(top, top - op.depth, op.step_down) {
+        if crate::budget::over() {
+            break;
+        }
+        let cl = clear_level(g, &allowed, &inside, &mut open, params, None);
+        plunges += cl.plunges;
+        emit_adaptive(
+            b,
+            &cl,
+            z,
+            z_top,
+            safe,
+            op.feed,
+            op.plunge_feed,
+            op.ramp,
+            climb,
+        );
+        for lp in &laps {
+            enter(
+                b,
+                safe,
+                lp[0][0],
+                lp[0][1],
+                z_top.max(z) + 0.5,
+                z,
+                op.plunge_feed,
+            );
+            for q in lp.iter().skip(1) {
+                b.line3(q[0], q[1], z, UP, op.feed);
+            }
+            leave(b, safe);
+        }
+        z_top = z;
+    }
+    if plunges > 0 {
+        b.warnings.push(format!(
+            "adaptive pocket: {plunges} plunge(s) straight into the material (no room for a helix, or no ramp)"
+        ));
+    }
+    Ok(())
+}
+
+/// 3D roughing cleared adaptively: at each level, the tool cuts at a steady load (the
+/// stepover's width) wherever it can stand without cutting into the part (plus what is
+/// left for the finish), coming down a helix (or plunging) where nothing is open, linking at
+/// depth across what it has cleared. `stock_top` is the material's top at a point (the stock,
+/// or what the operations before left).
+pub fn adaptive_rough(
+    b: &mut Builder,
+    dc: &DropCutter3,
+    stock_top: &dyn Fn(f64, f64) -> f64,
+    stock: &StockBox,
+    safe: f64,
+    op: &Raster3d,
+) -> Result<(), String> {
+    use crate::strategy::adaptive::{clear_level, Grid, Params};
+    let r = dc.cutter.radius();
+    let d = 2.0 * r;
+    let (x0, x1) = (
+        op.x_range[0].min(op.x_range[1]),
+        op.x_range[0].max(op.x_range[1]),
+    );
+    let (y0, y1) = (
+        op.y_range[0].min(op.y_range[1]),
+        op.y_range[0].max(op.y_range[1]),
+    );
+    // the tool's reach round the range (and its centre there, beside the stock: in the air,
+    // to come in from the side)
+    let m = 2.0 * r + d / 12.0;
+    let h = adaptive_cell(d, x1 - x0 + 2.0 * m, y1 - y0 + 2.0 * m);
+    let g = Grid {
+        x0: x0 - m,
+        y0: y0 - m,
+        h,
+        nx: ((x1 - x0 + 2.0 * m) / h).ceil() as usize + 1,
+        ny: ((y1 - y0 + 2.0 * m) / h).ceil() as usize + 1,
+    };
+    let n = g.len();
+    // the tool's lowest over each point (inside the range), and the material's top
+    let mut surf = vec![f64::INFINITY; n];
+    let mut top_at = vec![f64::NEG_INFINITY; n];
+    for c in 0..n {
+        if c % g.nx == 0 && crate::budget::over() {
+            return Ok(());
+        }
+        let p = g.point(c);
+        let in_range =
+            p[0] >= x0 - 1e-9 && p[0] <= x1 + 1e-9 && p[1] >= y0 - 1e-9 && p[1] <= y1 + 1e-9;
+        let inside_block = p[0] >= stock.min[0]
+            && p[0] <= stock.max[0]
+            && p[1] >= stock.min[1]
+            && p[1] <= stock.max[1];
+        // beside the range only off the stock (within the tool's radius of the range)
+        let near_range = (p[0] - p[0].clamp(x0, x1)).hypot(p[1] - p[1].clamp(y0, y1)) <= r;
+        if in_range || (near_range && !inside_block) {
+            surf[c] = dc.z_at(p[0], p[1], op.floor) + op.leave;
+        }
+        if inside_block {
+            top_at[c] = stock_top(p[0], p[1]);
+        }
+    }
+    let top = top_at
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max)
+        .min(stock.max[2]);
+    let floor = op.floor + op.leave;
+    if top <= floor + 1e-6 {
+        return Ok(());
+    }
+    let climb = op.direction != "conventional";
+    let params = Params {
+        r,
+        ae: raster_stepover(op, &dc.cutter).clamp(0.02 * d, d),
+        climb,
+        helix: if op.ramp_angle > 0.0 { 0.75 * r } else { 0.0 },
+    };
+    let mut open = vec![true; n];
+    b.comment("--- 3D roughing (adaptive) ---");
+    let mut plunges = 0;
+    let mut z_top = top;
+    for z in levels(top, floor, op.step_down.max(d * 0.05)) {
+        if crate::budget::over() {
+            break;
+        }
+        let allowed: Vec<bool> = surf.iter().map(|&s| s <= z + 1e-9).collect();
+        let stock_here: Vec<bool> = top_at.iter().map(|&t| t > z + 1e-6).collect();
+        let cl = clear_level(g, &allowed, &stock_here, &mut open, params, None);
+        plunges += cl.plunges;
+        emit_adaptive(
+            b,
+            &cl,
+            z,
+            z_top,
+            safe,
+            op.feed,
+            op.plunge_feed,
+            op.ramp_angle,
+            climb,
+        );
+        z_top = z;
+    }
+    if plunges > 0 {
+        b.warnings.push(format!(
+            "adaptive roughing: {plunges} plunge(s) straight into the material (no room for a helix, or no ramp angle)"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

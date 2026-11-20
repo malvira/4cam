@@ -326,6 +326,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("step_down", "number", "mm", "Depth per level.").min(0.01),
                 p("stepover", "number", "", "Stepover as a fraction of the tool diameter (shaped pockets: at most 0.7, so the loops' corners leave nothing).").min(0.05).max(1.0),
                 p("ramp", "number", "deg", "A rectangle: down to each level back and forth along the first pass at this angle below the horizontal, instead of plunging (0: plunge).").opt(json!(0.0)).min(0.0).max(45.0),
+                p("adaptive", "boolean", "", "Adaptive clearing: down a helix (at the ramp's angle) and out to the walls at a steady load, the stepover's width (e.g. 0.1 to 0.2 of the tool, with a deeper step-down), then a lap of the walls.").opt(json!(false)),
                 feed(),
                 plunge(),
                 smoothing(),
@@ -456,6 +457,10 @@ pub fn registry() -> Vec<OperationType> {
             group: "roughing",
             params: {
                 let mut ps = raster_params();
+                // adaptive: a steady load, from the outside in or a helix out
+                if let Some(pp) = ps.iter_mut().find(|p| p.name == "pattern") {
+                    *pp = p("pattern", "choice", "", "Back and forth linked at depth, every pass the same way, or adaptive: a steady load (the stepover's width, e.g. 0.1 to 0.2 of the tool with a deep step-down) following the material's edge.").choices(&["zigzag", "one_way", "adaptive"]);
+                }
                 // before the feeds
                 let at = ps.iter().position(|p| p.name == "feed").unwrap_or(ps.len());
                 ps.insert(at, p("rest", "boolean", "", "Rest roughing (vise): cut only where the operations before it in the setup left material, e.g. a smaller tool after a larger one.").opt(json!(false)));

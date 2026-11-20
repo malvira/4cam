@@ -179,6 +179,18 @@ fn rest_map(
     sb: &job::StockBox,
     c: &Cutter,
 ) -> Result<strategy::three_axis::RestMap, String> {
+    let hm = rest_heightmap(job, prior, before, sb, c)?;
+    Ok(strategy::three_axis::RestMap::new(&hm, c.radius()))
+}
+
+/// What the moves before (the earlier programs', and this one's so far) leave of the stock.
+fn rest_heightmap(
+    job: &Job,
+    prior: &[Vec<Move>],
+    before: &[Move],
+    sb: &job::StockBox,
+    c: &Cutter,
+) -> Result<sim3::Heightmap3, String> {
     // cells an eighth of the tool's radius (between 0.02 and 0.25 mm)
     let cell = (c.radius() / 8.0).clamp(0.02, 0.25);
     let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
@@ -198,7 +210,7 @@ fn rest_map(
         let cut = seg.tool.and_then(cutter_of);
         sim3::apply_segment3(&mut hm, seg, cut.as_ref(), cell);
     }
-    Ok(strategy::three_axis::RestMap::new(&hm, c.radius()))
+    Ok(hm)
 }
 
 /// Operations planned before, kept between planning runs: an operation is planned again only
@@ -806,8 +818,19 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     }
                     Operation::Contour(o) => t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Raster3d(o) | Operation::Rough3d(o) | Operation::Waterline(o) => {
+                        let adaptive = o.pattern == "adaptive";
+                        if adaptive && !matches!(op, Operation::Rough3d(_)) {
+                            return Err(err(
+                                "the adaptive pattern is for 3D roughing only".to_string()
+                            ));
+                        }
+                        if adaptive && !three {
+                            return Err(err(
+                                "adaptive roughing needs a 3-axis vise setup".to_string()
+                            ));
+                        }
                         // rest roughing: only where the moves before it left material
-                        let rest = if o.rest {
+                        let rest = if o.rest && !adaptive {
                             if !matches!(op, Operation::Rough3d(_)) {
                                 return Err(err("rest is for 3D roughing only".to_string()));
                             }
@@ -859,7 +882,21 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         } else {
                             None
                         };
-                        if matches!(op, Operation::Waterline(_)) {
+                        if adaptive {
+                            // the material's top: the stock, or what the moves before left
+                            let c = cutter.expect("set above");
+                            let hm = if o.rest {
+                                rest_heightmap(job, &ctx.prior, &b.moves, sb, &c).map_err(err)?
+                            } else {
+                                sim3::Heightmap3::of_job(
+                                    job,
+                                    sb,
+                                    (c.radius() / 8.0).clamp(0.02, 0.25),
+                                )
+                            };
+                            t3::adaptive_rough(&mut b, &dc, &|x, y| hm.at(x, y), sb, safe_r, o)
+                                .map_err(err)?
+                        } else if matches!(op, Operation::Waterline(_)) {
                             t3::waterline(&mut b, &dc, sb, safe_r, o).map_err(err)?
                         } else if o.faces.is_empty() {
                             t3::raster3d_on(

@@ -1,5 +1,6 @@
 //! Toolpath strategies. Each one appends moves to a [`Builder`].
 
+pub mod adaptive;
 pub mod bore;
 pub mod engrave;
 mod flank_chamfer;

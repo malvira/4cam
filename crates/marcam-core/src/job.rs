@@ -563,6 +563,10 @@ pub struct Pocket {
     /// this angle (degrees below the horizontal) instead of plunging; 0: plunge.
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub ramp: f64,
+    /// Adaptive clearing: the tool cuts at a steady load (the stepover's width) from a helix
+    /// out to the walls, instead of the offset loops or the zigzag.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adaptive: bool,
     /// Smoothing tolerance (mm): fewer, smoother moves within it (see
     /// [`crate::smoothing`]); None: the type's default; 0: off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
