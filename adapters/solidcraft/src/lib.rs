@@ -1,10 +1,17 @@
 //! marcam as a SolidCraft plugin.
 //!
-//! The plugin has one entry per marcam operation type (`ops::registry()`, `_` spelled `-`).
-//! An entry takes a SolidCraft body, meshes it with SolidCraft's read-only `model.mesh`
-//! command, builds a one-setup marcam project round it (the body on the rotary axis, its front
-//! at X0, stock, tool and operation filled by marcam's defaults), plans and posts it, and
-//! writes the G-code, the project and the body's STL to the folder the user granted.
+//! Entries (SolidCraft caps a manifest at 16 KiB and 32 entries, so the operations are not
+//! one entry each):
+//! - `plan`: any marcam operation (`operation`, its fields in `params`) on a SolidCraft body:
+//!   it meshes the body with SolidCraft's read-only `model.mesh` command, builds a one-setup
+//!   marcam project round it (the body on the rotary axis, its front at X0, stock, tool and
+//!   operation filled by marcam's defaults), plans and posts it, and writes the G-code, the
+//!   project and the body's STL to the folder the user granted;
+//! - `describe`: the operations and their fields, from marcam's registry at run time;
+//! - `plan-project`: a whole marcam project (`.marcam.toml`) from a folder granted for
+//!   reading, every program's G-code written to the output folder;
+//! - `rotary-rough`, `rotary-finish`, `helical-knurl`, `flank-chamfer`: `plan` for those
+//!   operations with their fields at the top level, as earlier versions had them.
 //!
 //! This file is the host-independent part (it builds and tests natively); `guest.rs` is the
 //! WebAssembly component glue and `bin/pack.rs` makes the installable zip.
@@ -21,6 +28,19 @@ mod guest;
 pub const PLUGIN_ID: &str = "marcam";
 /// The named folder the plugin asks to write into.
 pub const GRANT: &str = "output";
+/// The named folder `plan-project` reads a project (and its mesh files) from.
+pub const PROJECT_GRANT: &str = "project";
+/// The entries but the operations' own.
+pub const PLAN: &str = "plan";
+pub const DESCRIBE: &str = "describe";
+pub const PLAN_PROJECT: &str = "plan-project";
+/// Operations that keep an entry of their own (their fields at the top level).
+pub const ALIASES: [&str; 4] = [
+    "rotary_rough",
+    "rotary_finish",
+    "helical_knurl",
+    "flank_chamfer",
+];
 /// The one SolidCraft command the plugin calls.
 pub const MESH_COMMAND: &str = "model.mesh";
 pub use marcam::body::{DEFAULT_MACHINE, DEFAULT_RPM, DEFAULT_TOOL_DIAMETER, DEFAULT_VBIT_ANGLE};
@@ -64,31 +84,76 @@ fn input(field: &str, reason: impl Into<String>) -> Error {
     }
 }
 
-/// The operation types offered as entries: all but those that only work from a revolved
+/// The operation types the plugin plans: all but those that only work from a revolved
 /// profile (`rotary_turning`), since the plugin gets the part as a mesh.
 pub fn offered() -> Vec<ops::OperationType> {
     ops::registry()
         .into_iter()
-        .filter(|t| t.geometry != ["profile"] && !NOT_OFFERED.contains(&t.kind))
+        .filter(|t| t.geometry != ["profile"])
         .collect()
 }
-
-/// Operation types the plugin leaves to a marcam project: parting (a cut-off belongs with
-/// the part's other operations) and waterline finishing (a 3-axis finish after a parallel
-/// one); SolidCraft caps manifests at 16 KiB, and each entry costs about 1 KiB.
-pub const NOT_OFFERED: [&str; 2] = ["parting", "waterline"];
 
 /// Entry name for an operation type (`rotary_rough` -> `rotary-rough`).
 pub fn entry_name(kind: &str) -> String {
     kind.replace('_', "-")
 }
 
-/// Operation type for an entry name, if the registry has it.
+/// Operation type of an operation's own entry ([`ALIASES`]), if it is one.
 pub fn entry_kind(entry: &str) -> Option<&'static str> {
+    ALIASES.into_iter().find(|k| entry_name(k) == entry)
+}
+
+/// Operation type for a name as `plan` takes it (`pocket`, or `rotary-rough` spelled as an
+/// entry), if the plugin offers it.
+pub fn operation_kind(name: &str) -> Option<&'static str> {
     offered()
         .into_iter()
         .map(|t| t.kind)
-        .find(|k| entry_name(k) == entry)
+        .find(|k| *k == name || entry_name(k) == name)
+}
+
+/// The operation an entry runs and its inputs with the operation's fields at the top level:
+/// an alias's as given; `plan`'s `operation` and `params` (whose fields go to the top level;
+/// a field given in both is refused).
+pub fn operation_call(entry: &str, params: &Value) -> Result<(&'static str, Value), Error> {
+    if let Some(kind) = entry_kind(entry) {
+        return Ok((kind, params.clone()));
+    }
+    if entry != PLAN {
+        return Err(input("entry", format!("no marcam entry {entry:?}")));
+    }
+    let name = params
+        .get("operation")
+        .and_then(Value::as_str)
+        .ok_or_else(|| input("operation", "name the operation (see the describe entry)"))?;
+    let kind = operation_kind(name).ok_or_else(|| {
+        input(
+            "operation",
+            format!(
+                "no marcam operation {name:?}: one of {}",
+                offered()
+                    .iter()
+                    .map(|t| t.kind)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+    })?;
+    let mut out = params.as_object().cloned().unwrap_or_default();
+    out.remove("operation");
+    match out.remove("params") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(fields)) => {
+            for (k, v) in fields {
+                if out.contains_key(&k) {
+                    return Err(input(&k, "given twice: as an input and in params"));
+                }
+                out.insert(k, v);
+            }
+        }
+        Some(_) => return Err(input("params", "the operation's fields, as an object")),
+    }
+    Ok((kind, Value::Object(out)))
 }
 
 fn number(min: Option<f64>) -> Value {
@@ -144,8 +209,9 @@ fn tool_kinds(t: &ops::OperationType) -> Vec<&'static str> {
         .collect()
 }
 
-/// Input schema of the entry for `t`: the common inputs, then the operation's fields.
-pub fn input_schema(t: &ops::OperationType) -> Value {
+/// The inputs every planning entry takes: the body, its placement, machine, tool, stock and
+/// name (`tool_kinds` the tool kinds offered, `vbit` with a V-bit's angle).
+fn common_inputs(tool_kinds: &[&str], vbit: bool) -> Map<String, Value> {
     let machines: Vec<String> = profiles::builtin_machines()
         .into_iter()
         .map(|m| m.id)
@@ -169,13 +235,13 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
     );
     props.insert(
         "tool_kind".into(),
-        json!({"enum": tool_kinds(t), "default": t.tool_shapes.first()}),
+        json!({"enum": tool_kinds, "default": tool_kinds.first()}),
     );
     props.insert(
         "tool_diameter".into(),
         json!({"type": "number", "minimum": 0, "default": DEFAULT_TOOL_DIAMETER}),
     );
-    if t.tool_shapes.contains(&"vbit") {
+    if vbit {
         props.insert(
             "vbit_angle".into(),
             json!({"type": "number", "minimum": 0, "maximum": 180, "default": DEFAULT_VBIT_ANGLE}),
@@ -194,6 +260,13 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
         json!({"type": "integer", "minimum": 1, "default": DEFAULT_RPM}),
     );
     props.insert("name".into(), json!({"type": "string"}));
+    props
+}
+
+/// Input schema of an operation's own entry ([`ALIASES`]): the common inputs, then the
+/// operation's fields.
+pub fn input_schema(t: &ops::OperationType) -> Value {
+    let mut props = common_inputs(&tool_kinds(t), t.tool_shapes.contains(&"vbit"));
     for p in &t.params {
         // the ramp angle and the smoothing stay at marcam's defaults here (SolidCraft caps
         // manifests at 16 KiB; a marcam project sets them per operation)
@@ -202,6 +275,72 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
         }
     }
     json!({"type": "object", "required": ["bodies"], "properties": props})
+}
+
+/// Input schema of `plan`: the common inputs, the operation, and its fields as an object
+/// (`describe` lists them; marcam names a wrong one).
+pub fn plan_schema() -> Value {
+    let mut props = common_inputs(&["flat", "ball", "vbit"], true);
+    let kinds: Vec<&str> = offered().iter().map(|t| t.kind).collect();
+    props.insert("operation".into(), json!({"enum": kinds}));
+    props.insert("params".into(), json!({"type": "object"}));
+    json!({"type": "object", "required": ["bodies", "operation"], "properties": props})
+}
+
+/// The operations the plugin plans and their fields (from marcam's registry), and the
+/// inputs `plan` takes besides: `operation` limits it to one.
+pub fn describe(params: &Value) -> Result<Value, Error> {
+    let only = match params.get("operation") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let name = v.as_str().unwrap_or("");
+            Some(
+                operation_kind(name)
+                    .ok_or_else(|| input("operation", format!("no marcam operation {name:?}")))?,
+            )
+        }
+    };
+    let ops: Vec<Value> = offered()
+        .iter()
+        .filter(|t| only.is_none_or(|k| k == t.kind))
+        .map(|t| {
+            let fields: Vec<Value> = t
+                .params
+                .iter()
+                .filter(|p| p.name != "tool" && !p.name.is_empty())
+                .map(|p| serde_json::to_value(p).unwrap_or(Value::Null))
+                .collect();
+            json!({
+                "operation": t.kind,
+                "title": t.title,
+                "description": t.description,
+                "group": t.group,
+                "tool_kinds": tool_kinds(t),
+                "own_entry": entry_kind(&entry_name(t.kind)).map(|_| entry_name(t.kind)),
+                "fields": fields,
+            })
+        })
+        .collect();
+    let mut inputs = common_inputs(&["flat", "ball", "vbit"], true);
+    inputs.insert(
+        "operation".into(),
+        json!({"enum": offered().iter().map(|t| t.kind).collect::<Vec<_>>()}),
+    );
+    inputs.insert(
+        "params".into(),
+        json!({"type": "object", "description": "the operation's fields"}),
+    );
+    let machines: Vec<Value> = profiles::builtin_machines()
+        .into_iter()
+        .map(|m| json!({"id": m.id, "name": m.name}))
+        .collect();
+    Ok(json!({
+        "plugin": PLUGIN_ID,
+        "version": env!("CARGO_PKG_VERSION"),
+        "inputs": inputs,
+        "operations": ops,
+        "machines": machines,
+    }))
 }
 
 /// Operation fields the plugin does not offer: marcam's defaults apply (tabs placed by hand,
@@ -223,16 +362,21 @@ pub const LEFT_AT_DEFAULT: [&str; 11] = [
 
 /// The package manifest (`plugin.json`), generated from the operation registry.
 pub fn manifest() -> Value {
-    let entries: Vec<Value> = offered()
-        .iter()
-        .map(|t| {
-            json!({
-                "name": entry_name(t.kind),
-                "effect": "read",
-                "input_schema": input_schema(t),
-            })
-        })
-        .collect();
+    let mut entries = vec![
+        json!({"name": PLAN, "effect": "read", "input_schema": plan_schema()}),
+        json!({"name": DESCRIBE, "effect": "read", "input_schema":
+            {"type": "object", "properties": {"operation": {"type": "string"}}}}),
+        json!({"name": PLAN_PROJECT, "effect": "read", "input_schema":
+            {"type": "object", "required": ["project"], "properties": {"project": {"type": "string", "minLength": 1}}}}),
+    ];
+    for k in ALIASES {
+        let t = ops::find(k).expect("an alias is a registry type");
+        entries.push(json!({
+            "name": entry_name(k),
+            "effect": "read",
+            "input_schema": input_schema(&t),
+        }));
+    }
     json!({
         "id": PLUGIN_ID,
         "name": "marcam",
@@ -244,7 +388,10 @@ pub fn manifest() -> Value {
             "entries": entries,
             "commands": [MESH_COMMAND],
             "limits": {"fuel": LIMITS.0, "memory_mib": LIMITS.1, "deadline_ms": LIMITS.2},
-            "permissions": {"files": [{"name": GRANT, "read": false, "write": true}]},
+            "permissions": {"files": [
+                {"name": GRANT, "read": false, "write": true},
+                {"name": PROJECT_GRANT, "read": true, "write": false},
+            ]},
         },
     })
 }
@@ -347,14 +494,16 @@ pub struct Outcome {
     pub result: Value,
 }
 
-/// Build the project for one entry: the body (an STL in component-local mm) placed on the
-/// rotary axis, default stock and tool, and the operation filled by marcam's defaults with
-/// the given fields on top ([`marcam::body::body_project`], which every CAD adapter shares).
-/// Returns the project JSON and the program name.
+/// Build the project for one entry (`plan` or an operation's own): the body (an STL in
+/// component-local mm) placed on the rotary axis, default stock and tool, and the operation
+/// filled by marcam's defaults with the given fields on top
+/// ([`marcam::body::body_project`], which every CAD adapter shares). Returns the project JSON
+/// and the program name.
 pub fn build_project(entry: &str, params: &Value, stl: &[u8]) -> Result<(Value, String), Error> {
-    let kind = entry_kind(entry)
-        .ok_or_else(|| input("entry", format!("no marcam operation {entry:?}")))?;
-    let t = ops::find(kind).ok_or_else(|| input("entry", "unknown operation"))?;
+    let (kind, params) = operation_call(entry, params)?;
+    let params = &params;
+    let entry = &entry_name(kind);
+    let t = ops::find(kind).ok_or_else(|| input("operation", "unknown operation"))?;
     if params.is_object() {
         // the entry's inputs: no tapered ball here (no tip or taper inputs)
         if let Some(k) = params.get("tool_kind").and_then(Value::as_str) {
@@ -391,11 +540,18 @@ pub fn build_project(entry: &str, params: &Value, stl: &[u8]) -> Result<(Value, 
 /// Plan and post a project built by [`build_project`] the way the `marcam run` command does,
 /// with the body STL standing in for the project's mesh file.
 pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String)>, Value), Error> {
-    let text = project.to_string();
-    let meshes = |src: &MeshSource| src.mesh(stl).ok();
+    plan_and_post_with(&project.to_string(), &|src: &MeshSource| src.mesh(stl).ok())
+}
+
+/// Plan and post a project (JSON or TOML text) the way `marcam run` does, its mesh files from
+/// `meshes`: each program's name and G-code, and the report.
+pub fn plan_and_post_with(
+    text: &str,
+    meshes: &dyn Fn(&MeshSource) -> Option<marcam::Mesh>,
+) -> Result<(Vec<(String, String)>, Value), Error> {
     let libraries = profiles::builtin_libraries();
     let jobs =
-        marcam::project::jobs_from_any_with(&text, &libraries, &meshes).map_err(Error::Engine)?;
+        marcam::project::jobs_from_any_with(text, &libraries, meshes).map_err(Error::Engine)?;
     let mut programs = Vec::new();
     let mut report = Vec::new();
     for (_, job) in &jobs {
@@ -405,13 +561,12 @@ pub fn plan_and_post(project: &Value, stl: &[u8]) -> Result<(Vec<(String, String
             .unwrap_or_else(|| DEFAULT_MACHINE.into());
         let profile = profiles::builtin_machine(&wanted)
             .ok_or_else(|| Error::Engine(format!("no built-in machine {wanted:?}")))?;
-        let mesh = job
-            .part
-            .mesh
-            .as_ref()
-            .map(|m| m.mesh(stl))
-            .transpose()
-            .map_err(|e| Error::Engine(e.to_string()))?;
+        let mesh = match &job.part.mesh {
+            Some(m) => Some(meshes(m).ok_or_else(|| {
+                Error::Engine(format!("the mesh {:?} could not be read", m.file))
+            })?),
+            None => None,
+        };
         let tps = plan_with_mesh(job, mesh.as_ref()).map_err(|e| Error::Engine(e.to_string()))?;
         let limits: Vec<Value> = profiles::check_limits(job, &tps, &profile)
             .into_iter()
@@ -466,6 +621,21 @@ pub fn run_entry(entry: &str, params: &Value, mesh_result: &Value) -> Result<Out
                 .into_bytes(),
         },
     ];
+    files.extend(program_files(programs)?);
+    name_written(&mut report, &files);
+    let written: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    let result = json!({
+        "operation": operation_call(entry, params)?.0,
+        "folder": GRANT,
+        "files": written,
+        "programs": report,
+    });
+    Ok(Outcome { files, result })
+}
+
+/// Each program's G-code as a file (gzipped past SolidCraft's write limit).
+fn program_files(programs: Vec<(String, String)>) -> Result<Vec<OutFile>, Error> {
+    let mut files = Vec::new();
     for (prog, gcode) in programs {
         files.push(if gcode.len() > MAX_WRITE {
             OutFile {
@@ -486,7 +656,11 @@ pub fn run_entry(entry: &str, params: &Value, mesh_result: &Value) -> Result<Out
             f.data.len()
         )));
     }
-    // name the file actually written (`.nc.gz` for a long program)
+    Ok(files)
+}
+
+/// The report names the file actually written (`.nc.gz` for a long program).
+fn name_written(report: &mut Value, files: &[OutFile]) {
     for r in report.as_array_mut().into_iter().flatten() {
         if let Some(file) = r.get("file").and_then(Value::as_str).map(str::to_string) {
             if files.iter().any(|f| f.path == format!("{file}.gz")) {
@@ -494,9 +668,47 @@ pub fn run_entry(entry: &str, params: &Value, mesh_result: &Value) -> Result<Out
             }
         }
     }
+}
+
+/// `plan-project`: the marcam project at `params.project` (a `.marcam.toml` or `.json`, a
+/// path in the project folder), its mesh files beside it, read with `read`; every program's
+/// G-code to write.
+pub fn plan_project(
+    params: &Value,
+    read: &dyn Fn(&str) -> Result<Vec<u8>, Error>,
+) -> Result<Outcome, Error> {
+    let path = params
+        .get("project")
+        .and_then(Value::as_str)
+        .filter(|p| !p.trim().is_empty())
+        .ok_or_else(|| input("project", "the project file's path in the project folder"))?;
+    if path.starts_with('/') || path.contains('\\') || path.split('/').any(|c| c == "..") {
+        return Err(input(
+            "project",
+            "a path inside the project folder, with / between folders",
+        ));
+    }
+    let bytes = read(path)?;
+    let text = String::from_utf8(bytes).map_err(|_| input("project", "not a text file"))?;
+    // mesh files are relative to the project's folder
+    let dir = path.rsplit_once('/').map_or("", |(d, _)| d).to_string();
+    let meshes = |src: &MeshSource| {
+        let file = if dir.is_empty() {
+            src.file.clone()
+        } else {
+            format!("{dir}/{}", src.file)
+        };
+        src.mesh(&read(&file).ok()?).ok()
+    };
+    let (programs, mut report) = plan_and_post_with(&text, &meshes)?;
+    if programs.is_empty() {
+        return Err(input("project", "no programs to plan"));
+    }
+    let files = program_files(programs)?;
+    name_written(&mut report, &files);
     let written: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     let result = json!({
-        "operation": entry_kind(entry),
+        "project": path,
         "folder": GRANT,
         "files": written,
         "programs": report,
