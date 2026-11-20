@@ -50,7 +50,7 @@ startWorker("sim");
 /** Stop what the engine is simulating (a long simulation): its worker is ended and a new
  *  one started; every simulation call waiting on it fails with "cancelled". Its playback
  *  goes with it (made again when next needed); planning goes on in the other. */
-function cancelEngine() {
+function cancelEngine(why = "cancelled") {
   simLock.drop();
   workers.sim.terminate();
   const waiting = [...pending.entries()].filter(([, p]) => p.worker === "sim");
@@ -60,7 +60,8 @@ function cancelEngine() {
   startWorker("sim");
   state.epoch = (state.epoch || 0) + 1;
   window.__marcam.machining?.lost?.();
-  for (const [, p] of waiting) p.reject(new Error("cancelled"));
+  // ("superseded": a project opened or started meanwhile; nothing to say about it)
+  for (const [, p] of waiting) p.reject(new Error(why));
 }
 
 // ---- the simulation's progress: a ring in a corner of the 3D view while the engine
@@ -386,7 +387,7 @@ const NO_OPS = "No operations: add one in the project tree (or use a detected fe
 async function resetProject(msg, actions) {
   // a simulation of the project going (the background one after a plan) is stopped: the
   // engine works for the new one at once (its part drawn, its plan) instead of after it
-  if (simRing.active) cancelEngine();
+  if (simRing.active) cancelEngine("superseded");
   state.genRun = (state.genRun || 0) + 1;
   state.epoch = (state.epoch || 0) + 1;
   clearTimeout(autoTimer);
@@ -965,7 +966,9 @@ async function simulateLocked(opts = {}) {
     const hits = result.stocks.reduce((n, st) => n + (st.collisions?.count || 0), 0);
     if (s && (s.rapid_hits || s.gouge_cells || hits)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s), ${hits} holder/shank collision(s)`);
   } catch (e) {
-    if (e.message === "cancelled") {
+    if (e.message === "superseded") {
+      // (the project went: its simulation with it)
+    } else if (e.message === "cancelled") {
       if (!opts.quiet) setStatus("Simulation cancelled", "done");
     } else if (opts.quiet) {
       // (a background run that failed: the person asked for nothing, so nothing is shown)
@@ -1380,7 +1383,7 @@ async function drawModel() {
     } catch (e) {
       // the engine restarted under the draw (a cancel, a project opened meanwhile): drawn
       // again once it is back, not left without its part
-      if (e?.message === "cancelled") {
+      if (e?.message === "cancelled" || e?.message === "superseded") {
         if (v.modelKey === key) v.modelKey = null;
         setTimeout(drawModel, 50);
         return;

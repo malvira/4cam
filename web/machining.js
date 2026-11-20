@@ -508,7 +508,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       }
     } catch (e) {
       // cancelled (the playback went with the engine's worker): nothing more to show
-      if (e.message !== "cancelled") throw e;
+      if (e.message !== "cancelled" && e.message !== "superseded") throw e;
     } finally {
       m.busy = false;
     }
@@ -626,6 +626,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       // in the background
       window.__marcam.statsInBackground?.();
     } catch (e) {
+      // (the project went meanwhile: nothing to say)
+      if (e.message === "superseded") return;
       if (opts.auto) {
         // (opened by itself: the status line stays the person's)
         if (e.message !== "cancelled") showError(e.message);

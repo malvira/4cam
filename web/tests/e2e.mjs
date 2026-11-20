@@ -172,6 +172,21 @@ function consoleErrors() {
 // the playback open and nothing more coming for it (no seek, no simulation running or waiting:
 // a reopen after an eye change is one)
 const PLAYBACK_SETTLED = "!!window.__marcam.state.machining?.open && !window.__marcam.state.machining.busy && !window.__marcam.simLock.busy && !window.__marcam.simLock.waiting && document.body.dataset.state !== 'busy'";
+// Stop the simulations running by themselves (the stock after a plan): cancelled until none
+// runs or waits for half a second (a slow machine takes minutes over them)
+async function stopBackground() {
+  const busy = "!!(window.__marcam.simRing.active || window.__marcam.simLock.busy || window.__marcam.simLock.waiting)";
+  for (let k = 0; k < 120; k++) {
+    if (await js(busy)) {
+      await js("window.__marcam.cancelEngine(); true");
+    } else {
+      await sleep(500);
+      if (!(await js(busy))) return;
+    }
+    await sleep(250);
+  }
+  throw new Error(`the background simulation does not stop: ${await js("JSON.stringify({ ring: window.__marcam.simRing.active, lock: window.__marcam.simLock.busy, waiting: window.__marcam.simLock.waiting, status: document.getElementById('status').textContent })")}`);
+}
 // The operation types the tree offers (the tree renders after a plan: waited for)
 async function addTypes() {
   await waitFor(() => js("!!document.getElementById('treeAddType')"), "the tree's operation types", 30000);
@@ -986,7 +1001,9 @@ try {
       return info;
     }
     const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
-    const emptyReady = () => waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 15000);
+    const emptyReady = () => waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 60000).catch(async (e) => {
+      throw new Error(`${e.message}: ${await js("JSON.stringify({ empty: !!document.getElementById('emptyState'), state: document.body.dataset.state, status: document.getElementById('status').textContent })")}`);
+    });
 
     // New, from a project with unsaved edits: asked first; declining keeps it
     await js("document.getElementById('job').dispatchEvent(new Event('input')); true");
@@ -2155,8 +2172,7 @@ try {
     await sel("ultra");
     // (the background simulation after the plan finishes first: this one is the person's)
     // (stopped rather than waited for: on a slow machine it takes minutes)
-    await js("if (window.__marcam.simRing.active || window.__marcam.simLock.busy) window.__marcam.cancelEngine(); true");
-    await waitFor(() => js("!window.__marcam.simLock.busy && !window.__marcam.simLock.waiting && document.getElementById('simRing').classList.contains('hidden')"), "the background simulation to stop", 30000);
+    await stopBackground();
     const nDialogs = cdp.dialogs.length;
     cdp.dialogAnswer = true;
     await js("document.getElementById('simulate').click(); true");
@@ -2313,8 +2329,7 @@ try {
     await waitDone("the knob for the playback", 120000);
     await js("const s = document.getElementById('simStock'); s.checked = false; s.dispatchEvent(new Event('change')); true");
     // (the background simulation after the plan stopped first: on a slow machine it takes minutes)
-    await js("if (window.__marcam.simRing.active || window.__marcam.simLock.busy) window.__marcam.cancelEngine(); true");
-    await waitFor(() => js("!window.__marcam.simLock.busy && !window.__marcam.simLock.waiting"), "the background simulation to stop", 30000);
+    await stopBackground();
     await js("document.getElementById('simOpen').click(); true");
     await waitFor(() => js("window.__marcam.state.machining.open && window.__marcam.state.machining.session?.path_only === true"), "the playback without stock", 60000);
     const noStock = await js(`(() => { const m = window.__marcam.state.machining, v = window.__marcam.state.three; return { stockMesh: !!m.stockMesh, path: !!m.pathLine, part: v.groups.work.children.filter((c) => c.userData.shared).length, tool: v.groups.toolModel.visible, times: m.session.times?.length || 0, segs: m.session.segments, label: document.getElementById('simLabel').textContent }; })()`);
