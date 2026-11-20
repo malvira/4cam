@@ -83,6 +83,9 @@ pub struct Holding {
     pub kind: String,
     #[serde(default)]
     pub tailstock: bool,
+    /// A bar's length held in the chuck (mm): the rest sticks out to be cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chuck: Option<f64>,
 }
 
 impl Default for Holding {
@@ -90,6 +93,7 @@ impl Default for Holding {
         Holding {
             kind: "rotary_chuck".into(),
             tailstock: false,
+            chuck: None,
         }
     }
 }

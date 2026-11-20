@@ -1417,13 +1417,16 @@ async function drawModel() {
     stockNew.push(box);
     fitKey = JSON.stringify(sb);
     v.bounds = { xmin: sb.min[0], xmax: sb.max[0], R: Math.max(sb.max[1] - sb.min[1], sb.max[2] - sb.min[2]) / 2 };
-  } else if (st?.radius) {
-    // the bar: from the part's front face back by its length
+  } else if (st?.radius || ["square", "rect", "hex"].includes(st?.shape)) {
+    // the bar: from the part's front face back by its length (square, rectangular and hex
+    // bars as prisms from their corners)
     const front = Math.max(0, bounds ? bounds[1][0] : 0);
     const xmin = front - (st.length || 30) - 1, xmax = front + 1;
-    stockNew.push(stockObject(THREE, toGeometry(THREE, cylinder(st.radius, xmin, xmax, 96))));
-    v.bounds = { xmin, xmax, R: st.radius };
-    fitKey = JSON.stringify([st.radius, Math.round(xmin), Math.round(xmax)]);
+    const corners = barCorners(st);
+    const R = corners ? Math.max(...corners.map(([y, z]) => Math.hypot(y, z))) : st.radius;
+    stockNew.push(stockObject(THREE, corners ? prismGeometry(THREE, corners, xmin, xmax) : toGeometry(THREE, cylinder(st.radius, xmin, xmax, 96))));
+    v.bounds = { xmin, xmax, R };
+    fitKey = JSON.stringify([R, Math.round(xmin), Math.round(xmax)]);
   }
   clear(groups.stock);
   clear(groups.part);
@@ -1530,6 +1533,48 @@ function ramp(t) {
   const stops = [[40, 60, 200], [30, 190, 210], [240, 210, 40], [210, 40, 40]];
   const f = t * 3, i = Math.min(2, Math.floor(f)), u = f - i;
   return stops[i].map((c, k) => (c * (1 - u) + stops[i + 1][k] * u) / 255);
+}
+
+/** A square, rectangular or hex bar's corners (y, z) about the axis, counter-clockwise; null
+ *  for a round one. Angles as the engine's Section (degrees from +Y towards +Z). */
+function barCorners(st) {
+  const a = ((st.angle || 0) * Math.PI) / 180;
+  if (st.shape === "rect") {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([u, w]) => {
+      const y = (u * st.width) / 2, z = (w * st.height) / 2;
+      return [y * c - z * s, y * s + z * c];
+    });
+  }
+  if (st.shape === "square" || st.shape === "hex") {
+    const n = st.shape === "square" ? 4 : 6;
+    const af = st.shape === "square" ? st.side : st.across_flats;
+    const rc = af / 2 / Math.cos(Math.PI / n);
+    return Array.from({ length: n }, (_, k) => {
+      const phi = Math.PI / 2 + a + Math.PI / n + (k * 2 * Math.PI) / n;
+      return [rc * Math.cos(phi), rc * Math.sin(phi)];
+    });
+  }
+  return null;
+}
+
+/** A prism along X from xmin to xmax with the section `pts` (y, z), closed. */
+function prismGeometry(THREE, pts, xmin, xmax) {
+  const pos = [];
+  const quad = (a, b, c, d) => pos.push(...a, ...b, ...c, ...a, ...c, ...d);
+  const n = pts.length;
+  for (let k = 0; k < n; k++) {
+    const [y0, z0] = pts[k], [y1, z1] = pts[(k + 1) % n];
+    quad([xmin, y0, z0], [xmax, y0, z0], [xmax, y1, z1], [xmin, y1, z1]);
+  }
+  for (let k = 1; k + 1 < n; k++) {
+    pos.push(xmax, ...pts[0], xmax, ...pts[k], xmax, ...pts[k + 1]);
+    pos.push(xmin, ...pts[0], xmin, ...pts[k + 1], xmin, ...pts[k]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return g;
 }
 
 /** Indexed geometry from a web/meshes.js mesh, with normals (and colours if present). */

@@ -6,7 +6,23 @@
 const DEFAULT_MARGIN = { rotary: 0.5, indexed: 0.5, vise: 2 };
 const DEFAULT_ORIGIN = { rotary: 0, indexed: 0, vise: 0.5 };
 
-export function setupDialog({ $, state, parseStl, readPart, partSummary, placePart, KINDS }) {
+// common stock sizes, in mm (imperial ones given in inches)
+const IN = 25.4;
+const COMMON = {
+  block: [3, 5, 6, 8, 10, 12, 15, 20, 25, 30].map((z) => ({ label: `plate ${z} mm thick`, z }))
+    .concat([[1 / 8, "1/8"], [1 / 4, "1/4"], [3 / 8, "3/8"], [1 / 2, "1/2"], [3 / 4, "3/4"], [1, "1"]].map(([z, l]) => ({ label: `plate ${l}" thick`, z: z * IN }))),
+  round: [6, 8, 10, 12, 16, 20, 22, 25, 30, 32, 35, 40, 45, 50].map((d) => ({ label: `Ø${d} mm`, d }))
+    .concat([[1 / 4, "1/4"], [3 / 8, "3/8"], [1 / 2, "1/2"], [5 / 8, "5/8"], [3 / 4, "3/4"], [7 / 8, "7/8"], [1, "1"], [1.25, "1-1/4"], [1.5, "1-1/2"], [2, "2"]].map(([d, l]) => ({ label: `Ø${l}"`, d: d * IN }))),
+  square: [8, 10, 12, 15, 16, 20, 25, 30, 40, 50].map((d) => ({ label: `${d} mm square`, d }))
+    .concat([[1 / 4, "1/4"], [3 / 8, "3/8"], [1 / 2, "1/2"], [3 / 4, "3/4"], [1, "1"], [1.25, "1-1/4"], [1.5, "1-1/2"], [2, "2"]].map(([d, l]) => ({ label: `${l}" square`, d: d * IN }))),
+  rect: [[20, 5], [20, 10], [25, 10], [30, 10], [30, 15], [40, 10], [40, 20], [50, 10], [50, 25]].map(([w, h]) => ({ label: `${w} x ${h} mm`, w, h }))
+    .concat([[1, 1 / 4, '1 x 1/4"'], [1, 1 / 2, '1 x 1/2"'], [1.5, 1 / 2, '1-1/2 x 1/2"'], [2, 1 / 2, '2 x 1/2"'], [2, 1, '2 x 1"']].map(([w, h, l]) => ({ label: l, w: w * IN, h: h * IN }))),
+  hex: [8, 10, 13, 17, 19, 22, 24, 27, 30, 32, 36, 41].map((d) => ({ label: `${d} mm across flats`, d }))
+    .concat([[1 / 4, "1/4"], [5 / 16, "5/16"], [3 / 8, "3/8"], [1 / 2, "1/2"], [5 / 8, "5/8"], [3 / 4, "3/4"], [7 / 8, "7/8"], [1, "1"], [1.25, "1-1/4"]].map(([d, l]) => ({ label: `${l}" across flats`, d: d * IN }))),
+};
+const BAR_SHAPES = ["round", "square", "rect", "hex"];
+
+export function setupDialog({ $, state, parseStl, readPart, partSummary, placePart, KINDS, stockSpecOf }) {
   const dlg = $("setupDialog");
   let cur = null; // { mode, preset, parsed, resolve }
 
@@ -17,18 +33,229 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
 
   /** The part's triangles in mm, if there is a part (the chosen file, else the project's). */
   function tris() {
-    const t = cur?.parsed?.tris ?? cur?.preset?.tris ?? null;
+    const t = cur?.parsed?.tris ?? cur?.preset?.tris ?? cur?.preset?.previewTris ?? null;
     if (!t) return null;
     return cur.parsed && $("sdUnits").value === "inch" ? t.map((v) => v * 25.4) : t;
   }
 
-  function explicit() {
-    if (stockMode() !== "explicit") return undefined;
-    return bar(kind()) ? { dia: num("sdDia"), len: num("sdLen") } : { bx: num("sdBx"), by: num("sdBy"), bz: num("sdBz") };
+  // ---- the stock: its shape, fitted to the part or given, in mm or inches
+  const shape = () => dlg.querySelector('input[name="sdShape"]:checked')?.value ?? (bar(kind()) ? "round" : "block");
+  const unit = () => ($("sdStockUnits").value === "inch" ? IN : 1);
+  const STOCK_FIELDS = ["sdMargin", "sdMxl", "sdMxh", "sdMyl", "sdMyh", "sdMzb", "sdChuckFit", "sdDia", "sdSide", "sdW", "sdH", "sdAf", "sdAc", "sdLen", "sdChuck", "sdBx", "sdBy", "sdBz", "sdPx", "sdPy"];
+  const mm = (id) => {
+    const v = num(id);
+    return v === undefined ? undefined : v * unit();
+  };
+  const setMm = (id, v) => ($(id).value = v == null || !Number.isFinite(v) ? "" : +(v / unit()).toFixed(4));
+
+  /** What the form says of the stock (see placePart's `stock`), in mm. */
+  function stockSpec() {
+    const sh = shape();
+    const angle = num("sdAngle") || 0;
+    if (stockMode() !== "explicit") {
+      return sh === "block"
+        ? { shape: sh, mode: "fit", margins: { xl: mm("sdMxl"), xh: mm("sdMxh"), yl: mm("sdMyl"), yh: mm("sdMyh"), bottom: mm("sdMzb") } }
+        : { shape: sh, mode: "fit", margin: mm("sdMargin"), chuck: mm("sdChuckFit"), dims: { angle } };
+    }
+    const dims = {
+      block: { x: mm("sdBx"), y: mm("sdBy"), z: mm("sdBz") },
+      round: { radius: mm("sdDia") / 2 },
+      square: { side: mm("sdSide"), angle },
+      rect: { width: mm("sdW"), height: mm("sdH"), angle },
+      hex: { across_flats: mm("sdAf"), angle },
+    }[sh];
+    const spec = { shape: sh, mode: "given", dims };
+    if (sh === "block") spec.at = [mm("sdPx"), mm("sdPy")];
+    else {
+      spec.length = mm("sdLen");
+      spec.chuck = mm("sdChuck");
+    }
+    return spec;
+  }
+  /** The sizes a given stock needs, missing or not positive. */
+  function missing(spec) {
+    if (spec.mode !== "given") return [];
+    const out = Object.entries(spec.dims).filter(([k, v]) => k !== "angle" && !(v > 0)).map(([k]) => k);
+    if (spec.shape !== "block" && !(spec.length > 0)) out.push("length");
+    return out;
   }
 
   function options() {
-    return { kind: kind(), axis: $("sdAxis").value, up: $("sdAxis").value, margin: num("sdMargin"), explicit: explicit(), origin: num("sdOrigin") };
+    return { kind: kind(), axis: $("sdAxis").value, up: $("sdAxis").value, margin: bar(kind()) ? mm("sdMargin") : undefined, stock: stockSpec(), origin: num("sdOrigin") };
+  }
+
+  /** The shapes the setup type takes (a vise: a block; the rotary axis: bars), the fields of
+   *  the one chosen, the common sizes. */
+  function stockLayout() {
+    const k = kind();
+    const allowed = bar(k) ? BAR_SHAPES : ["block"];
+    for (const el of dlg.querySelectorAll(".sd-shape")) el.classList.toggle("hidden", !allowed.includes(el.dataset.shape));
+    if (!allowed.includes(shape())) dlg.querySelector(`input[name="sdShape"][value="${allowed[0]}"]`).checked = true;
+    const sh = shape();
+    const given = stockMode() === "explicit";
+    for (const l of $("sdMargins").querySelectorAll("label")) {
+      const f = l.dataset.for;
+      l.classList.toggle("hidden", given || (f === "bar" ? sh === "block" : sh !== "block"));
+    }
+    for (const l of $("sdDims").querySelectorAll("label")) {
+      const fs = l.dataset.for.split(" ");
+      const angle = l.querySelector("#sdAngle");
+      // (the angle turns a fitted bar too)
+      l.classList.toggle("hidden", !(fs.includes(sh) && (given || angle)));
+    }
+    const list = COMMON[sh] || [];
+    $("sdCommon").innerHTML = `<option value="">choose...</option>` + list.map((c, i) => `<option value="${i}">${c.label}</option>`).join("");
+    for (const u of dlg.querySelectorAll("#sdStockSet .u")) u.textContent = $("sdStockUnits").value === "inch" ? "in" : "mm";
+  }
+
+  /** A common size chosen: its sizes given (a plate: its thickness; X and Y fitted). */
+  function useCommon(i) {
+    const c = COMMON[shape()]?.[i];
+    if (!c) return;
+    const sh = shape();
+    if (sh === "block") {
+      fitTo();
+      setMm("sdBz", c.z);
+    } else {
+      if (!$("sdLen").value) fitTo();
+      if (sh === "round") setMm("sdDia", c.d);
+      if (sh === "square") setMm("sdSide", c.d);
+      if (sh === "rect") {
+        setMm("sdW", c.w);
+        setMm("sdH", c.h);
+      }
+      if (sh === "hex") {
+        setMm("sdAf", c.d);
+        setMm("sdAc", (c.d * 2) / Math.sqrt(3));
+      }
+    }
+    dlg.querySelector('input[name="sdStock"][value="explicit"]').checked = true;
+    stockLayout();
+    preview();
+  }
+
+  /** Fit to model: the sizes of the smallest stock of the shape round the part, given. */
+  function fitTo() {
+    const t = tris();
+    if (!t) return;
+    const o = options();
+    const place = placePart(t, { ...o, stock: { ...stockSpec(), mode: "fit" } });
+    const st = place.stock;
+    if (st.shape === "box") {
+      setMm("sdBx", st.max[0] - st.min[0]);
+      setMm("sdBy", st.max[1] - st.min[1]);
+      setMm("sdBz", st.max[2] - st.min[2]);
+      // (where the fit put the part: its margins on the low sides)
+      const mg = stockSpec().margins || {};
+      setMm("sdPx", mg.xl ?? 2);
+      setMm("sdPy", mg.yl ?? 2);
+    } else {
+      if (st.shape === "cylinder") setMm("sdDia", 2 * st.radius);
+      if (st.shape === "square") setMm("sdSide", st.side);
+      if (st.shape === "rect") {
+        setMm("sdW", st.width);
+        setMm("sdH", st.height);
+      }
+      if (st.shape === "hex") {
+        setMm("sdAf", st.across_flats);
+        setMm("sdAc", (st.across_flats * 2) / Math.sqrt(3));
+      }
+      setMm("sdLen", st.length);
+      if (!$("sdChuck").value && place.chuck != null) setMm("sdChuck", place.chuck);
+    }
+    dlg.querySelector('input[name="sdStock"][value="explicit"]').checked = true;
+    stockLayout();
+    preview();
+  }
+
+  /** The stock's section and the part's outline, looking along X (the bar's axis, or the
+   *  block from its front). */
+  function endView(place, t) {
+    const cv = $("sdEnd");
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!place) return;
+    const st = place.stock;
+    const sh = stockSpecOf(st);
+    const a = place.axis;
+    const map = (p) => {
+      const q = a === "y" ? [p[1], p[2], p[0]] : a === "z" ? [p[2], p[0], p[1]] : p;
+      return [q[0] + place.translate[0], q[1] + place.translate[1], q[2] + place.translate[2]];
+    };
+    // the view box (Y across, Z up)
+    let box;
+    if (st.shape === "box") box = [st.min[1], st.min[2], st.max[1], st.max[2]];
+    else {
+      const r = sh.shape === "round" ? st.radius : Math.max(...Array.from({ length: 72 }, (_, i) => sectionR(sh, (i * Math.PI) / 36)));
+      box = [-r, -r, r, r];
+    }
+    const pad = 10;
+    const s = Math.min((cv.width - 2 * pad) / (box[2] - box[0]), (cv.height - 2 * pad) / (box[3] - box[1]));
+    const cx = (box[0] + box[2]) / 2, cz = (box[1] + box[3]) / 2;
+    const X = (y) => cv.width / 2 + (y - cx) * s, Y = (z) => cv.height / 2 - (z - cz) * s;
+    // the part's outline (its triangles, thinned)
+    if (t) {
+      ctx.strokeStyle = "rgba(147, 197, 253, 0.35)";
+      ctx.beginPath();
+      const step = Math.max(1, Math.floor(t.length / 9 / 4000));
+      for (let i = 0; i < t.length; i += 9 * step) {
+        const p = [0, 3, 6].map((o) => map([t[i + o], t[i + o + 1], t[i + o + 2]]));
+        ctx.moveTo(X(p[0][1]), Y(p[0][2]));
+        ctx.lineTo(X(p[1][1]), Y(p[1][2]));
+        ctx.lineTo(X(p[2][1]), Y(p[2][2]));
+        ctx.closePath();
+      }
+      ctx.stroke();
+    }
+    // the stock
+    ctx.strokeStyle = "rgba(245, 158, 11, 0.95)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    if (st.shape === "box") ctx.rect(X(st.min[1]), Y(st.max[2]), (st.max[1] - st.min[1]) * s, (st.max[2] - st.min[2]) * s);
+    else {
+      for (let i = 0; i <= 360; i++) {
+        const phi = (i * Math.PI) / 180;
+        const r = sectionR(sh, phi);
+        const y = r * Math.cos(phi), z = r * Math.sin(phi);
+        if (i) ctx.lineTo(X(y), Y(z));
+        else ctx.moveTo(X(y), Y(z));
+      }
+    }
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+  /** A bar's radius at phi (as the engine's Section). */
+  function sectionR(spec, phi) {
+    const d = spec.dims;
+    const a = ((d.angle || 0) * Math.PI) / 180;
+    if (spec.shape === "round") return d.radius;
+    if (spec.shape === "rect") {
+      const p = phi - a;
+      const c = Math.abs(Math.cos(p)), s = Math.abs(Math.sin(p));
+      return Math.min(c > 1e-12 ? d.width / 2 / c : Infinity, s > 1e-12 ? d.height / 2 / s : Infinity);
+    }
+    const n = spec.shape === "square" ? 4 : 6;
+    const af = spec.shape === "square" ? d.side : d.across_flats;
+    const step = (2 * Math.PI) / n;
+    let x = (((phi - Math.PI / 2 - a) % step) + step) % step;
+    if (x > step / 2) x -= step;
+    return af / 2 / Math.cos(x);
+  }
+  /** The bar's corner radius (what it needs to turn clear). */
+  const cornerR = (spec) => Math.max(...Array.from({ length: 720 }, (_, i) => sectionR(spec, (i * Math.PI) / 360)));
+  /** The stock in words. */
+  function stockWords(st, chuck) {
+    const sp = stockSpecOf(st);
+    const f = (v) => +(+v).toFixed(3);
+    const len = st.length != null ? ` x ${f(st.length)} mm long${chuck ? `, ${f(chuck)} held in the chuck: ${f(st.length - chuck)} sticks out` : ""}` : "";
+    switch (sp.shape) {
+      case "block": return `block ${f(sp.dims.x)} x ${f(sp.dims.y)} x ${f(sp.dims.z)} mm, Z0 at its top`;
+      case "square": return `square bar ${f(sp.dims.side)} mm${sp.dims.angle ? ` turned ${f(sp.dims.angle)}°` : ""}${len}`;
+      case "rect": return `rectangular bar ${f(sp.dims.width)} (Y) x ${f(sp.dims.height)} (Z) mm${sp.dims.angle ? ` turned ${f(sp.dims.angle)}°` : ""}${len}`;
+      case "hex": return `hex bar ${f(sp.dims.across_flats)} mm across flats (${f((sp.dims.across_flats * 2) / Math.sqrt(3))} across corners)${sp.dims.angle ? ` turned ${f(sp.dims.angle)}°` : ""}${len}`;
+      default: return `round bar Ø${f(2 * st.radius)} mm${len}`;
+    }
   }
 
   /** Labels and fields that depend on the setup type. */
@@ -37,8 +264,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     $("sdAxisLabel").textContent = bar(k) ? "Part axis along X" : "Up (towards the tool)";
     $("sdOriginLabel").textContent = bar(k) ? "Front at X0, then shift" : "Top below Z0 by";
     $("sdTailRow").classList.toggle("hidden", !bar(k));
-    $("sdBar").classList.toggle("hidden", !bar(k));
-    $("sdBox").classList.toggle("hidden", bar(k));
+    stockLayout();
     if (fromKindChange) {
       // the type's own defaults, unless the user typed something
       if (!$("sdMargin").dataset.edited) $("sdMargin").value = DEFAULT_MARGIN[k];
@@ -73,15 +299,25 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       return [q[0] + place.translate[0], q[1] + place.translate[1], q[2] + place.translate[2]];
     };
     const st = place.stock;
+    const R = bar(k) ? (st.radius ?? cornerR(stockSpecOf(st))) : 0;
+    endView(place, t);
     // the view box: stock and part
-    const box = bar(k) ? [-st.length, -st.radius, Math.max(0, place.translate[0] + 1), st.radius] : [st.min[0], st.min[2], st.max[0], st.max[2] + 1];
+    const box = bar(k) ? [-st.length, -R, Math.max(0, place.translate[0] + 1), R] : [st.min[0], st.min[2], st.max[0], st.max[2] + 1];
     const pad = 12;
     const sx = (cv.width - 2 * pad) / (box[2] - box[0]), sy = (cv.height - 2 * pad) / (box[3] - box[1]);
     const s = Math.min(sx, sy);
     const X = (x) => pad + (x - box[0]) * s, Y = (y) => cv.height - pad - (y - box[1]) * s;
     ctx.strokeStyle = "rgba(156, 163, 175, 0.9)";
     ctx.setLineDash([4, 3]);
-    if (bar(k)) ctx.strokeRect(X(-st.length), Y(st.radius), st.length * s, 2 * st.radius * s);
+    if (bar(k)) {
+      ctx.strokeRect(X(-st.length), Y(R), st.length * s, 2 * R * s);
+      // the length held in the chuck
+      const ch = stockSpec().chuck ?? place.chuck;
+      if (ch > 0) {
+        ctx.fillStyle = "rgba(156, 163, 175, 0.25)";
+        ctx.fillRect(X(-st.length), Y(R), Math.min(ch, st.length) * s, 2 * R * s);
+      }
+    }
     else ctx.strokeRect(X(st.min[0]), Y(st.max[2]), (st.max[0] - st.min[0]) * s, (st.max[2] - st.min[2]) * s);
     ctx.setLineDash([]);
     // the part's edges, side on (X across, Z up)
@@ -113,10 +349,11 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     ctx.font = "11px system-ui";
     ctx.fillText(bar(k) ? "X0 (front), rotary axis" : "Z0 (top of the block)", X(bar(k) ? 0 : box[0]) + 4, Y(0) - 4);
     const size = place.size.map((v) => v.toFixed(2)).join(" x ");
+    const words = stockWords(st, stockSpec().chuck ?? place.chuck);
     $("sdInfo").textContent = bar(k)
-      ? `Part ${size} mm; bar R${st.radius} x ${st.length} mm, the part's front at X0${k === "indexed" ? "; cut from fixed A angles" : ""}.`
-      : `Part ${size} mm; block ${+(st.max[0] - st.min[0]).toFixed(3)} x ${+(st.max[1] - st.min[1]).toFixed(3)} x ${+(st.max[2] - st.min[2]).toFixed(3)} mm, Z0 at its top.`;
-    if (bar(k) && stockMode() === "explicit" && st.radius < Math.max(...[place.size[1], place.size[2]]) / 2) {
+      ? `Part ${size} mm; ${words}, the part's front at X0${k === "indexed" ? "; cut from fixed A angles" : ""}.`
+      : `Part ${size} mm; ${words}.`;
+    if (bar(k) && stockMode() === "explicit" && st.shape === "cylinder" && st.radius < Math.max(...[place.size[1], place.size[2]]) / 2) {
       $("sdWarn").textContent = "The bar is thinner than the part.";
       $("sdWarn").classList.remove("hidden");
     }
@@ -177,12 +414,35 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       $("sdMaterial").value = preset.material ?? "";
       const st = preset.stock;
       const ex = preset.explicit;
-      dlg.querySelector(`input[name="sdStock"][value="${ex ? "explicit" : "auto"}"]`).checked = true;
-      $("sdDia").value = ex?.dia ?? (st?.radius ? 2 * st.radius : "");
-      $("sdLen").value = ex?.len ?? st?.length ?? "";
-      $("sdBx").value = ex?.bx ?? (st?.max ? st.max[0] - st.min[0] : "");
-      $("sdBy").value = ex?.by ?? (st?.max ? st.max[1] - st.min[1] : "");
-      $("sdBz").value = ex?.bz ?? (st?.max ? st.max[2] - st.min[2] : "");
+      $("sdStockUnits").value = "mm";
+      for (const id of STOCK_FIELDS) {
+        $(id).value = "";
+        delete $(id).dataset.edited;
+      }
+      $("sdMargin").value = preset.margin ?? 0.5;
+      $("sdAngle").value = 0;
+      // the setup's stock: its shape and sizes (given), or (the older explicit sizes)
+      const sp = preset.stockSpec ?? (st ? stockSpecOf(st) : ex ? (ex.bx ? { shape: "block", dims: { x: ex.bx, y: ex.by, z: ex.bz } } : { shape: "round", dims: { radius: ex.dia / 2 }, length: ex.len }) : null);
+      const sh = sp?.shape ?? (bar(k) ? "round" : "block");
+      for (const r of dlg.querySelectorAll('input[name="sdShape"]')) r.checked = r.value === sh;
+      cur.presetShape = sh;
+      dlg.querySelector(`input[name="sdStock"][value="${ex || preset.stockSpec?.mode === "given" ? "explicit" : "auto"}"]`).checked = true;
+      if (sp?.dims) {
+        const d = sp.dims;
+        setMm("sdDia", d.radius != null ? 2 * d.radius : null);
+        setMm("sdSide", d.side);
+        setMm("sdW", d.width);
+        setMm("sdH", d.height);
+        setMm("sdAf", d.across_flats);
+        setMm("sdAc", d.across_flats != null ? (d.across_flats * 2) / Math.sqrt(3) : null);
+        $("sdAngle").value = d.angle ?? 0;
+        setMm("sdBx", d.x);
+        setMm("sdBy", d.y);
+        setMm("sdBz", d.z);
+        setMm("sdLen", sp.length);
+      }
+      setMm("sdChuck", preset.chuck);
+      setMm("sdChuckFit", preset.chuck);
       $("sdWarn").classList.add("hidden");
       layout(false);
       if (!dlg.open) dlg.showModal();
@@ -194,11 +454,18 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     const c = cur;
     if (ok) {
       const k = kind();
-      const ex = explicit();
-      if (ex && Object.values(ex).some((v) => !(v > 0))) {
-        $("sdWarn").textContent = "Give every stock size (mm), or choose stock from the part.";
+      const spec = stockSpec();
+      const need = missing(spec);
+      if (need.length) {
+        $("sdWarn").textContent = `Give every stock size (${need.join(", ")}), or fit the stock to the part.`;
         $("sdWarn").classList.remove("hidden");
         return;
+      }
+      let ex = spec.mode === "given" ? spec : undefined;
+      // fitted round a part that is not placed again (a revolved profile): the sizes fitted here
+      if (!ex && !c.parsed?.tris && !c.preset.tris && c.preset.previewTris && bar(k)) {
+        const place = placePart(c.preset.previewTris, options());
+        ex = { ...stockSpecOf(place.stock), mode: "given", chuck: spec.chuck };
       }
       if (k === "vise" && !c.parsed && !c.preset.tris && c.mode !== "new") {
         $("sdWarn").textContent = "A vise setup needs the part as a mesh: import an STL.";
@@ -216,6 +483,9 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         origin: num("sdOrigin"),
         margin: num("sdMargin"),
         explicit: ex,
+        stock: spec,
+        // (the stock changed: given sizes, another shape, a margin typed)
+        stockChanged: !!ex || shape() !== c.presetShape || STOCK_FIELDS.some((id) => $(id).dataset.edited),
         tailstock: bar(k) && $("sdTail").checked,
         material: $("sdMaterial").value.trim() || null,
         // the placement fields typed in (others are the type's defaults)
@@ -239,13 +509,31 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
   dlg.addEventListener("change", (ev) => {
     const t = ev.target;
     if (t.name === "sdKind") return layout(true);
+    if (t.name === "sdShape" || t.name === "sdStock") {
+      stockLayout();
+      return preview();
+    }
+    if (t.id === "sdCommon") return useCommon(+t.value);
+    if (t.id === "sdStockUnits") {
+      // the sizes typed stay the same lengths, in the other unit
+      const f = t.value === "inch" ? 1 / IN : IN;
+      for (const id of STOCK_FIELDS) if ($(id).value !== "") $(id).value = +(+$(id).value * f).toFixed(4);
+      stockLayout();
+      return preview();
+    }
+    if (STOCK_FIELDS.includes(t.id)) t.dataset.edited = "1";
     if (t.id === "sdFile") return chooseFile(t.files[0]);
     if (["sdMargin", "sdOrigin", "sdAxis"].includes(t.id)) t.dataset.edited = "1";
     preview();
   });
   dlg.addEventListener("input", (ev) => {
-    if (ev.target.type === "number") preview();
+    const t = ev.target;
+    // a hex bar's two sizes go together
+    if (t.id === "sdAf" && t.value !== "") $("sdAc").value = +((+t.value * 2) / Math.sqrt(3)).toFixed(4);
+    if (t.id === "sdAc" && t.value !== "") $("sdAf").value = +((+t.value * Math.sqrt(3)) / 2).toFixed(4);
+    if (t.type === "number") preview();
   });
+  $("sdFit").addEventListener("click", () => fitTo());
   $("sdForm").addEventListener("submit", (ev) => {
     ev.preventDefault();
     finish(true);

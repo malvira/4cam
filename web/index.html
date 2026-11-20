@@ -237,12 +237,49 @@
       <canvas id="sdPreview" width="560" height="170" aria-label="Placement preview"></canvas>
       <div id="sdInfo" class="small muted"></div>
     </fieldset>
-    <fieldset>
+    <fieldset id="sdStockSet">
       <legend>Stock</legend>
-      <label><input type="radio" name="sdStock" value="auto" checked> from the part, with a margin of <input id="sdMargin" type="number" step="any" min="0" value="0.5"> mm</label><br>
-      <label><input type="radio" name="sdStock" value="explicit"> explicit:</label>
-      <span id="sdBar">bar &Oslash; <input id="sdDia" type="number" step="any" min="0"> mm &times; <input id="sdLen" type="number" step="any" min="0"> mm long</span>
-      <span id="sdBox" class="hidden">block <input id="sdBx" type="number" step="any" min="0"> &times; <input id="sdBy" type="number" step="any" min="0"> &times; <input id="sdBz" type="number" step="any" min="0"> mm</span>
+      <div class="sd-shapes" role="radiogroup" aria-label="Stock shape">
+        <label class="sd-shape" data-shape="block" title="A plate or block in the vise"><input type="radio" name="sdShape" value="block"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9l9-4 9 4v7l-9 4-9-4z M3 9l9 4 9-4 M12 13v7"/></svg><span>Plate / block</span></label>
+        <label class="sd-shape" data-shape="round"><input type="radio" name="sdShape" value="round"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/></svg><span>Round bar</span></label>
+        <label class="sd-shape" data-shape="square"><input type="radio" name="sdShape" value="square"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14"/></svg><span>Square bar</span></label>
+        <label class="sd-shape" data-shape="rect"><input type="radio" name="sdShape" value="rect"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="18" height="8"/></svg><span>Rect. bar</span></label>
+        <label class="sd-shape" data-shape="hex"><input type="radio" name="sdShape" value="hex"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/></svg><span>Hex bar</span></label>
+      </div>
+      <div class="sd-stockmode">
+        <label><input type="radio" name="sdStock" value="auto" checked> fit to the part</label>
+        <label><input type="radio" name="sdStock" value="explicit"> given sizes</label>
+        <button type="button" id="sdFit" title="Fill the sizes from the part (the smallest stock of this shape round it, with the margins)">Fit to model</button>
+        <label>Units <select id="sdStockUnits" aria-label="Units of the stock sizes"><option value="mm">mm</option><option value="inch">inch</option></select></label>
+        <label>Common sizes <select id="sdCommon" aria-label="Common stock sizes"></select></label>
+      </div>
+      <div id="sdMargins" class="sd-dims">
+        <label data-for="bar">Margin round the part <input id="sdMargin" type="number" step="any" min="0" value="0.5"> <span class="u">mm</span></label>
+        <label data-for="block">X&minus; side <input id="sdMxl" type="number" step="any" min="0" placeholder="2"> <span class="u">mm</span></label>
+        <label data-for="block">X+ side <input id="sdMxh" type="number" step="any" min="0" placeholder="2"> <span class="u">mm</span></label>
+        <label data-for="block">Y&minus; side <input id="sdMyl" type="number" step="any" min="0" placeholder="2"> <span class="u">mm</span></label>
+        <label data-for="block">Y+ side <input id="sdMyh" type="number" step="any" min="0" placeholder="2"> <span class="u">mm</span></label>
+        <label data-for="block">Below the part <input id="sdMzb" type="number" step="any" min="0" placeholder="2"> <span class="u">mm</span></label>
+        <label data-for="bar">Held in the chuck <input id="sdChuckFit" type="number" step="any" min="0" placeholder="12"> <span class="u">mm</span></label>
+      </div>
+      <div id="sdDims" class="sd-dims">
+        <!-- (each shape's own sizes, all of them, with units) -->
+        <label data-for="round">Diameter &Oslash; <input id="sdDia" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="square">Side (across flats) <input id="sdSide" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="rect">Width (Y) <input id="sdW" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="rect">Height (Z) <input id="sdH" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="hex">Across flats <input id="sdAf" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="hex">Across corners <input id="sdAc" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="square rect hex">Turned (a flat on top at 0) <input id="sdAngle" type="number" step="any" value="0"> &deg;</label>
+        <label data-for="round square rect hex">Length (X) <input id="sdLen" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="round square rect hex">Held in the chuck <input id="sdChuck" type="number" step="any" min="0" placeholder="0"> <span class="u">mm</span></label>
+        <label data-for="block">X size <input id="sdBx" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="block">Y size <input id="sdBy" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="block">Z height <input id="sdBz" type="number" step="any" min="0"> <span class="u">mm</span></label>
+        <label data-for="block" title="Where the part's corner sits on the block (blank: centred)">Part from X&minus; edge <input id="sdPx" type="number" step="any" placeholder="centred"> <span class="u">mm</span></label>
+        <label data-for="block" title="Where the part's corner sits on the block (blank: centred)">Part from Y&minus; edge <input id="sdPy" type="number" step="any" placeholder="centred"> <span class="u">mm</span></label>
+      </div>
+      <canvas id="sdEnd" width="170" height="170" aria-label="The stock's section with the part's outline (looking along X)"></canvas>
       <div><label>Material <input id="sdMaterial" list="sdMaterials" placeholder="not set" autocomplete="off" size="16"></label>
         <span class="small muted">picks the tools' cutting data for it (feeds, depths, stepovers)</span></div>
       <datalist id="sdMaterials"></datalist>

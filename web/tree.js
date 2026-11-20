@@ -6,6 +6,8 @@
 const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"];
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
+import { describeStock, stockRadius } from "./project.js";
+
 export function setupTree({ engine, $, state, readJob, writeJob, showError, onChange, getThree, machineArg }) {
   // gen: bumped when the project is replaced, so editor work still awaiting the engine then
   // is dropped instead of landing in the new project
@@ -111,8 +113,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   function setupSummary(s) {
     const st = s.stock || {};
     const r = (v) => +(+v).toFixed(3);
-    const stock = st.shape === "box" ? `block ${r(st.max[0] - st.min[0])} x ${r(st.max[1] - st.min[1])} x ${r(st.max[2] - st.min[2])} mm`
-      : st.radius ? `bar R${st.radius} x ${st.length} mm` : "stock from the previous setup";
+    const stock = describeStock(st.shape ? st : null, s.holding?.chuck);
     const hold = s.holding?.kind === "vise" ? "vise" : `chuck${s.holding?.tailstock ? " + tailstock" : ""}`;
     return `${KIND_NAMES[kindOfSetup(s)]}${s.kind ? "" : " (any operation)"} · ${s.machine ?? "machine: the selected one"} · ${stock} · ${hold}`;
   }
@@ -483,7 +484,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const span = Math.abs((op.y_range?.[1] ?? 0) - (op.y_range?.[0] ?? 0));
     const step = op.stepover > 0 ? op.stepover : 0;
     const rows = step ? Math.ceil(span / step) + 1 : 0;
-    const top = s.stock?.shape === "box" ? s.stock.max[2] : s.stock?.radius ?? 0;
+    const top = s.stock?.shape === "box" ? s.stock.max[2] : stockRadius(s.stock);
     const depth = top - ((op.floor ?? 0) + (op.leave ?? 0));
     const levels = op.step_down > 0 ? Math.max(1, Math.ceil(depth / op.step_down - 1e-9)) : 1;
     const roughed = s.operations.some((o) => o.type === "rough3d" && o.enabled !== false);

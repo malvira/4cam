@@ -95,6 +95,24 @@ fn a_hex_bar_is_planned_from_its_corners_and_simulated_from_its_flats() {
         Some(Section::Polygon { sides: 6, .. })
     ));
     let tps = plan_with_mesh(&job, None).unwrap();
+    // the G-code's rapids are at the safe radius, not a rounding below it
+    let machine = marcam::profiles::builtin_machines()
+        .into_iter()
+        .find(|m| m.id == "makera-z1-4axis")
+        .unwrap()
+        .post;
+    for tp in &tps {
+        let issues = marcam::verify_gcode(
+            &marcam::post(tp, &machine),
+            &marcam::limits_for(tp, &machine),
+        );
+        assert!(
+            issues.is_empty(),
+            "{}: {:?}",
+            tp.name,
+            issues.iter().map(|i| i.to_string()).collect::<Vec<_>>()
+        );
+    }
     // the clearance is above the corners
     assert!(
         tps.iter().all(|tp| tp.safe_r > corner),

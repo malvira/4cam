@@ -2584,6 +2584,129 @@ try {
       `${JSON.stringify(calm)} ${JSON.stringify(seen)} dimmed ${dimmed} folded ${folded} playing ${JSON.stringify(playing)} after ${JSON.stringify(folded2)} stock ${JSON.stringify(stockAtRest)} saved ${saved} plans ${plans}`);
   }
 
+  // 8st. (Mar) the stock: every shape (plate/block, round, square, rectangular and hex bars),
+  // each with all its sizes (labelled, with units), given or fitted to the part, in mm or
+  // inches, from a list of common sizes; written to the project (and its file), drawn
+  {
+    await js("window.__confirm0 = window.confirm; window.confirm = () => true; true");
+    const openEdit = async () => {
+      await js("document.getElementById('treeEditSetup').click(); true");
+      await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 15000);
+    };
+    const set = (id, v) => js(`(() => { const e = document.getElementById('${id}'); e.value = '${v}'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    const pick = (name, v) => js(`(() => { const e = document.querySelector('input[name="${name}"][value="${v}"]'); e.checked = true; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    const shown = () => js("[...document.querySelectorAll('#sdDims label:not(.hidden), #sdMargins label:not(.hidden)')].map((l) => l.querySelector('input').id)");
+    const apply = async () => {
+      await js("document.getElementById('sdOk').click(); true");
+      await waitFor(() => js("!document.getElementById('setupDialog').open"), "the dialog closed", 15000);
+      await settle();
+    };
+    const stockNow = () => js("JSON.parse(document.getElementById('job').value).setups[0].stock");
+    // the bars, on the knob (rotary)
+    await js("document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const bars = {};
+    for (const [shape, fields, want] of [
+      ["round", { sdDia: 25, sdLen: 40, sdChuck: 10 }, { shape: "cylinder", radius: 12.5, length: 40 }],
+      ["square", { sdSide: 22, sdAngle: 0, sdLen: 40 }, { shape: "square", side: 22, length: 40, angle: 0 }],
+      ["rect", { sdW: 30, sdH: 22, sdAngle: 15, sdLen: 40 }, { shape: "rect", width: 30, height: 22, length: 40, angle: 15 }],
+      ["hex", { sdAf: 24, sdAngle: 30, sdLen: 40 }, { shape: "hex", across_flats: 24, length: 40, angle: 30 }],
+    ]) {
+      await openEdit();
+      await pick("sdShape", shape);
+      await pick("sdStock", "explicit");
+      const fieldsShown = await shown();
+      for (const [id, v] of Object.entries(fields)) await set(id, v);
+      const units = await js("[...document.querySelectorAll('#sdDims label:not(.hidden) .u')].map((u) => u.textContent).join(',')");
+      if (shape === "hex") bars.corners = await js("document.getElementById('sdAc').value");
+      await shot(`30_stock_${shape}`);
+      await apply();
+      const st = await stockNow();
+      const drawnR = await js("window.__marcam.state.three.bounds.R");
+      bars[shape] = { ok: Object.entries(want).every(([k, v]) => Math.abs((st[k] ?? NaN) - v) < 1e-6 || st[k] === v), st, fieldsShown, units, drawnR };
+    }
+    const hexR = 24 / Math.sqrt(3);
+    // inches: 1" round entered as inches
+    await openEdit();
+    await pick("sdShape", "round");
+    await pick("sdStock", "explicit");
+    await set("sdStockUnits", "inch");
+    await set("sdDia", 1);
+    await set("sdLen", 2);
+    await apply();
+    const inch = await stockNow();
+    // a common size: a 3/4" hex
+    await openEdit();
+    await pick("sdShape", "hex");
+    const common = await js("(() => { const s = document.getElementById('sdCommon'); const i = [...s.options].findIndex((o) => o.textContent.startsWith('3/4')); s.selectedIndex = i; s.dispatchEvent(new Event('change', { bubbles: true })); return document.getElementById('sdAf').value; })()");
+    await apply();
+    const commonSt = await stockNow();
+    // fitted to the part: a hex round the knob
+    await openEdit();
+    await pick("sdShape", "hex");
+    await pick("sdStock", "auto");
+    await set("sdMargin", 0.5);
+    await apply();
+    const fitted = await stockNow();
+    // round trip through the project file (TOML)
+    const toml = await js("await (async () => (await window.__marcam.engine('toToml', JSON.parse(document.getElementById('job').value))).result.text)()").catch((e) => `error: ${e.message}`);
+    // the block, on the plate (vise): every size and where the part sits
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await openEdit();
+    const blockOnly = await js("[...document.querySelectorAll('.sd-shape:not(.hidden)')].map((e) => e.dataset.shape).join()");
+    await pick("sdStock", "auto");
+    const blockFit = await shown();
+    await pick("sdStock", "explicit");
+    const blockFields = await shown();
+    for (const [id, v] of Object.entries({ sdBx: 70, sdBy: 50, sdBz: 12, sdPx: 5, sdPy: 5 })) await set(id, v);
+    await shot("30_stock_block");
+    await apply();
+    const block = await stockNow();
+    const blockModel = await js("JSON.parse(document.getElementById('job').value).models.find((m) => m.kind === 'mesh').translate");
+    await js("window.confirm = window.__confirm0; true");
+    check("stock: every shape with all its sizes (labelled, with units), given, fitted, in inches, from a common size; written to the project and its file; drawn at the bar's corners",
+      Object.values(bars).filter((b) => b.st).every((b) => b.ok) && bars.square.fieldsShown.includes("sdSide") && bars.rect.fieldsShown.includes("sdW") && bars.rect.fieldsShown.includes("sdH") &&
+      bars.hex.fieldsShown.includes("sdAf") && bars.hex.fieldsShown.includes("sdAc") && bars.round.fieldsShown.includes("sdChuck") && /mm/.test(bars.round.units) &&
+      Math.abs(+bars.corners - 2 * hexR) < 1e-3 && Math.abs(bars.hex.drawnR - hexR) < 1e-6 && Math.abs(bars.square.drawnR - 11 * Math.SQRT2) < 1e-6 &&
+      Math.abs(inch.radius - 12.7) < 1e-6 && Math.abs(inch.length - 50.8) < 1e-6 && Math.abs(commonSt.across_flats - 19.05) < 1e-6 && Math.abs(+common - 19.05) < 1e-3 &&
+      fitted.shape === "hex" && fitted.across_flats >= 20.5 && fitted.across_flats <= 22 &&
+      /shape = "hex"/.test(toml) && /across_flats/.test(toml) &&
+      blockOnly === "block" && ["sdMxl", "sdMxh", "sdMyl", "sdMyh", "sdMzb"].every((id) => blockFit.includes(id)) && ["sdBx", "sdBy", "sdBz", "sdPx", "sdPy"].every((id) => blockFields.includes(id)) &&
+      block.shape === "box" && block.max[0] - block.min[0] === 70 && block.max[1] - block.min[1] === 50 && block.max[2] - block.min[2] === 12,
+      `${JSON.stringify(bars)} inch ${JSON.stringify(inch)} common ${common} ${JSON.stringify(commonSt)} fitted ${JSON.stringify(fitted)} toml ${String(toml).split(String.fromCharCode(10)).filter((l) => /stock|shape|across/.test(l)).join(" | ").slice(0, 200)} block ${blockOnly} ${blockFit} ${blockFields} ${JSON.stringify(block)} part at ${blockModel}`);
+  }
+
+  // 8st2. (Mar) no form field silently lost: every operation type's form shows each of its
+  // registry parameters (but the documented exceptions), and the setup dialog each stock size
+  {
+    await js("document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const gaps = await js(`await (async () => {
+      const t = window.__marcam.state.tree, out = [];
+      const kinds = [...document.getElementById('treeAddType').options].map((o) => o.value);
+      for (const kind of kinds) {
+        // (the tree draws its Add box again after a cancel: found each time)
+        document.getElementById('treeAddType').value = kind;
+        document.getElementById('treeAdd').click();
+        // (the form complete: its defaults in, the feed last)
+        for (let i = 0; i < 200 && !(t.draft?.op.type === kind && document.getElementById('opForm')?.elements.feed); i++) await new Promise((r) => setTimeout(r, 50));
+        const f = document.getElementById('opForm');
+        const ty = t.types.find((x) => x.kind === kind);
+        for (const p of ty.params) {
+          // (documented: regions are the Geometry list; one of rotary finishing's two stepovers;
+          // no index on a vise)
+          if (p.kind === "regions" || /^stepover_(deg|mm)$/.test(p.name) || p.name === "index_a") continue;
+          if (!f?.elements[p.name]) out.push(kind + "." + p.name);
+        }
+        document.getElementById('cancelDraft')?.click();
+        for (let i = 0; i < 100 && t.draft; i++) await new Promise((r) => setTimeout(r, 50));
+      }
+      return out;
+    })()`);
+    check("every operation form shows every parameter of its type (the registry's)", gaps.length === 0, gaps.join(", "));
+  }
+
   // 8y. (Mar) undo and redo for every edit: Edit > Undo / Redo and Ctrl+Z / Ctrl+Shift+Z
   // (Ctrl+Y); typing in the JSON is one step; the keys in a field are the field's own
   {

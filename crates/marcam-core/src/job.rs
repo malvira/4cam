@@ -41,7 +41,9 @@ impl Job {
 
     /// Radius (Z) at which X and A rapids are safe.
     pub fn safe_r(&self) -> f64 {
-        self.stock.radius + self.clearance
+        // rounded up to the G-code's micron: a bar's corner radius (a hex's, 12.1243...) would
+        // otherwise be written a hair below the safe radius itself
+        ((self.stock.radius + self.clearance) * 1000.0 - 1e-6).ceil() / 1000.0
     }
 
     /// Look up a tool by number.

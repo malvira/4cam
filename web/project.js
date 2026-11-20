@@ -5,6 +5,7 @@
 // adding a setup, unsaved-changes tracking and warnings, and an undo for setup changes.
 
 import { setupDialog } from "./setupdialog.js";
+import { revolveProfile } from "./meshes.js";
 
 /** The file format Save writes: the project, and the mesh bytes it names, in one file. */
 export const FILE_FORMAT = "marcam-project";
@@ -99,15 +100,138 @@ const r3 = (x) => Math.round(x * 1000) / 1000;
 /** The engine's axis mapping that makes `up` (x, y or z) the vise's Z. */
 export const UP_AXIS = { z: "x", y: "z", x: "y" };
 
+/** The stock shapes: a block in a vise, bars on the rotary axis. */
+export const STOCK_SHAPES = {
+  block: "Plate / block",
+  round: "Round bar",
+  square: "Square bar",
+  rect: "Rectangular bar",
+  hex: "Hex bar",
+};
+
+/** A bar section's corners and flats: { kind, sides | width/height, angle } -> radius at phi
+ *  (from +Y towards +Z, as the engine's Section). */
+export function sectionRadius(shape, d, phi) {
+  const a = ((d.angle || 0) * Math.PI) / 180;
+  if (shape === "rect") {
+    const p = phi - a;
+    const c = Math.abs(Math.cos(p)), s = Math.abs(Math.sin(p));
+    return Math.min(c > 1e-12 ? d.width / 2 / c : Infinity, s > 1e-12 ? d.height / 2 / s : Infinity);
+  }
+  if (shape === "square" || shape === "hex") {
+    const n = shape === "square" ? 4 : 6;
+    const af = shape === "square" ? d.side : d.across_flats;
+    const step = (2 * Math.PI) / n;
+    let x = (((phi - Math.PI / 2 - a) % step) + step) % step;
+    if (x > step / 2) x -= step;
+    return af / 2 / Math.cos(x);
+  }
+  return d.radius;
+}
+
+/** The smallest bar of `shape` (turned by `angle`) round the part's section points (y, z about
+ *  the axis), `margin` beyond it; sizes rounded up to 0.5 mm. */
+function fitBar(shape, pts, margin, angle) {
+  const a = ((angle || 0) * Math.PI) / 180;
+  if (shape === "round") {
+    let r = 0;
+    for (const [y, z] of pts) r = Math.max(r, Math.hypot(y, z));
+    return { radius: ceilHalf(r + margin - 1e-4) };
+  }
+  if (shape === "rect") {
+    let w = 0, h = 0;
+    const c = Math.cos(a), sn = Math.sin(a);
+    for (const [y, z] of pts) {
+      w = Math.max(w, Math.abs(y * c + z * sn));
+      h = Math.max(h, Math.abs(-y * sn + z * c));
+    }
+    return { width: ceilHalf(2 * (w + margin) - 1e-4), height: ceilHalf(2 * (h + margin) - 1e-4), angle: angle || 0 };
+  }
+  const n = shape === "square" ? 4 : 6;
+  let apo = 0;
+  for (let k = 0; k < n; k++) {
+    const phi = Math.PI / 2 + a + (k * 2 * Math.PI) / n;
+    const ny = Math.cos(phi), nz = Math.sin(phi);
+    for (const [y, z] of pts) apo = Math.max(apo, y * ny + z * nz);
+  }
+  const af = ceilHalf(2 * (apo + margin) - 1e-4);
+  return shape === "square" ? { side: af, angle: angle || 0 } : { across_flats: af, angle: angle || 0 };
+}
+
+/** The project's stock for a given stock spec (no part to place: a block's sizes, a bar's). */
+export function stockOfSpec(kind, spec) {
+  if (spec.dims) {
+    if (kind === "vise" || spec.shape === "block") return { shape: "box", min: [0, 0, -spec.dims.z], max: [spec.dims.x, spec.dims.y, 0] };
+    return barStock(spec.shape, spec.dims, spec.length);
+  }
+  // (the older explicit sizes)
+  return kind === "vise" ? { shape: "box", min: [0, 0, -spec.bz], max: [spec.bx, spec.by, 0] } : { shape: "cylinder", radius: spec.dia / 2, length: spec.len };
+}
+
+/** The project's stock for a bar of `shape` with `dims` and `length`. */
+function barStock(shape, dims, length) {
+  if (shape === "square") return { shape: "square", side: dims.side, length, angle: dims.angle || 0 };
+  if (shape === "rect") return { shape: "rect", width: dims.width, height: dims.height, length, angle: dims.angle || 0 };
+  if (shape === "hex") return { shape: "hex", across_flats: dims.across_flats, length, angle: dims.angle || 0 };
+  return { shape: "cylinder", radius: dims.radius, length };
+}
+
+/** A bar's radius at its corners (a block: its height above the bottom). */
+export function stockRadius(st) {
+  if (!st) return 0;
+  if (st.shape === "box") return st.max[2] - st.min[2];
+  if (st.shape === "square") return (st.side / 2) * Math.SQRT2;
+  if (st.shape === "rect") return Math.hypot(st.width / 2, st.height / 2);
+  if (st.shape === "hex") return st.across_flats / Math.sqrt(3);
+  return st.radius ?? 0;
+}
+
+/** The stock in a few words ("hex bar 22 mm across flats x 40 mm", "block 60 x 40 x 10 mm"). */
+export function describeStock(st, chuck) {
+  if (!st) return "stock from the previous setup";
+  const f = (v) => +(+v).toFixed(3);
+  const turned = st.angle ? ` turned ${f(st.angle)}°` : "";
+  const len = st.length != null ? ` x ${f(st.length)} mm${chuck ? ` (${f(chuck)} in the chuck)` : ""}` : "";
+  switch (st.shape) {
+    case "box": return `block ${f(st.max[0] - st.min[0])} x ${f(st.max[1] - st.min[1])} x ${f(st.max[2] - st.min[2])} mm`;
+    case "square": return `square bar ${f(st.side)} mm${turned}${len}`;
+    case "rect": return `bar ${f(st.width)} x ${f(st.height)} mm${turned}${len}`;
+    case "hex": return `hex bar ${f(st.across_flats)} mm across flats${turned}${len}`;
+    case "from_previous": return "stock from the previous setup";
+    default: return st.radius ? `bar Ø${f(2 * st.radius)}${len}` : "stock from the previous setup";
+  }
+}
+
+/** The stock's shape name (as the dialog's picker) and sizes, from the project's stock. */
+export function stockSpecOf(stock) {
+  if (!stock) return null;
+  switch (stock.shape) {
+    case "box":
+      return { shape: "block", dims: { x: r3(stock.max[0] - stock.min[0]), y: r3(stock.max[1] - stock.min[1]), z: r3(stock.max[2] - stock.min[2]) } };
+    case "square":
+      return { shape: "square", dims: { side: stock.side, angle: stock.angle || 0 }, length: stock.length };
+    case "rect":
+      return { shape: "rect", dims: { width: stock.width, height: stock.height, angle: stock.angle || 0 }, length: stock.length };
+    case "hex":
+      return { shape: "hex", dims: { across_flats: stock.across_flats, angle: stock.angle || 0 }, length: stock.length };
+    default:
+      return { shape: "round", dims: { radius: stock.radius }, length: stock.length };
+  }
+}
+
 /**
  * Where a part goes and the stock round it, for a setup `kind` (or the older `holding`).
  * - Bar ("rotary", "indexed"): `axis` (x, y or z) is the mesh axis turned onto X; the part is
- *   centred on it with its front (largest X) at X0 plus `origin`; bar stock of the largest
- *   radius + `margin` (default 0.5 mm, rounded up to 0.5 mm), the length + 15 mm to hold.
- * - Vise: `up` is the mesh axis that points up; the part sits `margin` (default 2 mm) in from
- *   the block's corner, its top `origin` (default 0.5 mm) below the block's top (Z0), the
- *   block 2 mm below it.
- * - `explicit`: { dia, len } for a bar, { bx, by, bz } for a block (the part centred on it).
+ *   centred on it with its front (largest X) at X0 plus `origin`.
+ * - Vise: `up` is the mesh axis that points up; the part's top `origin` (default 0.5 mm) below
+ *   the block's top (Z0).
+ * - `stock`: { shape: block | round | square | rect | hex, mode: "fit" | "given", ... }.
+ *   Fit: a bar of the shape (turned by `angle`) `margin` (default 0.5 mm) round the part, its
+ *   length the part's + `chuck` (default 12 mm) + 3 mm; a block `margins` { xl, xh, yl, yh }
+ *   (default `margin`, 2 mm) beside the part and `bottom` (default 2 mm) below it. Given: the sizes in
+ *   `dims` ({ radius } | { side } | { width, height } | { across_flats }, with `angle`;
+ *   a block { x, y, z } with the part `at` [x, y] from its corner, else centred) and `length`.
+ * - `explicit` (older): { dia, len } for a bar, { bx, by, bz } for a block.
  * Returns { axis, translate, stock, size } (size: the part's X, Y, Z extent after placing).
  */
 export function placePart(tris, opts = {}) {
@@ -123,29 +247,49 @@ export function placePart(tris, opts = {}) {
     }
   }
   const size = [0, 1, 2].map((k) => hi[k] - lo[k]);
-  const ex = opts.explicit;
+  // (the older explicit sizes, as a given stock)
+  let spec = opts.stock;
+  if (!spec && opts.explicit) {
+    const ex = opts.explicit;
+    spec = vise ? { shape: "block", mode: "given", dims: { x: ex.bx, y: ex.by, z: ex.bz } } : { shape: "round", mode: "given", dims: { radius: ex.dia / 2 }, length: ex.len };
+  }
   if (vise) {
-    const m = opts.margin ?? 2, top = opts.origin ?? 0.5;
-    if (ex) {
-      const translate = [(ex.bx - size[0]) / 2 - lo[0], (ex.by - size[1]) / 2 - lo[1], -top - hi[2]];
-      return { axis: ax, translate, stock: { shape: "box", min: [0, 0, -ex.bz], max: [ex.bx, ex.by, 0] }, size };
+    const top = opts.origin ?? 0.5;
+    if (spec?.mode === "given") {
+      const d = spec.dims;
+      const at = spec.at && spec.at.every((v) => Number.isFinite(v)) ? spec.at : [(d.x - size[0]) / 2, (d.y - size[1]) / 2];
+      const translate = [at[0] - lo[0], at[1] - lo[1], -top - hi[2]];
+      return { axis: ax, translate, stock: { shape: "box", min: [0, 0, -d.z], max: [d.x, d.y, 0] }, size };
     }
-    const translate = [m - lo[0], m - lo[1], -top - hi[2]];
-    const stock = { shape: "box", min: [0, 0, r3(-(size[2] + top + 2))], max: [r3(size[0] + 2 * m), r3(size[1] + 2 * m), 0] };
+    const side = opts.margin ?? 2;
+    const mg = { xl: side, xh: side, yl: side, yh: side, bottom: 2 };
+    for (const [k, v] of Object.entries(spec?.margins || {})) if (Number.isFinite(v)) mg[k] = v;
+    const translate = [mg.xl - lo[0], mg.yl - lo[1], -top - hi[2]];
+    const stock = { shape: "box", min: [0, 0, r3(-(size[2] + top + mg.bottom))], max: [r3(size[0] + mg.xl + mg.xh), r3(size[1] + mg.yl + mg.yh), 0] };
     return { axis: ax, translate, stock, size };
   }
   const cy = (lo[1] + hi[1]) / 2, cz = (lo[2] + hi[2]) / 2;
-  let rmax = 0;
-  for (let i = 0; i < tris.length; i += 3) {
-    const q = mapAxis([tris[i], tris[i + 1], tris[i + 2]], ax);
-    rmax = Math.max(rmax, Math.hypot(q[1] - cy, q[2] - cz));
-  }
   const shift = opts.origin ?? 0;
   const translate = [-hi[0] + shift, -cy, -cz];
-  const stock = ex
-    ? { shape: "cylinder", radius: ex.dia / 2, length: ex.len }
-    : { shape: "cylinder", radius: ceilHalf(rmax + (opts.margin ?? 0.5) - 1e-4), length: Math.ceil(size[0] + 15 + Math.max(0, shift)) };
-  return { axis: ax, translate, stock, size };
+  const shape = spec?.shape && spec.shape !== "block" ? spec.shape : "round";
+  const chuck = spec?.chuck ?? 12;
+  let dims, length;
+  if (spec?.mode === "given") {
+    dims = spec.dims;
+    length = spec.length;
+  } else {
+    // the part's section about the axis (every vertex, thinned on a large mesh)
+    const pts = [];
+    const step = Math.max(1, Math.floor(tris.length / 3 / 200000));
+    for (let i = 0; i < tris.length; i += 3 * step) {
+      const q = mapAxis([tris[i], tris[i + 1], tris[i + 2]], ax);
+      pts.push([q[1] - cy, q[2] - cz]);
+    }
+    dims = fitBar(shape, pts, spec?.margin ?? opts.margin ?? 0.5, spec?.dims?.angle ?? spec?.angle ?? 0);
+    // the older default (the part + 15 mm) unless a chuck length is given
+    length = spec?.chuck != null ? Math.ceil(size[0] + chuck + 3 + Math.max(0, shift)) : Math.ceil(size[0] + 15 + Math.max(0, shift));
+  }
+  return { axis: ax, translate, stock: barStock(shape, dims, length), size, chuck: spec?.chuck };
 }
 
 /** The setup's kind: its own, else from its stock (a block: vise; a bar: rotary). */
@@ -227,7 +371,7 @@ export function setupProject(ctx) {
   const { $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, resetProject, machineArg, currentMachine } = ctx;
   const p = { name: "untitled", dirty: false, fileName: null, pending: null };
   state.project = p;
-  const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS });
+  const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS, stockSpecOf });
 
   function show() {
     $("projectName").textContent = p.name;
@@ -514,7 +658,7 @@ export function setupProject(ctx) {
   // ------------------------------------------------------------ setups
   /** The tools starter operations use: T1 flat and T2 ball, added when missing. */
   function ensureTools(doc, stock) {
-    const reach = stock.shape === "box" ? stock.max[2] - stock.min[2] : stock.radius;
+    const reach = stockRadius(stock);
     const flute = Math.max(12, Math.ceil(reach + 1));
     doc.tools = doc.tools || [];
     // the starter tools (marcam's own, by their description) follow the stock's depth, so the
@@ -592,14 +736,16 @@ export function setupProject(ctx) {
     s.holding = { kind: kind === "vise" ? "vise" : "rotary_chuck", tailstock: kind !== "vise" && !!cfg.tailstock };
     const model = ownModel(doc, s);
     if (model && tris) {
-      const place = placePart(tris, { kind, axis: cfg.axis, up: cfg.axis, margin: cfg.margin, explicit: cfg.explicit, origin: cfg.origin });
+      const place = placePart(tris, { kind, axis: cfg.axis, up: cfg.axis, margin: cfg.margin, explicit: cfg.stock ? undefined : cfg.explicit, stock: cfg.stock, origin: cfg.origin });
       model.axis = place.axis;
       model.translate = place.translate.map(r3);
       s.stock = place.stock;
       ensureTools(doc, place.stock);
     } else if (cfg.explicit) {
-      s.stock = kind === "vise" ? { shape: "box", min: [0, 0, -cfg.explicit.bz], max: [cfg.explicit.bx, cfg.explicit.by, 0] } : { shape: "cylinder", radius: cfg.explicit.dia / 2, length: cfg.explicit.len };
+      s.stock = stockOfSpec(kind, cfg.explicit);
     }
+    // the length of a bar held in the chuck
+    if (kind !== "vise" && cfg.stock?.chuck > 0) s.holding.chuck = r3(cfg.stock.chuck);
     // operations: keep what fits, with its defaults for the new part and kind
     const types = state.tree?.types?.length ? state.tree.types : (await engine("opTypes")).result;
     const removed = [], recomputed = [];
@@ -741,7 +887,7 @@ export function setupProject(ctx) {
     const size = [0, 1, 2].map((k) => (hi[k] - lo[k]).toFixed(2)).join(" x ");
     const st = s.stock;
     const kind = kindOf(s);
-    const where = kind === "vise" ? `in the vise (${KINDS.vise}), block ${r3(st.max[0] - st.min[0])} x ${r3(st.max[1] - st.min[1])} x ${r3(st.max[2] - st.min[2])} mm` : `on the rotary axis (${KINDS[kind]}, front at X0), bar R${st.radius} x ${st.length} mm`;
+    const where = kind === "vise" ? `in the vise (${KINDS.vise}), block ${r3(st.max[0] - st.min[0])} x ${r3(st.max[1] - st.min[1])} x ${r3(st.max[2] - st.min[2])} mm` : `on the rotary axis (${KINDS[kind]}, front at X0), ${describeStock(st)}`;
     return `${size} mm, ${where}`;
   }
 
@@ -834,17 +980,25 @@ export function setupProject(ctx) {
     const s = doc.setups.find((x) => x.id === (id ?? state.tree?.setup)) ?? doc.setups[0];
     if (!s) return showError("No setup yet: import an STL first.");
     const m = doc.models.find((x) => s.part.includes(x.id) && x.kind === "mesh");
+    // a revolved profile: its surface for the dialog's preview and Fit (not placed again)
+    const prof = !m ? doc.models.find((x) => s.part.includes(x.id) && x.kind === "profile") : null;
+    let previewTris = null;
+    if (prof?.points?.length > 1) {
+      const rm = revolveProfile(prof.points, 72);
+      previewTris = new Float32Array(rm.indices.length * 3);
+      rm.indices.forEach((v, i) => previewTris.set(rm.positions.subarray(3 * v, 3 * v + 3), 3 * i));
+    }
     const kind = kindOf(s);
     const axis = kind === "vise" ? Object.entries(UP_AXIS).find(([, v]) => v === (m?.axis ?? "x"))?.[0] ?? "z" : m?.axis ?? "x";
     const cfg = await dialog.open("edit", {
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
-      stock: s.stock, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null,
+      stock: s.stock, chuck: s.holding?.chuck, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null, previewTris,
     });
     if (!cfg) return false;
     // nothing about the placement changed (only the name or the material): the operations
     // keep their values; a new material changes only the ones not typed over
     const machine0 = s.machine ?? currentMachine()?.id;
-    if (cfg.kind === kind && cfg.axis === axis && !!cfg.tailstock === !!s.holding?.tailstock && !cfg.explicit && !cfg.edited?.length && (cfg.machine ?? null) === (machine0 ?? null)) {
+    if (cfg.kind === kind && cfg.axis === axis && !!cfg.tailstock === !!s.holding?.tailstock && !cfg.stockChanged && !cfg.explicit && !cfg.edited?.length && (cfg.machine ?? null) === (machine0 ?? null)) {
       const before = $("job").value;
       let changed = [];
       if ((cfg.material ?? null) !== (s.material ?? null)) {
