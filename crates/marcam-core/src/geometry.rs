@@ -6,6 +6,7 @@
 //! and A); the drop-cutter still checks against the whole model, so selecting faces never
 //! gouges the faces next to them.
 
+use crate::det::Det;
 use crate::mesh::{cross, sub, Mesh, Triangle};
 use serde::{Deserialize, Serialize};
 
@@ -81,7 +82,7 @@ pub fn face_regions(mesh: &Mesh, crease_deg: f64) -> (Vec<FaceRegion>, Vec<usize
             edges.entry(k).or_default().push(i);
         }
     }
-    let cos_limit = crease_deg.to_radians().cos();
+    let cos_limit = crease_deg.to_radians().dcos();
     // union-find over smooth edges
     let mut parent: Vec<usize> = (0..tris.len()).collect();
     fn root(p: &mut [usize], mut i: usize) -> usize {
@@ -144,11 +145,11 @@ fn describe(tris: &[Triangle], normals: &[Option<[f64; 3]>], members: &[usize]) 
         for p in t {
             xlo = xlo.min(p[0]);
             xhi = xhi.max(p[0]);
-            let r = p[1].hypot(p[2]);
+            let r = p[1].dhypot(p[2]);
             rlo = rlo.min(r);
             rhi = rhi.max(r);
             if r > 1e-6 {
-                angles.push(p[2].atan2(p[1]).to_degrees().rem_euclid(360.0));
+                angles.push(p[2].datan2(p[1]).to_degrees().rem_euclid(360.0));
             }
             for k in 0..3 {
                 c[k] += a * p[k] / 3.0;
@@ -300,6 +301,8 @@ pub fn boundary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
     use crate::job::Profile;
 
     fn knob() -> Mesh {

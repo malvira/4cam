@@ -21,6 +21,7 @@
 //!
 //! The body is turned so `axis` runs along X and moved so its front (largest X) is at X0.
 
+use crate::det::Det;
 use crate::job::MeshSource;
 use crate::mesh::Axis;
 use crate::{ops, profiles};
@@ -199,7 +200,7 @@ pub fn body_project(
         .triangles
         .iter()
         .flatten()
-        .map(|p| p[1].hypot(p[2]))
+        .map(|p| p[1].dhypot(p[2]))
         .fold(0.0, f64::max);
     let stock_radius = match opt_f64(params, "stock_radius")? {
         Some(r) => r,

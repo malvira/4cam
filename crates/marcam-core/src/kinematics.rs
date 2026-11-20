@@ -7,9 +7,10 @@
 //! the A for a tool direction `t` is the one that turns `t` onto +Z: `atan2(t_y, t_z)`. A
 //! direction with an X component needs a second rotary axis (5-axis) and is refused.
 
+use crate::det::Det;
 /// Part frame to machine frame with the rotary at `a_deg`: `Rx(A) p`.
 pub fn to_machine(p: [f64; 3], a_deg: f64) -> [f64; 3] {
-    let (s, c) = a_deg.to_radians().sin_cos();
+    let (s, c) = a_deg.to_radians().dsin_cos();
     [p[0], c * p[1] - s * p[2], s * p[1] + c * p[2]]
 }
 
@@ -33,13 +34,15 @@ pub fn solve_a(t: [f64; 3], prev: f64) -> Result<f64, String> {
             t[2] / n
         ));
     }
-    let phi = t[1].atan2(t[2]).to_degrees();
+    let phi = t[1].datan2(t[2]).to_degrees();
     Ok(phi + 360.0 * ((prev - phi) / 360.0).round())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     #[test]
     fn a_turns_the_tool_direction_onto_the_spindle() {

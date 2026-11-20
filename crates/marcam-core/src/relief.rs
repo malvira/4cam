@@ -4,6 +4,7 @@
 //! Images are PNG (8 or 16-bit gray, gray + alpha, RGB, RGBA or 8-bit palette; not
 //! interlaced) or PGM (P5 / P2). Colour is reduced to luma; transparent pixels count as black.
 
+use crate::det::Det;
 use crate::mesh::{Mesh, MeshError};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::{PI, TAU};
@@ -326,7 +327,7 @@ pub fn relief_mesh(img: &Gray, r: &ImageRelief) -> Mesh {
     let ring = |i: usize, k: usize| {
         let phi = TAU * (k % n) as f64 / n as f64;
         let rr = radius(i, k % n);
-        [(i as f64 + 0.5) * px, rr * phi.cos(), rr * phi.sin()]
+        [(i as f64 + 0.5) * px, rr * phi.dcos(), rr * phi.dsin()]
     };
     for i in 0..w.saturating_sub(1) {
         for k in 0..n {
@@ -346,6 +347,8 @@ pub fn relief_mesh(img: &Gray, r: &ImageRelief) -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     fn pgm(w: usize, h: usize, f: impl Fn(usize, usize) -> u8) -> Vec<u8> {
         let mut out = format!("P5\n# test\n{w} {h}\n255\n").into_bytes();
@@ -411,7 +414,7 @@ mod tests {
                 max_pixels: 300,
             },
         );
-        let r_of = |p: [f64; 3]| p[1].hypot(p[2]);
+        let r_of = |p: [f64; 3]| p[1].dhypot(p[2]);
         let top = m
             .triangles
             .iter()

@@ -7,6 +7,7 @@ pub mod archive;
 pub mod body;
 pub mod budget;
 pub mod collision;
+pub mod det;
 pub mod dropcutter;
 pub mod engrave;
 pub mod estimate;
@@ -37,6 +38,7 @@ pub mod toolpath;
 pub mod verify;
 pub mod wizards;
 
+use crate::det::Det;
 pub use job::Job;
 pub use machine::{FeedMode, Machine};
 pub use mesh::Mesh;
@@ -536,7 +538,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
         let _budget = budget::Guard::start(budget::OP_LIMIT);
         b.ramp_tan = op
             .ramp_angle()
-            .map_or(0.0, |deg| deg.clamp(0.0, 89.0).to_radians().tan());
+            .map_or(0.0, |deg| deg.clamp(0.0, 89.0).to_radians().dtan());
         let number = op.tool();
         let tool = job.tool(number).ok_or_else(|| Error::UnknownTool {
             program: prog.name.clone(),

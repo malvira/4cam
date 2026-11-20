@@ -6,6 +6,7 @@
 //! Operation ids are strings unique within the project; they are what colours, simulation
 //! tags and (later) the frontend's operation tree key off.
 
+use crate::det::Det;
 use crate::job::{self, Job, MeshSource, Operation, Profile, Stock, Tool};
 use crate::profiles::{self, ToolLibrary};
 use serde::{Deserialize, Serialize};
@@ -199,7 +200,7 @@ impl StockDef {
             StockDef::Box { min, max } => Stock {
                 radius: [min[1].abs(), max[1].abs()]
                     .iter()
-                    .flat_map(|y| [min[2].abs(), max[2].abs()].map(|z| y.hypot(z)))
+                    .flat_map(|y| [min[2].abs(), max[2].abs()].map(|z| y.dhypot(z)))
                     .fold(0.0, f64::max),
                 length: max[0] - min[0],
                 section: None,
@@ -1151,6 +1152,8 @@ pub fn jobs_from_any_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     const KNOB: &str = include_str!("../../../examples/knob/knob.job.json");
 

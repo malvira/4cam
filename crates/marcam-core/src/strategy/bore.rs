@@ -10,6 +10,7 @@
 //! The moves are straight segments within `tolerance` of the circle; with `arcs` the post
 //! writes them back as G2/G3 (the program's operation marker asks it to).
 
+use crate::det::Det;
 use crate::job::{Bore, StockBox};
 use crate::toolpath::Builder;
 use std::f64::consts::TAU;
@@ -21,7 +22,7 @@ fn step_angle(r: f64, tol: f64) -> f64 {
     if r <= tol {
         return TAU / 8.0;
     }
-    (2.0 * (1.0 - tol / r).clamp(-1.0, 1.0).acos()).clamp(TAU / 720.0, TAU / 8.0)
+    (2.0 * (1.0 - tol / r).clamp(-1.0, 1.0).dacos()).clamp(TAU / 720.0, TAU / 8.0)
 }
 
 /// The tool-centre radii of the passes for a hole: roughing rings (spaced at most `step`,
@@ -113,8 +114,8 @@ pub fn bore(
                 let t = k as f64 / n as f64;
                 let a = sgn * turns * TAU * t;
                 b.line3(
-                    cx + r * a.cos(),
-                    cy + r * a.sin(),
+                    cx + r * a.dcos(),
+                    cy + r * a.dsin(),
                     start_z + (bottom - start_z) * t,
                     UP,
                     op.feed,
@@ -125,7 +126,7 @@ pub fn bore(
             let m = ((TAU / da).ceil() as usize).max(4);
             for k in 1..=m {
                 let a = a0 + sgn * TAU * k as f64 / m as f64;
-                b.line3(cx + r * a.cos(), cy + r * a.sin(), bottom, UP, op.feed);
+                b.line3(cx + r * a.dcos(), cy + r * a.dsin(), bottom, UP, op.feed);
             }
             // away from the wall, then up
             b.line3(cx, cy, bottom, UP, op.feed);
@@ -138,6 +139,8 @@ pub fn bore(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     #[test]
     fn rings_reach_the_size_and_clear_the_core() {

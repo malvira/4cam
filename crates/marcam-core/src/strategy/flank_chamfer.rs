@@ -1,5 +1,6 @@
 //! Chamfer an edge with the flank of a V-bit (a flat endmill could only stair-step it).
 
+use crate::det::Det;
 use crate::job::FlankChamfer;
 use crate::numeric::rad;
 use crate::toolpath::Builder;
@@ -8,7 +9,7 @@ pub fn flank_chamfer(b: &mut Builder, vbit_angle: f64, safe_r: f64, op: &FlankCh
     let [edge_x, edge_r] = op.edge;
     b.comment("--- front chamfer with V-bit flank ---");
     // flank surface: r = r_tip + |x_tip - x| / tan(half angle), through the edge
-    let k = 1.0 / rad(vbit_angle / 2.0).tan();
+    let k = 1.0 / rad(vbit_angle / 2.0).dtan();
     let x_tip = edge_x + op.tip_offset;
     let n = (op.revolutions * 360.0 / op.segment_deg) as usize;
     for &extra in &op.passes {

@@ -3,6 +3,7 @@
 //! Moves are `Rapid3` / `Line3` in the setup's work coordinates (Z up, Z0 usually the stock
 //! top). Every pass starts and ends at the safe Z; rapids never move XY below it.
 
+use crate::det::Det;
 use crate::dropcutter::{drop_triangle, Cutter};
 use crate::job::{Contour, Drill, Face, Pocket, Raster3d, StockBox};
 use crate::mesh::Mesh;
@@ -170,8 +171,8 @@ fn ramp_in(
     bld.rapid3(None, None, Some(safe));
     bld.rapid3(Some(a[0]), Some(a[1]), None);
     bld.rapid3(None, None, Some(z_start));
-    let len = (b[0] - a[0]).hypot(b[1] - a[1]);
-    let drop = len * angle.to_radians().tan().max(1e-3);
+    let len = (b[0] - a[0]).dhypot(b[1] - a[1]);
+    let drop = len * angle.to_radians().dtan().max(1e-3);
     let mut at = a;
     let mut zz = z_start;
     let mut guard = 0;
@@ -200,7 +201,7 @@ fn ramp_in(
 
 /// The unit vector from `a` to `b` (zero when they meet).
 fn unit2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
-    let l = (b[0] - a[0]).hypot(b[1] - a[1]);
+    let l = (b[0] - a[0]).dhypot(b[1] - a[1]);
     if l < 1e-12 {
         [1.0, 0.0]
     } else {
@@ -225,14 +226,14 @@ fn ramp_along(
     plunge: f64,
 ) -> (usize, [f64; 2]) {
     let n = lp.len() - 1;
-    let tan = angle.clamp(0.5, 45.0).to_radians().tan();
+    let tan = angle.clamp(0.5, 45.0).to_radians().dtan();
     b.rapid3(None, None, Some(safe));
     b.rapid3(Some(lp[s][0]), Some(lp[s][1]), None);
     b.rapid3(None, None, Some(z_start));
     let (mut k, mut at, mut zz) = (s, lp[s], z_start);
     // (a loop shorter than a hair: nothing to ramp along)
     let perimeter: f64 = (0..n)
-        .map(|i| (lp[i + 1][0] - lp[i][0]).hypot(lp[i + 1][1] - lp[i][1]))
+        .map(|i| (lp[i + 1][0] - lp[i][0]).dhypot(lp[i + 1][1] - lp[i][1]))
         .sum();
     if perimeter < 1e-3 {
         b.line3(at[0], at[1], z, UP, plunge);
@@ -241,7 +242,7 @@ fn ramp_along(
     let mut guard = 0;
     while zz > z + 1e-9 && guard < 100_000 {
         let to = lp[(k + 1) % n];
-        let seg = (to[0] - at[0]).hypot(to[1] - at[1]);
+        let seg = (to[0] - at[0]).dhypot(to[1] - at[1]);
         let fall = seg * tan;
         if zz - fall > z {
             let next = [to[0], to[1], zz - fall];
@@ -398,7 +399,7 @@ fn path_pocket(
             // where it got there; or straight down at the plunge feed
             let mut from = (s, start);
             let round: f64 = (0..n)
-                .map(|i| (lp[i + 1][0] - lp[i][0]).hypot(lp[i + 1][1] - lp[i][1]))
+                .map(|i| (lp[i + 1][0] - lp[i][0]).dhypot(lp[i + 1][1] - lp[i][1]))
                 .sum();
             if op.ramp > 0.0 && round < d {
                 plunged += 1;
@@ -465,7 +466,7 @@ pub fn offset_polygon(path: &[[f64; 2]], dist: f64) -> Vec<[f64; 2]> {
         .map(|i| {
             let (a, b) = (path[i], path[(i + 1) % n]);
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-            let l = dx.hypot(dy).max(1e-12);
+            let l = dx.dhypot(dy).max(1e-12);
             let nrm = [dy / l * s, -dx / l * s]; // right-hand normal = outward for CCW
             ([a[0] + nrm[0], a[1] + nrm[1]], [dx, dy])
         })
@@ -501,7 +502,7 @@ pub fn contour(
     let mut src = op.path.clone();
     while src.len() > 3 && {
         let (a, b) = (src[0], src[src.len() - 1]);
-        (a[0] - b[0]).hypot(a[1] - b[1]) < 1e-9
+        (a[0] - b[0]).dhypot(a[1] - b[1]) < 1e-9
     } {
         src.pop();
     }
@@ -534,7 +535,7 @@ pub fn contour(
             .max_by(|&i, &j| {
                 let l = |i: usize| {
                     let (a, b) = (path[i], path[(i + 1) % n]);
-                    (b[0] - a[0]).hypot(b[1] - a[1])
+                    (b[0] - a[0]).dhypot(b[1] - a[1])
                 };
                 l(i).total_cmp(&l(j))
             })
@@ -573,7 +574,7 @@ pub fn contour(
         > 0.0;
     let waste_left = (op.side == "inside") == ccw;
     let unit = |a: [f64; 2], b: [f64; 2]| {
-        let l = (b[0] - a[0]).hypot(b[1] - a[1]).max(1e-12);
+        let l = (b[0] - a[0]).dhypot(b[1] - a[1]).max(1e-12);
         [(b[0] - a[0]) / l, (b[1] - a[1]) / l]
     };
     let side = |t: [f64; 2]| {
@@ -593,7 +594,7 @@ pub fn contour(
         (0..=ARC)
             .map(|k| {
                 let th = std::f64::consts::FRAC_PI_2 * k as f64 / ARC as f64;
-                let (cs, sn) = (th.cos(), th.sin());
+                let (cs, sn) = (th.dcos(), th.dsin());
                 [
                     c[0] - r * (cs * t_in[0] + sn * n[0]),
                     c[1] - r * (cs * t_in[1] + sn * n[1]),
@@ -609,7 +610,7 @@ pub fn contour(
         (1..=ARC)
             .map(|k| {
                 let th = std::f64::consts::FRAC_PI_2 * k as f64 / ARC as f64;
-                let (cs, sn) = (th.cos(), th.sin());
+                let (cs, sn) = (th.dcos(), th.dsin());
                 [
                     c[0] + r * (-cs * n[0] + sn * t_out[0]),
                     c[1] + r * (-cs * n[1] + sn * t_out[1]),
@@ -655,7 +656,7 @@ fn tab_spans(path: &[[f64; 2]], n: u32, len: f64) -> Vec<(f64, f64)> {
     let total: f64 = (0..path.len())
         .map(|i| {
             let (a, b) = (path[i], path[(i + 1) % path.len()]);
-            (b[0] - a[0]).hypot(b[1] - a[1])
+            (b[0] - a[0]).dhypot(b[1] - a[1])
         })
         .sum();
     let gap = total / n as f64;
@@ -684,7 +685,7 @@ fn arc_of(path: &[[f64; 2]], q: [f64; 2]) -> f64 {
             0.0
         };
         let p = [a[0] + dx * t, a[1] + dy * t];
-        let d = (p[0] - q[0]).hypot(p[1] - q[1]);
+        let d = (p[0] - q[0]).dhypot(p[1] - q[1]);
         if d < best {
             best = d;
             at = s + t * l2.sqrt();
@@ -699,7 +700,7 @@ fn point_at(path: &[[f64; 2]], f: f64) -> [f64; 2] {
     let n = path.len();
     let len = |i: usize| {
         let (a, b) = (path[i], path[(i + 1) % n]);
-        (b[0] - a[0]).hypot(b[1] - a[1])
+        (b[0] - a[0]).dhypot(b[1] - a[1])
     };
     let total: f64 = (0..n).map(len).sum();
     let mut want = f.rem_euclid(1.0) * total;
@@ -725,7 +726,7 @@ fn placed_spans(src: &[[f64; 2]], path: &[[f64; 2]], at: &[f64], len: f64) -> Ve
     let total: f64 = (0..path.len())
         .map(|i| {
             let (a, b) = (path[i], path[(i + 1) % path.len()]);
-            (b[0] - a[0]).hypot(b[1] - a[1])
+            (b[0] - a[0]).dhypot(b[1] - a[1])
         })
         .sum();
     let mut out = Vec::new();
@@ -760,7 +761,7 @@ fn contour_with_tabs(
     let on_tab = |s: f64| tabs.iter().any(|&(a, e)| s > a + 1e-9 && s < e - 1e-9);
     for i in 0..n {
         let (a, c) = (path[i], path[(i + 1) % n]);
-        let l = (c[0] - a[0]).hypot(c[1] - a[1]);
+        let l = (c[0] - a[0]).dhypot(c[1] - a[1]);
         if l < 1e-12 {
             continue;
         }
@@ -1180,7 +1181,7 @@ pub fn raster3d_on(
             ))
         }
     };
-    let (sa, ca) = op.angle.to_radians().sin_cos();
+    let (sa, ca) = op.angle.to_radians().dsin_cos();
     let (u, w) = ([ca, sa], [-sa, ca]);
     let corners = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
     let ws: Vec<f64> = corners.iter().map(|c| c[0] * w[0] + c[1] * w[1]).collect();
@@ -1285,7 +1286,7 @@ pub fn raster3d_on(
             // the lead-in: from `lead_in` above the surface, a little behind the pass's start,
             // down along the pass at the ramp angle (never below the surface)
             let lead = |b: &mut Builder| {
-                let tan = op.ramp_angle.clamp(1.0, 45.0).to_radians().tan();
+                let tan = op.ramp_angle.clamp(1.0, 45.0).to_radians().dtan();
                 let len = op.lead_in / tan;
                 let u = unit2(row[0], row.get(1).copied().unwrap_or(row[0]));
                 let n = ((len / op.sample.max(0.05)).ceil() as usize).clamp(2, 200);
@@ -1409,7 +1410,7 @@ pub fn waterline(
     let steep = |i: usize, j: usize| {
         let gx = ((at(i + 1, j) - at(i, j)) + (at(i + 1, j + 1) - at(i, j + 1))) / (2.0 * h);
         let gy = ((at(i, j + 1) - at(i, j)) + (at(i + 1, j + 1) - at(i + 1, j))) / (2.0 * h);
-        gx.hypot(gy).atan().to_degrees()
+        gx.dhypot(gy).datan().to_degrees()
     };
     // a grid edge's id: 2 * point + (0 along X, 1 along Y)
     let edge_point = |e: usize, z: f64| -> [f64; 2] {
@@ -1527,7 +1528,7 @@ pub fn waterline(
             let from = last.unwrap_or(runs[0][0]);
             let k = (0..runs.len())
                 .min_by(|&a, &c| {
-                    let d = |r: &Vec<[f64; 2]>| (r[0][0] - from[0]).hypot(r[0][1] - from[1]);
+                    let d = |r: &Vec<[f64; 2]>| (r[0][0] - from[0]).dhypot(r[0][1] - from[1]);
                     d(&runs[a]).total_cmp(&d(&runs[c]))
                 })
                 .unwrap();
@@ -1718,7 +1719,7 @@ pub fn descent_feed(p0: [f64; 3], p1: [f64; 3], feed: f64, plunge: f64, ramp_tan
     if dz <= -ROUND {
         return feed;
     }
-    let across = (p1[0] - p0[0]).hypot(p1[1] - p0[1]);
+    let across = (p1[0] - p0[0]).dhypot(p1[1] - p0[1]);
     // the post's rounding may make a move up to 2 microns steeper than planned
     if crate::toolpath::gentle_descent(dz + 2.0 * ROUND, across, ramp_tan) {
         return feed;
@@ -1774,7 +1775,7 @@ fn emit_adaptive(
                 let lp: Vec<[f64; 2]> = (0..=n)
                     .map(|i| {
                         let a = start + side * std::f64::consts::TAU * i as f64 / n as f64;
-                        [centre[0] + radius * a.cos(), centre[1] + radius * a.sin()]
+                        [centre[0] + radius * a.dcos(), centre[1] + radius * a.dsin()]
                     })
                     .collect();
                 let (k, _) = ramp_along(b, safe, &lp, 0, z_start, z, ramp, feed, plunge);
@@ -1952,7 +1953,7 @@ pub fn adaptive_rough(
             && p[1] >= stock.min[1]
             && p[1] <= stock.max[1];
         // beside the range only off the stock (within the tool's radius of the range)
-        let near_range = (p[0] - p[0].clamp(x0, x1)).hypot(p[1] - p[1].clamp(y0, y1)) <= r;
+        let near_range = (p[0] - p[0].clamp(x0, x1)).dhypot(p[1] - p[1].clamp(y0, y1)) <= r;
         if in_range || (near_range && !inside_block) {
             surf[c] = dc.z_at(p[0], p[1], op.floor) + op.leave;
         }
@@ -2012,6 +2013,8 @@ pub fn adaptive_rough(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     #[test]
     fn levels_end_at_the_bottom() {

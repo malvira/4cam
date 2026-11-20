@@ -11,6 +11,7 @@
 //!
 //! A tolerance of 0 leaves the moves as they are.
 
+use crate::det::Det;
 use crate::toolpath::Move;
 
 /// Largest turn of A in one smoothed rotary move (degrees).
@@ -200,7 +201,7 @@ fn along_tool(p: [f64; 3], a: [f64; 3], b: [f64; 3], up: usize, tol: f64) -> f64
     let (dx, dy) = (b[h[0]] - a[h[0]], b[h[1]] - a[h[1]]);
     let l2 = dx * dx + dy * dy;
     if l2 < 1e-18 {
-        let off = (p[h[0]] - a[h[0]]).hypot(p[h[1]] - a[h[1]]);
+        let off = (p[h[0]] - a[h[0]]).dhypot(p[h[1]] - a[h[1]]);
         return if off <= tol { 0.0 } else { f64::INFINITY };
     }
     let t = (((p[h[0]] - a[h[0]]) * dx + (p[h[1]] - a[h[1]]) * dy) / l2).clamp(0.0, 1.0);
@@ -233,14 +234,14 @@ fn blend_corners(pts: &[[f64; 3]], tol: f64) -> Vec<[f64; 3]> {
         let (a, c, b) = (pts[k - 1], pts[k], pts[k + 1]);
         let u = [a[0] - c[0], a[1] - c[1]];
         let v = [b[0] - c[0], b[1] - c[1]];
-        let (lu, lv) = (u[0].hypot(u[1]), v[0].hypot(v[1]));
+        let (lu, lv) = (u[0].dhypot(u[1]), v[0].dhypot(v[1]));
         if lu < 1e-9 || lv < 1e-9 {
             out.push(c);
             continue;
         }
         let (u, v) = ([u[0] / lu, u[1] / lu], [v[0] / lv, v[1] / lv]);
         // the angle between the two moves at the corner (180: straight on)
-        let theta = (u[0] * v[0] + u[1] * v[1]).clamp(-1.0, 1.0).acos();
+        let theta = (u[0] * v[0] + u[1] * v[1]).clamp(-1.0, 1.0).dacos();
         let turn = std::f64::consts::PI - theta;
         if turn < 10f64.to_radians() || theta < 1e-6 {
             out.push(c);
@@ -249,10 +250,10 @@ fn blend_corners(pts: &[[f64; 3]], tol: f64) -> Vec<[f64; 3]> {
         // an arc of radius rr tangent to both moves sits (rr / sin(theta/2) - rr) inside the
         // corner; its tangent points are rr / tan(theta/2) from it
         let half = theta / 2.0;
-        let rr_tol = tol / (1.0 / half.sin() - 1.0);
-        let rr_len = (lu.min(lv) / 3.0) * half.tan();
+        let rr_tol = tol / (1.0 / half.dsin() - 1.0);
+        let rr_len = (lu.min(lv) / 3.0) * half.dtan();
         let rr = rr_tol.min(rr_len);
-        let t = rr / half.tan();
+        let t = rr / half.dtan();
         // a blend too small to matter (a sharp corner at a fine tolerance) is not worth it
         if rr < 10.0 * tol {
             out.push(c);
@@ -262,12 +263,12 @@ fn blend_corners(pts: &[[f64; 3]], tol: f64) -> Vec<[f64; 3]> {
         let p1 = [c[0] + v[0] * t, c[1] + v[1] * t];
         // the arc's centre on the bisector
         let bis = [u[0] + v[0], u[1] + v[1]];
-        let lb = bis[0].hypot(bis[1]);
-        let d = rr / half.sin();
+        let lb = bis[0].dhypot(bis[1]);
+        let d = rr / half.dsin();
         let o = [c[0] + bis[0] / lb * d, c[1] + bis[1] / lb * d];
         let (s0, s1) = (
-            (p0[1] - o[1]).atan2(p0[0] - o[0]),
-            (p1[1] - o[1]).atan2(p1[0] - o[0]),
+            (p0[1] - o[1]).datan2(p0[0] - o[0]),
+            (p1[1] - o[1]).datan2(p1[0] - o[0]),
         );
         let mut sweep = s1 - s0;
         if sweep > std::f64::consts::PI {
@@ -278,7 +279,7 @@ fn blend_corners(pts: &[[f64; 3]], tol: f64) -> Vec<[f64; 3]> {
         let n = ((sweep.abs() / 10f64.to_radians()).ceil() as usize).max(2);
         for i in 0..=n {
             let s = s0 + sweep * i as f64 / n as f64;
-            out.push([o[0] + rr * s.cos(), o[1] + rr * s.sin(), c[2]]);
+            out.push([o[0] + rr * s.dcos(), o[1] + rr * s.dsin(), c[2]]);
         }
     }
     out.push(pts[pts.len() - 1]);
@@ -288,6 +289,8 @@ fn blend_corners(pts: &[[f64; 3]], tol: f64) -> Vec<[f64; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     fn line(x: f64, y: f64, z: f64) -> Move {
         Move::Line3 {
@@ -358,7 +361,7 @@ mod tests {
         let pts = vec![
             [0.0, 0.0, -1.0],
             [10.0, 0.0, -1.0],
-            [10.0 + 10.0 * t.cos(), 10.0 * t.sin(), -1.0],
+            [10.0 + 10.0 * t.dcos(), 10.0 * t.dsin(), -1.0],
         ];
         let out = blend_corners(&pts, 0.01);
         assert!(out.len() > 3);

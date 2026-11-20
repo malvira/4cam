@@ -1,5 +1,6 @@
 //! Diamond knurl: families of helical V grooves cut with a V-bit over a conical body.
 
+use crate::det::Det;
 use crate::job::HelicalKnurl;
 use crate::numeric::{deg, linspace, rad};
 use crate::toolpath::Builder;
@@ -22,15 +23,15 @@ pub fn helical_knurl(
     let body_r = |x: f64| rf + (rb - rf) * (xf - x) / (xf - xb);
     let n = op.count as f64;
     let depth = |x: f64| {
-        let p_perp = 2.0 * std::f64::consts::PI * body_r(x) / n * rad(op.helix_angle).cos();
-        op.fill * p_perp / (2.0 * rad(vbit_angle / 2.0).tan())
+        let p_perp = 2.0 * std::f64::consts::PI * body_r(x) / n * rad(op.helix_angle).dcos();
+        op.fill * p_perp / (2.0 * rad(vbit_angle / 2.0).dtan())
     };
 
     // run out past both ends of the body
     let xs = linspace(xb - op.runout, xf + op.runout, op.samples);
     let xc: Vec<f64> = xs.iter().map(|&x| x.clamp(xb, xf)).collect();
     // angle swept along the groove: dθ/dx = tan(α)/R(x)
-    let tan_a = rad(op.helix_angle).tan();
+    let tan_a = rad(op.helix_angle).dtan();
     let dth: Vec<f64> = xc.iter().map(|&x| tan_a / body_r(x)).collect();
     let mut theta = Vec::with_capacity(xs.len());
     theta.push(0.0);

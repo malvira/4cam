@@ -8,6 +8,7 @@
 //! Feeds are linear (mm/min at the cutting edge): a machine that reads rotary feeds in
 //! degrees (the Z1) gets them converted when posting, as with any other feed.
 
+use crate::det::Det;
 use serde::{Deserialize, Serialize};
 
 /// What a material takes, for carbide end mills.
@@ -311,7 +312,7 @@ pub fn calculate(input: &FeedsInput) -> Result<Feeds, String> {
             (2.0 * (ap * (d - ap)).max(0.0).sqrt()).max(0.2 * d)
         }
         CalcTool::Vbit { angle, .. } => {
-            (2.0 * ap * (angle.to_radians() / 2.0).tan()).clamp(0.2 * d, d)
+            (2.0 * ap * (angle.to_radians() / 2.0).dtan()).clamp(0.2 * d, d)
         }
         _ => d,
     };
@@ -428,6 +429,8 @@ pub fn preset(f: &Feeds, material: &str, op: Option<&str>) -> crate::profiles::P
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     fn input(material: &str, d: f64, op: &str) -> FeedsInput {
         FeedsInput {

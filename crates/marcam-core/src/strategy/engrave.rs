@@ -7,6 +7,7 @@
 //! the outline, never cuts below that surface anywhere, because d changes by at most the
 //! distance moved (it is 1-Lipschitz), while the cone's sides rise by distance / tan.
 
+use crate::det::Det;
 use crate::engrave::{text_paths, Path2, Region};
 use crate::job::{Engrave, Vcarve};
 use crate::toolpath::Builder;
@@ -121,7 +122,7 @@ pub fn vcarve(
     half_angle: f64,
     op: &Vcarve,
 ) -> Result<(), String> {
-    let tan = half_angle.tan();
+    let tan = half_angle.dtan();
     if tan.is_nan() || tan <= 0.0 {
         return Err("vcarve needs a V-bit with an angle".into());
     }

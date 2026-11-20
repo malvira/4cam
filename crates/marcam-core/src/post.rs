@@ -1,5 +1,6 @@
 //! Post-processor: toolpath IR -> G-code text for a [`Machine`].
 
+use crate::det::Det;
 use crate::machine::{FeedMode, Machine};
 use crate::toolpath::{true_length, Move, Toolpath};
 
@@ -21,7 +22,7 @@ fn fill(template: &str, tool: u32, rpm: u32, safe: &str) -> String {
 /// F for linear-only controllers: a helix's linear part can be a few hundredths of a mm per
 /// move, so F is small; enough decimals to keep it within 0.1 %.
 fn fine_feed(f: f64) -> String {
-    let digits = (3 - f.abs().max(1e-9).log10().floor() as i32).clamp(0, 4) as usize;
+    let digits = (3 - f.abs().max(1e-9).dlog10().floor() as i32).clamp(0, 4) as usize;
     format!("{f:.digits$}")
 }
 
@@ -67,7 +68,7 @@ fn fit_arc(p0: [f64; 3], moves: &[Move], tol: f64) -> Option<Arc> {
         );
         let ux = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d;
         let uy = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d;
-        Some(([ux, uy], (a[0] - ux).hypot(a[1] - uy)))
+        Some(([ux, uy], (a[0] - ux).dhypot(a[1] - uy)))
     };
     let mut best: Option<Arc> = None;
     for m in 3..pts.len() {
@@ -81,8 +82,8 @@ fn fit_arc(p0: [f64; 3], moves: &[Move], tol: f64) -> Option<Arc> {
         let turn = |i: usize| {
             let (u, v) = (pts[i], pts[i + 1]);
             let (a0, a1) = (
-                (u[1] - c[1]).atan2(u[0] - c[0]),
-                (v[1] - c[1]).atan2(v[0] - c[0]),
+                (u[1] - c[1]).datan2(u[0] - c[0]),
+                (v[1] - c[1]).datan2(v[0] - c[0]),
             );
             let mut d = a1 - a0;
             if d > std::f64::consts::PI {
@@ -103,7 +104,7 @@ fn fit_arc(p0: [f64; 3], moves: &[Move], tol: f64) -> Option<Arc> {
         }
         if pts[..=m]
             .iter()
-            .any(|p| ((p[0] - c[0]).hypot(p[1] - c[1]) - r).abs() > tol)
+            .any(|p| ((p[0] - c[0]).dhypot(p[1] - c[1]) - r).abs() > tol)
         {
             break;
         }
@@ -111,7 +112,7 @@ fn fit_arc(p0: [f64; 3], moves: &[Move], tol: f64) -> Option<Arc> {
         // far apart on a big circle are not an arc
         if steps
             .iter()
-            .any(|d| r * (1.0 - (d.abs() / 2.0).cos()) > tol)
+            .any(|d| r * (1.0 - (d.abs() / 2.0).dcos()) > tol)
         {
             break;
         }
@@ -136,7 +137,7 @@ fn fit_arc(p0: [f64; 3], moves: &[Move], tol: f64) -> Option<Arc> {
             center: c,
             ccw,
             feed,
-            length: (r * sweep).hypot(z1 - z0),
+            length: (r * sweep).dhypot(z1 - z0),
         });
     }
     best
@@ -274,7 +275,7 @@ pub fn post_lines(
                                 fine_feed(if lin > 1e-9 { lin } else { da.abs() } / time)
                             }
                             FeedMode::SurfaceSpeed => {
-                                let radius = (prev[1].hypot(prev[2]) + m[1].hypot(m[2])) / 2.0;
+                                let radius = (prev[1].dhypot(prev[2]) + m[1].dhypot(m[2])) / 2.0;
                                 let len = crate::machine::feed_length(
                                     FeedMode::SurfaceSpeed,
                                     machine.surface_radius_pad,
@@ -425,7 +426,7 @@ pub fn post_lines(
                     FeedMode::DegreesAsLength => (dx * dx + dz * dz + da * da).sqrt() / dt,
                     FeedMode::LinearOnly => {
                         // a pure rotation: the controller reads F as deg/min
-                        let lin = dx.hypot(dz);
+                        let lin = dx.dhypot(dz);
                         if lin > 1e-6 {
                             lin / dt
                         } else {
@@ -455,7 +456,7 @@ pub fn post_lines(
                 if pz < 0.0 {
                     let span = match machine.feed_mode {
                         FeedMode::DegreesAsLength => (px * px + pz * pz + pa * pa).sqrt(),
-                        FeedMode::LinearOnly => px.hypot(pz),
+                        FeedMode::LinearOnly => px.dhypot(pz),
                         FeedMode::InverseTime => 1.0,
                         FeedMode::SurfaceSpeed => crate::machine::feed_length(
                             FeedMode::SurfaceSpeed,

@@ -1,6 +1,7 @@
 //! Triangle meshes: STL (binary and ASCII) and 3MF import, binary STL export, axis mapping, and
 //! revolving a profile into a closed mesh.
 
+use crate::det::Det;
 use crate::job::Profile;
 use std::fmt;
 
@@ -142,7 +143,7 @@ impl Mesh {
     /// The mesh turned by `a_deg` about +X (right-handed): where the part sits in machine
     /// coordinates with the rotary axis at A = `a_deg`.
     pub fn rotated_x(&self, a_deg: f64) -> Mesh {
-        let (s, c) = a_deg.to_radians().sin_cos();
+        let (s, c) = a_deg.to_radians().dsin_cos();
         Mesh {
             triangles: self
                 .triangles
@@ -188,7 +189,7 @@ impl Mesh {
         let pts = &profile.points;
         let ring = |x: f64, r: f64, j: usize| -> Vec3 {
             let a = std::f64::consts::TAU * (j % segments) as f64 / segments as f64;
-            [x, r * a.cos(), r * a.sin()]
+            [x, r * a.dcos(), r * a.dsin()]
         };
         let mut tris = Vec::new();
         for w in pts.windows(2) {
@@ -549,6 +550,8 @@ pub(crate) fn parse_3mf_model(xml: &str) -> Result<Mesh, MeshError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     fn knob_profile() -> Profile {
         Profile {

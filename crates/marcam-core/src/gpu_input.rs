@@ -11,6 +11,7 @@
 //! inside the tool, which depends on the order cuts arrive in, and concurrent GPU threads
 //! cannot reproduce that order.
 
+use crate::det::Det;
 use crate::dropcutter::Cutter;
 use crate::sim::{segments, Grid, RadialMap};
 use crate::sim3::{segments3, Heightmap3};
@@ -78,7 +79,7 @@ fn kind_of(c: &Cutter) -> (u32, f64) {
     match *c {
         Cutter::Flat { .. } => (0, 0.0),
         Cutter::Ball { .. } => (1, 0.0),
-        Cutter::Cone { half_angle, .. } => (2, 1.0 / half_angle.tan()),
+        Cutter::Cone { half_angle, .. } => (2, 1.0 / half_angle.dtan()),
         // refused before any position is written (see `cpu_only`)
         Cutter::TaperedBall { .. } => (u32::MAX, 0.0),
     }
@@ -175,7 +176,11 @@ pub fn rotary(
             if i0 > i1 {
                 continue;
             }
-            let half = if r <= rad { PI / 2.0 } else { (rad / r).asin() };
+            let half = if r <= rad {
+                PI / 2.0
+            } else {
+                (rad / r).dasin()
+            };
             let j0 = ((phi_t - half) / dphi - 0.5).ceil() as i64;
             let j1 = ((phi_t + half) / dphi - 0.5).floor() as i64;
             if j1 < j0 {

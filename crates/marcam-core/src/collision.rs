@@ -11,6 +11,7 @@
 //! The rotary stock outside the simulated X range is taken as uncut bar (the stock radius
 //! over the stock's length, `-length..0`). Chucks, tailstocks and vises are not modelled.
 
+use crate::det::Det;
 use crate::dropcutter::Cutter;
 use crate::job::{Tool, ToolShape};
 use crate::sim::{self, RadialMap, Segment, SimStats};
@@ -221,7 +222,7 @@ pub fn contact_radial(
         // only rays pointing high enough can reach z_lo: sin(th) > z_lo / bar radius
         let span = TAU / g.na as f64;
         let th0 = if z_lo > 0.0 {
-            (z_lo / bar.0).min(1.0).asin()
+            (z_lo / bar.0).min(1.0).dasin()
         } else {
             0.0
         };
@@ -289,7 +290,7 @@ pub fn contact_radial(
 /// Highest Z of the material along a cell's ray (angle `th` in the machine Y/Z plane, from
 /// the axis out to `rho`) with machine Y in `ylo..=yhi`.
 fn ray_top(rho: f64, th: f64, ylo: f64, yhi: f64) -> Option<f64> {
-    let (sn, c) = th.sin_cos();
+    let (sn, c) = th.dsin_cos();
     if rho <= 0.0 || sn <= 0.0 || yhi - ylo < 1e-9 {
         return None;
     }

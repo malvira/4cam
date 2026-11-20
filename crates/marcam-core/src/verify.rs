@@ -4,6 +4,7 @@
 //! - feed moves whose Z falls faster than the plunge limit (with 2% slack for F rounding);
 //! - rapids that move X or A while the tool is below the safe radius.
 
+use crate::det::Det;
 use crate::machine::FeedMode;
 use std::fmt;
 
@@ -171,9 +172,9 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                             // an arc in XY (G17): its length, from the centre at I, J
                             let (x0, x1) = (x.unwrap_or(0.0), tx.unwrap_or(0.0));
                             let (cx, cy) = (x0 + ni, y0 + nj);
-                            let r = ni.hypot(nj);
-                            let a0 = (y0 - cy).atan2(x0 - cx);
-                            let a1 = (y1 - cy).atan2(x1 - cx);
+                            let r = ni.dhypot(nj);
+                            let a0 = (y0 - cy).datan2(x0 - cx);
+                            let a1 = (y1 - cy).datan2(x1 - cx);
                             let mut sweep = a1 - a0;
                             if m == 2 && sweep >= 0.0 {
                                 sweep -= std::f64::consts::TAU;
@@ -183,7 +184,7 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                             dx = r * sweep.abs();
                             y1 = y0;
                         }
-                        let radius = (y0.hypot(z0) + y1.hypot(z1)) / 2.0;
+                        let radius = (y0.dhypot(z0) + y1.dhypot(z1)) / 2.0;
                         let len = crate::machine::feed_length(
                             limits.feed_mode,
                             limits.surface_radius_pad,
@@ -196,7 +197,7 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                         // a move within 2 microns of the ramp counts as on it
                         let arc = radius.max(0.5) * (ta - a).to_radians();
                         let across = (dx * dx + (y1 - y0).powi(2) + arc * arc).sqrt();
-                        let ramp_tan = limits.ramp_angle.clamp(0.0, 89.0).to_radians().tan();
+                        let ramp_tan = limits.ramp_angle.clamp(0.0, 89.0).to_radians().dtan();
                         let gentle = crate::toolpath::gentle_descent(
                             -dz,
                             across * 1.001 + 0.002 / ramp_tan.max(1e-9),
@@ -229,6 +230,8 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     fn limits() -> Limits {
         Limits {

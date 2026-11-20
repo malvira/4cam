@@ -2,6 +2,7 @@
 //! and the inside/distance queries V-carving needs. The strategies that cut them are in
 //! `strategy::engrave`.
 
+use crate::det::Det;
 use std::f64::consts::PI;
 
 /// A polyline in mm (closed when the first and last points coincide).
@@ -279,7 +280,7 @@ pub fn text_paths(
     rotate: f64,
 ) -> Result<Vec<Path2>, String> {
     let s = height / 6.0;
-    let (sa, ca) = rotate.to_radians().sin_cos();
+    let (sa, ca) = rotate.to_radians().dsin_cos();
     let mut out = Vec::new();
     for (line, row) in text.split('\n').enumerate() {
         for (k, c) in row.chars().enumerate() {
@@ -409,7 +410,7 @@ fn parse_transform(s: &str) -> Affine {
             "translate" => [1.0, 0.0, 0.0, 1.0, g(0, 0.0), g(1, 0.0)],
             "scale" => [g(0, 1.0), 0.0, 0.0, g(1, g(0, 1.0)), 0.0, 0.0],
             "rotate" => {
-                let (s, c) = g(0, 0.0).to_radians().sin_cos();
+                let (s, c) = g(0, 0.0).to_radians().dsin_cos();
                 let (cx, cy) = (g(1, 0.0), g(2, 0.0));
                 let r = [c, s, -s, c, 0.0, 0.0];
                 mul(
@@ -417,8 +418,8 @@ fn parse_transform(s: &str) -> Affine {
                     [1.0, 0.0, 0.0, 1.0, -cx, -cy],
                 )
             }
-            "skewX" => [1.0, 0.0, g(0, 0.0).to_radians().tan(), 1.0, 0.0, 0.0],
-            "skewY" => [1.0, g(0, 0.0).to_radians().tan(), 0.0, 1.0, 0.0, 0.0],
+            "skewX" => [1.0, 0.0, g(0, 0.0).to_radians().dtan(), 1.0, 0.0, 0.0],
+            "skewY" => [1.0, g(0, 0.0).to_radians().dtan(), 0.0, 1.0, 0.0, 0.0],
             _ => continue,
         };
         m = mul(m, t);
@@ -552,9 +553,9 @@ fn path_d(d: &str, tol: f64) -> Vec<Path2> {
                 };
                 let k = if smooth { 0 } else { 2 };
                 let (c2, e) = (abs(v[k], v[k + 1]), abs(v[k + 2], v[k + 3]));
-                let len = (c1[0] - p[0]).hypot(c1[1] - p[1])
-                    + (c2[0] - c1[0]).hypot(c2[1] - c1[1])
-                    + (e[0] - c2[0]).hypot(e[1] - c2[1]);
+                let len = (c1[0] - p[0]).dhypot(c1[1] - p[1])
+                    + (c2[0] - c1[0]).dhypot(c2[1] - c1[1])
+                    + (e[0] - c2[0]).dhypot(e[1] - c2[1]);
                 let n = steps(len);
                 for s in 1..=n {
                     let t = s as f64 / n as f64;
@@ -588,7 +589,7 @@ fn path_d(d: &str, tol: f64) -> Vec<Path2> {
                 };
                 let k = if smooth { 0 } else { 2 };
                 let e = abs(v[k], v[k + 1]);
-                let len = (c[0] - p[0]).hypot(c[1] - p[1]) + (e[0] - c[0]).hypot(e[1] - c[1]);
+                let len = (c[0] - p[0]).dhypot(c[1] - p[1]) + (e[0] - c[0]).dhypot(e[1] - c[1]);
                 let n = steps(len);
                 for s in 1..=n {
                     let t = s as f64 / n as f64;
@@ -642,10 +643,10 @@ fn arc_points(
     tol: f64,
 ) -> Path2 {
     let (mut rx, mut ry) = (rx.abs(), ry.abs());
-    if rx < 1e-12 || ry < 1e-12 || (p[0] - e[0]).hypot(p[1] - e[1]) < 1e-12 {
+    if rx < 1e-12 || ry < 1e-12 || (p[0] - e[0]).dhypot(p[1] - e[1]) < 1e-12 {
         return vec![e];
     }
-    let (sp, cp) = rot_deg.to_radians().sin_cos();
+    let (sp, cp) = rot_deg.to_radians().dsin_cos();
     let (dx, dy) = ((p[0] - e[0]) / 2.0, (p[1] - e[1]) / 2.0);
     let (x1, y1) = (cp * dx + sp * dy, -sp * dx + cp * dy);
     let lam = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry);
@@ -664,7 +665,7 @@ fn arc_points(
         cp * cx1 - sp * cy1 + (p[0] + e[0]) / 2.0,
         sp * cx1 + cp * cy1 + (p[1] + e[1]) / 2.0,
     );
-    let ang = |ux: f64, uy: f64, vx: f64, vy: f64| (ux * vy - uy * vx).atan2(ux * vx + uy * vy);
+    let ang = |ux: f64, uy: f64, vx: f64, vy: f64| (ux * vy - uy * vx).datan2(ux * vx + uy * vy);
     let t1 = ang(1.0, 0.0, (x1 - cx1) / rx, (y1 - cy1) / ry);
     let mut dt = ang(
         (x1 - cx1) / rx,
@@ -678,12 +679,12 @@ fn arc_points(
         dt += 2.0 * PI;
     }
     let r = rx.max(ry);
-    let n = ((dt.abs() / (2.0 * (1.0 - tol.min(r) / r).acos().max(1e-3))).ceil() as usize)
+    let n = ((dt.abs() / (2.0 * (1.0 - tol.min(r) / r).dacos().max(1e-3))).ceil() as usize)
         .clamp(2, 256);
     (1..=n)
         .map(|k| {
             let t = t1 + dt * k as f64 / n as f64;
-            let (st, ct) = t.sin_cos();
+            let (st, ct) = t.dsin_cos();
             if k == n {
                 e
             } else {
@@ -792,12 +793,12 @@ pub fn svg_paths(text: &str, tol: f64) -> Result<Vec<Path2>, String> {
                     (f("rx"), f("ry"))
                 };
                 let r = rx.max(ry).max(1e-9);
-                let n = ((PI / (1.0 - (tol / unit).min(r) / r).acos().max(1e-3)).ceil() as usize)
+                let n = ((PI / (1.0 - (tol / unit).min(r) / r).dacos().max(1e-3)).ceil() as usize)
                     .clamp(12, 360);
                 vec![(0..=n)
                     .map(|k| {
                         let t = 2.0 * PI * k as f64 / n as f64;
-                        [cx + rx * t.cos(), cy + ry * t.sin()]
+                        [cx + rx * t.dcos(), cy + ry * t.dsin()]
                     })
                     .collect()]
             }
@@ -877,7 +878,7 @@ impl Region {
             }
             // close it if the path does not
             let (a, b) = (p[p.len() - 1], p[0]);
-            if (a[0] - b[0]).hypot(a[1] - b[1]) > 1e-9 {
+            if (a[0] - b[0]).dhypot(a[1] - b[1]) > 1e-9 {
                 segs.push([a, b]);
             }
         }
@@ -980,12 +981,14 @@ fn seg_dist(p: [f64; 2], s: [[f64; 2]; 2]) -> f64 {
     } else {
         0.0
     };
-    (p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy)
+    (p[0] - a[0] - t * dx).dhypot(p[1] - a[1] - t * dy)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     #[test]
     fn text_is_cap_height_tall_and_rejects_unknown_characters() {
@@ -1031,12 +1034,12 @@ mod tests {
         );
         // circle: radius 2.5 mm round (11, -5)
         for q in &p[1] {
-            assert!(((q[0] - 11.0).hypot(q[1] + 5.0) - 2.5).abs() < 1e-9);
+            assert!(((q[0] - 11.0).dhypot(q[1] + 5.0) - 2.5).abs() < 1e-9);
         }
         // arcs make a closed circle of radius 2 mm round (18, -1)
         for q in &p[3] {
             assert!(
-                ((q[0] - 18.0).hypot(q[1] + 1.0) - 2.0).abs() < 1e-6,
+                ((q[0] - 18.0).dhypot(q[1] + 1.0) - 2.0).abs() < 1e-6,
                 "{q:?}"
             );
         }

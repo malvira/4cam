@@ -5,6 +5,7 @@
 //! Angles here are part angles φ (the direction of a part point in the part's own Y/Z frame).
 //! A tool at rotary angle `a` sits over part angle `φ = 90° - a` (see [`crate::dropcutter`]).
 
+use crate::det::Det;
 use crate::dropcutter::Cutter;
 use crate::geom::RevolvedProfile;
 use crate::mesh::Mesh;
@@ -160,7 +161,7 @@ impl RadialMap {
             for i in i0..=i1 {
                 let x = grid.x(i) + offset;
                 for &j in &cols {
-                    let (s, c) = grid.phi(j).sin_cos();
+                    let (s, c) = grid.phi(j).dsin_cos();
                     // ray p = (x, ρc, ρs), ρ >= 0: n·(p - t0) = 0
                     let den = n[1] * c + n[2] * s;
                     if den.abs() < 1e-15 {
@@ -264,12 +265,16 @@ pub fn work_estimate(
             let h = 0.5 * (p[k] + q[k]);
             let angles = if seg.index_a.is_some() {
                 if h > 0.0 {
-                    (2.0 * rad.atan2(h).min(PI / 2.0) / dphi + 2.0).min(g.na as f64)
+                    (2.0 * rad.datan2(h).min(PI / 2.0) / dphi + 2.0).min(g.na as f64)
                 } else {
                     g.na as f64
                 }
             } else {
-                let half = if h <= rad { PI / 2.0 } else { (rad / h).asin() };
+                let half = if h <= rad {
+                    PI / 2.0
+                } else {
+                    (rad / h).dasin()
+                };
                 2.0 * half / dphi + 1.0
             };
             // (and a stamp's own cost, whatever its size: about 16 cells' worth)
@@ -351,7 +356,10 @@ fn angular_cover(p: [[f64; 2]; 3]) -> Option<(f64, f64)> {
     if (s.iter().all(|&v| v >= 0.0) || s.iter().all(|&v| v <= 0.0)) && s.iter().any(|&v| v != 0.0) {
         return None;
     }
-    let mut a: Vec<f64> = p.iter().map(|q| q[1].atan2(q[0]).rem_euclid(TAU)).collect();
+    let mut a: Vec<f64> = p
+        .iter()
+        .map(|q| q[1].datan2(q[0]).rem_euclid(TAU))
+        .collect();
     a.sort_by(|x, y| x.total_cmp(y));
     let gaps = [a[1] - a[0], a[2] - a[1], a[0] + TAU - a[2]];
     let (i, g) = gaps
@@ -777,8 +785,8 @@ fn stamp_indexed(
     // With the tip above the axis those lie between the strip's two lower corners as seen
     // from the axis: an exact bound (padded a cell), so the stock is the same.
     let (j_lo, j_hi) = if tip[2] > 0.0 {
-        let t0 = tip[2].atan2(tip[1] + lim);
-        let t1 = tip[2].atan2(tip[1] - lim);
+        let t0 = tip[2].datan2(tip[1] + lim);
+        let t1 = tip[2].datan2(tip[1] - lim);
         (
             ((t0 - a) / dphi - 1.5).floor() as i64,
             ((t1 - a) / dphi + 0.5).ceil() as i64,
@@ -797,7 +805,7 @@ fn stamp_indexed(
         for jj in j_lo..=j_hi.min(j_lo + na - 1) {
             let j = jj.rem_euclid(na) as usize;
             // the cell's ray in the machine frame: part angle phi turned by A
-            let (s, cs) = ((j as f64 + 0.5) * dphi + a).sin_cos();
+            let (s, cs) = ((j as f64 + 0.5) * dphi + a).dsin_cos();
             let inside = |rho: f64| {
                 let d = (u * u + (rho * cs - tip[1]).powi(2)).sqrt(); // not hypot: slow on wasm32
                 d < lim && rho * s >= tip[2] + c.height(d)
@@ -1046,7 +1054,11 @@ fn stamp(
         return (0, None);
     }
     let mut rows: Option<(usize, usize)> = None;
-    let half = if r <= rad { PI / 2.0 } else { (rad / r).asin() };
+    let half = if r <= rad {
+        PI / 2.0
+    } else {
+        (rad / r).dasin()
+    };
     let dphi = TAU / g.na as f64;
     let j0 = ((phi_t - half) / dphi - 0.5).ceil() as i64;
     let j1 = ((phi_t + half) / dphi - 0.5).floor() as i64;
@@ -1061,7 +1073,7 @@ fn stamp(
         for jj in j0..=j1 {
             let j = jj.rem_euclid(g.na as i64) as usize;
             let delta = jj as f64 * dphi + 0.5 * dphi - phi_t;
-            let (s, cs) = delta.sin_cos();
+            let (s, cs) = delta.dsin_cos();
             if cs <= 1e-9 {
                 continue;
             }
@@ -1277,7 +1289,7 @@ fn below(t: f64) -> [u8; 3] {
 
 fn nice(span: f64) -> f64 {
     let raw = span / 10.0;
-    let p = 10f64.powf(raw.log10().floor());
+    let p = 10f64.dpowf(raw.dlog10().floor());
     for m in [1.0, 2.0, 5.0, 10.0] {
         if raw <= m * p {
             return m * p;
@@ -1309,6 +1321,8 @@ pub fn without_ops(tps: &mut [crate::Toolpath], hidden: &[u32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
     use crate::job::Profile;
 
     fn cyl_profile() -> Profile {

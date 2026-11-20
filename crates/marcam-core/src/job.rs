@@ -1,5 +1,6 @@
 //! Job description: the JSON input format (schema version "0.1").
 
+use crate::det::Det;
 use serde::{Deserialize, Serialize};
 
 /// The schema version this build reads and writes.
@@ -116,7 +117,7 @@ impl Section {
                 // from the first flat's normal (up, turned by `angle`)
                 let d = (phi - FRAC_PI_2 - angle.to_radians()).rem_euclid(step);
                 let d = if d > step / 2.0 { d - step } else { d };
-                across_flats / 2.0 / d.cos()
+                across_flats / 2.0 / d.dcos()
             }
             Section::Rect {
                 width,
@@ -124,7 +125,7 @@ impl Section {
                 angle,
             } => {
                 let p = phi - angle.to_radians();
-                let (c, s) = (p.cos().abs(), p.sin().abs());
+                let (c, s) = (p.dcos().abs(), p.dsin().abs());
                 let a = if c > 1e-12 {
                     width / 2.0 / c
                 } else {
@@ -147,8 +148,8 @@ impl Section {
                 sides,
                 across_flats,
                 ..
-            } => across_flats / 2.0 / (std::f64::consts::PI / sides.max(3) as f64).cos(),
-            Section::Rect { width, height, .. } => (width / 2.0).hypot(height / 2.0),
+            } => across_flats / 2.0 / (std::f64::consts::PI / sides.max(3) as f64).dcos(),
+            Section::Rect { width, height, .. } => (width / 2.0).dhypot(height / 2.0),
         }
     }
 }
@@ -160,7 +161,7 @@ impl Stock {
             .map(|k| {
                 let phi = k as f64 * std::f64::consts::TAU / n as f64;
                 let r = self.radius_at(phi);
-                [r * phi.cos(), r * phi.sin()]
+                [r * phi.dcos(), r * phi.dsin()]
             })
             .collect()
     }
@@ -502,7 +503,7 @@ pub fn region_order(regions: &[Region], start: [f64; 2]) -> Vec<usize> {
             .enumerate()
             .map(|(k, &i)| {
                 let c = regions[i].centre();
-                (k, (c[0] - at[0]).hypot(c[1] - at[1]))
+                (k, (c[0] - at[0]).dhypot(c[1] - at[1]))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .unwrap();

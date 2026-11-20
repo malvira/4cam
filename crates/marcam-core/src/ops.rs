@@ -3,6 +3,7 @@
 //! (CLI, web app) read it to build forms and validate operations; planning dispatches on the
 //! same `type` names.
 
+use crate::det::Det;
 use crate::job::{Operation, ToolShape};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -1168,7 +1169,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                                 2.0 * (scallop * (diameter - scallop)).sqrt()
                             }
                             ToolShape::Vbit { angle, .. } if scallop > 0.0 => {
-                                2.0 * scallop * (angle / 2.0).to_radians().tan()
+                                2.0 * scallop * (angle / 2.0).to_radians().dtan()
                             }
                             ToolShape::TaperedBall { .. } if scallop > 0.0 => {
                                 crate::cutter_for(tool.number, tool.shape)
@@ -1328,6 +1329,8 @@ fn raster_params() -> Vec<ParamSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
     use crate::job::Job;
 
     fn sample(t: &OperationType) -> Value {

@@ -1,6 +1,7 @@
 //! Dependency-free PNG previews of toolpaths: a side view (x vs radius) and an unrolled view
 //! (x vs A, coloured by radius). Meant for quick visual checks committed next to examples.
 
+use crate::det::Det;
 use crate::toolpath::{Move, Toolpath};
 
 /// RGB canvas.
@@ -295,8 +296,8 @@ pub fn polyline_marked(tp: &Toolpath) -> Marked {
                 x = Some(q[0]);
                 y = q[1];
                 r = Some(q[2]);
-                let phi = tip[2].atan2(tip[1]).to_degrees();
-                pts.push((tip[0], tip[1].hypot(tip[2]), 90.0 - phi, feed.is_some()));
+                let phi = tip[2].datan2(tip[1]).to_degrees();
+                pts.push((tip[0], tip[1].dhypot(tip[2]), 90.0 - phi, feed.is_some()));
             }
             continue;
         }
@@ -320,10 +321,10 @@ pub fn polyline_marked(tp: &Toolpath) -> Marked {
             r = nz;
             if let (Some(px), Some(pz)) = (nx, nz) {
                 // part frame = machine turned back by A
-                let (s, c) = a.to_radians().sin_cos();
+                let (s, c) = a.to_radians().dsin_cos();
                 let (yp, zp) = (ny * c + pz * s, -ny * s + pz * c);
-                let phi = zp.atan2(yp).to_degrees();
-                pts.push((px, yp.hypot(zp), 90.0 - phi, cut));
+                let phi = zp.datan2(yp).to_degrees();
+                pts.push((px, yp.dhypot(zp), 90.0 - phi, cut));
             }
             continue;
         }
@@ -631,7 +632,7 @@ fn profile_radius(pr: &[[f64; 2]], x: f64) -> Option<f64> {
 
 fn nice_step(span: f64) -> f64 {
     let raw = span / 10.0;
-    let p = 10f64.powf(raw.log10().floor());
+    let p = 10f64.dpowf(raw.dlog10().floor());
     for m in [1.0, 2.0, 5.0, 10.0] {
         if raw <= m * p {
             return m * p;
@@ -643,6 +644,8 @@ fn nice_step(span: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     #[test]
     fn png_is_well_formed() {

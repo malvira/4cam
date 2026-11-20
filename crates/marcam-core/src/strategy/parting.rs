@@ -2,6 +2,7 @@
 //! bar and feeds in as A turns (a helix in radius), each turn a little less deep and a little
 //! slower than the last as the core shrinks, so the cut ends gently at the axis.
 
+use crate::det::Det;
 use crate::job::Parting;
 use crate::numeric::rad;
 use crate::toolpath::Builder;
@@ -50,7 +51,7 @@ pub fn parting(
     // the tool's half width where it meets the material's top, at the deepest
     let half = match tool {
         PartingTool::Flat { radius } => radius,
-        PartingTool::Vbit { half_angle } => (top - end) * rad(half_angle).tan(),
+        PartingTool::Vbit { half_angle } => (top - end) * rad(half_angle).dtan(),
     };
     // pass centres from the remainder's side to the part's (the part-side wall cut last)
     let width = op.width.max(2.0 * half);
@@ -82,7 +83,7 @@ pub fn parting(
         match tool {
             PartingTool::Vbit { half_angle } => {
                 // the tip at the edge, as deep as the flank needs to reach `chamfer` along X
-                let r = top - op.chamfer / rad(half_angle).tan();
+                let r = top - op.chamfer / rad(half_angle).dtan();
                 b.rapid_r(safe_r);
                 b.rapid_x(op.x);
                 b.rapid_r(top + 0.5);
@@ -151,6 +152,8 @@ pub fn parting(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
     use crate::toolpath::Move;
 
     fn op() -> Parting {
@@ -254,7 +257,7 @@ mod tests {
         let c = cuts(&run(PartingTool::Vbit { half_angle: 30.0 }, &op()));
         let tip = c[0].0;
         assert!(
-            (tip - (-20.0 - 10.0 * 30f64.to_radians().tan())).abs() < 1e-9,
+            (tip - (-20.0 - 10.0 * 30f64.to_radians().dtan())).abs() < 1e-9,
             "{tip}"
         );
     }

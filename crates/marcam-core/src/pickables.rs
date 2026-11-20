@@ -13,6 +13,7 @@
 //! - rotary (the part's axis is X): cylindrical bands (round all the way, constant radius),
 //!   revolved bands (cones, shoulders, other surfaces of revolution) and surfaces (the rest).
 
+use crate::det::Det;
 use crate::geometry::{face_regions, FaceRegion};
 use crate::mesh::{cross, sub, Mesh, Triangle};
 use serde::Serialize;
@@ -140,7 +141,7 @@ fn add_band_ends(out: &mut [Pickable], mesh: &Mesh, infos: &[FaceRegion], of: &[
                 continue;
             }
             for q in t {
-                let r = q[1].hypot(q[2]);
+                let r = q[1].dhypot(q[2]);
                 if (q[0] - x0).abs() < 1e-6 {
                     lo = (lo.0 + r, lo.1 + 1);
                 }
@@ -180,7 +181,7 @@ fn round_edges(mesh: &Mesh, infos: &[FaceRegion], of: &[usize]) -> Vec<Pickable>
     let mut out = Vec::new();
     for ((ri, rj), pts) in by_pair {
         let xs: Vec<f64> = pts.iter().map(|p| p[0]).collect();
-        let rs: Vec<f64> = pts.iter().map(|p| p[1].hypot(p[2])).collect();
+        let rs: Vec<f64> = pts.iter().map(|p| p[1].dhypot(p[2])).collect();
         let span = |v: &[f64]| {
             v.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
                 - v.iter().cloned().fold(f64::INFINITY, f64::min)
@@ -242,7 +243,7 @@ fn side_faces(mesh: &Mesh, infos: &[FaceRegion], of: &[usize], index_a: f64) -> 
             continue;
         }
         // the part turned by A about X brings (ny, nz) up: A = atan2(ny, nz)
-        let a = n[1].atan2(n[2]).to_degrees();
+        let a = n[1].datan2(n[2]).to_degrees();
         let a = (a * 1000.0).round() / 1000.0;
         if ((a - index_a + 180.0).rem_euclid(360.0) - 180.0).abs() < 0.01 {
             continue; // already up: a flat face at this index
@@ -370,7 +371,7 @@ fn signed_area(p: &[[f64; 2]]) -> f64 {
 fn length(p: &[[f64; 2]]) -> f64 {
     let n = p.len();
     (0..n)
-        .map(|i| (p[(i + 1) % n][0] - p[i][0]).hypot(p[(i + 1) % n][1] - p[i][1]))
+        .map(|i| (p[(i + 1) % n][0] - p[i][0]).dhypot(p[(i + 1) % n][1] - p[i][1]))
         .sum()
 }
 
@@ -407,7 +408,7 @@ fn fit_circle(pts: &[[f64; 2]]) -> Option<([f64; 2], f64, f64)> {
     let r = (uc * uc + vc * vc + (suu + svv) / n).sqrt();
     let misfit = pts
         .iter()
-        .map(|p| ((p[0] - c[0]).hypot(p[1] - c[1]) - r).abs())
+        .map(|p| ((p[0] - c[0]).dhypot(p[1] - c[1]) - r).abs())
         .fold(0.0, f64::max);
     Some((c, r, misfit))
 }
@@ -418,7 +419,7 @@ fn largest_gap(pts: &[[f64; 2]], c: [f64; 2]) -> f64 {
         .iter()
         .map(|p| {
             (p[1] - c[1])
-                .atan2(p[0] - c[0])
+                .datan2(p[0] - c[0])
                 .to_degrees()
                 .rem_euclid(360.0)
         })
@@ -504,7 +505,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                     (t[0][1] + t[1][1] + t[2][1]) / 3.0,
                 ];
                 let d = [c[0] - m[0], c[1] - m[1]];
-                let l = d[0].hypot(d[1]).max(1e-12);
+                let l = d[0].dhypot(d[1]).max(1e-12);
                 tri_area(t) * (n[0] * d[0] + n[1] * d[1]) / l
             })
             .sum::<f64>()
@@ -525,7 +526,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                 && f.tris.iter().all(|&i| {
                     tris[i]
                         .iter()
-                        .all(|p| (p[0] - c[0]).hypot(p[1] - c[1]) <= rad * 1.01 + 1e-3)
+                        .all(|p| (p[0] - c[0]).dhypot(p[1] - c[1]) <= rad * 1.01 + 1e-3)
                 })
         });
         // closed at the top by a down-facing face: it opens away from the spindle
@@ -535,7 +536,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                 && f.tris.iter().all(|&i| {
                     tris[i]
                         .iter()
-                        .all(|p| (p[0] - c[0]).hypot(p[1] - c[1]) <= rad * 1.01 + 1e-3)
+                        .all(|p| (p[0] - c[0]).dhypot(p[1] - c[1]) <= rad * 1.01 + 1e-3)
                 })
         });
         if capped {
@@ -836,7 +837,7 @@ fn drop_collinear(l: &[[f64; 2]]) -> Vec<[f64; 2]> {
         .filter(|&i| {
             let (a, b, c) = (l[(i + n - 1) % n], l[i], l[(i + 1) % n]);
             let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
-            let len = (c[0] - a[0]).hypot(c[1] - a[1]).max(1e-9);
+            let len = (c[0] - a[0]).dhypot(c[1] - a[1]).max(1e-9);
             cross.abs() / len > 1e-6
         })
         .map(|i| l[i])
@@ -1005,7 +1006,7 @@ fn face_paths(p: &Pickable, r: Option<f64>) -> Vec<Value> {
         let normal = |i: usize| {
             let (a, b) = (pts[i], pts[(i + 1) % n]);
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-            let l = dx.hypot(dy).max(1e-12);
+            let l = dx.dhypot(dy).max(1e-12);
             [dy / l, -dx / l]
         };
         for i in 0..n {
@@ -1022,7 +1023,7 @@ fn face_paths(p: &Pickable, r: Option<f64>) -> Vec<Value> {
                     m = [m[0] + nn[0], m[1] + nn[1]];
                 }
             }
-            let l = m[0].hypot(m[1]);
+            let l = m[0].dhypot(m[1]);
             if l > 1e-9 {
                 out[i] = [pts[i][0] + push * m[0] / l, pts[i][1] + push * m[1] / l];
             }
@@ -1418,13 +1419,15 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     #[test]
     fn a_circle_fits_exactly() {
         let pts: Vec<[f64; 2]> = (0..32)
             .map(|k| {
                 let t = k as f64 * std::f64::consts::TAU / 32.0;
-                [3.0 + 2.5 * t.cos(), -1.0 + 2.5 * t.sin()]
+                [3.0 + 2.5 * t.dcos(), -1.0 + 2.5 * t.dsin()]
             })
             .collect();
         let (c, r, misfit) = fit_circle(&pts).unwrap();

@@ -11,6 +11,7 @@
 //! angular span grown by `asin(R / ρmin)` (ρmin = closest approach of the triangle to the axis).
 //! A query reads exactly one bin.
 
+use crate::det::Det;
 use crate::mesh::{Mesh, Triangle};
 use std::f64::consts::{PI, TAU};
 
@@ -52,14 +53,14 @@ impl Cutter {
         match *self {
             Cutter::Flat { .. } => 0.0,
             Cutter::Ball { radius } => radius - (radius * radius - d * d).max(0.0).sqrt(),
-            Cutter::Cone { half_angle, .. } => d / half_angle.tan(),
+            Cutter::Cone { half_angle, .. } => d / half_angle.dtan(),
             Cutter::TaperedBall {
                 tip_radius: rb,
                 half_angle,
                 ..
             } => {
                 // the ball meets the cone where its slope is the cone's
-                let (s, c) = half_angle.sin_cos();
+                let (s, c) = half_angle.dsin_cos();
                 let dt = rb * c;
                 if d <= dt {
                     rb - (rb * rb - d * d).max(0.0).sqrt()
@@ -81,13 +82,13 @@ impl Cutter {
         match *self {
             Cutter::Flat { .. } => None,
             Cutter::Ball { radius } => Some(ball(radius)),
-            Cutter::Cone { half_angle, .. } => Some(2.0 * h * half_angle.tan()),
+            Cutter::Cone { half_angle, .. } => Some(2.0 * h * half_angle.dtan()),
             Cutter::TaperedBall {
                 tip_radius: rb,
                 half_angle,
                 ..
             } => {
-                let (s, c) = half_angle.sin_cos();
+                let (s, c) = half_angle.dsin_cos();
                 let zt = rb * (1.0 - s);
                 Some(if h <= zt {
                     ball(rb)
@@ -105,7 +106,7 @@ impl Cutter {
             Cutter::Flat { radius } => radius,
             Cutter::Ball { radius } => radius * slope / (1.0 + slope * slope).sqrt(),
             Cutter::Cone { radius, half_angle } => {
-                if slope > 1.0 / half_angle.tan() {
+                if slope > 1.0 / half_angle.dtan() {
                     radius
                 } else {
                     0.0
@@ -116,7 +117,7 @@ impl Cutter {
                 half_angle,
                 radius,
             } => {
-                if slope > 1.0 / half_angle.tan() {
+                if slope > 1.0 / half_angle.dtan() {
                     radius
                 } else {
                     tip_radius * slope / (1.0 + slope * slope).sqrt()
@@ -228,11 +229,11 @@ impl DropCutter {
             let phi_bins: Vec<usize> = if rho <= r * (1.0 + 1e-9) {
                 (0..nphi).collect()
             } else {
-                let w = (r / rho).min(1.0).asin() + 1e-9;
+                let w = (r / rho).min(1.0).dasin() + 1e-9;
                 let (start, len) = angular_span([
-                    p2[0][1].atan2(p2[0][0]),
-                    p2[1][1].atan2(p2[1][0]),
-                    p2[2][1].atan2(p2[2][0]),
+                    p2[0][1].datan2(p2[0][0]),
+                    p2[1][1].datan2(p2[1][0]),
+                    p2[2][1].datan2(p2[2][0]),
                 ]);
                 let (s, e) = (start - w, start + len + w);
                 if e - s >= TAU {
@@ -282,7 +283,7 @@ impl DropCutter {
             return floor;
         }
         let j = ((phi / TAU * self.nphi as f64) as usize).min(self.nphi - 1);
-        let (s, c) = a.sin_cos();
+        let (s, c) = a.dsin_cos();
         let r = self.cutter.radius();
         let mut best = floor;
         let mut looked = crate::budget::PER_QUERY;
@@ -457,6 +458,8 @@ fn drop_edge(cutter: &Cutter, a: [f64; 3], b: [f64; 3]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
     use crate::job::Profile;
 
     fn cyl(r: f64, x0: f64, x1: f64) -> Mesh {
@@ -535,7 +538,7 @@ mod tests {
             for i in 0..40 {
                 let x = -7.0 + 0.2 * i as f64;
                 for a in [0.0f64, 7.0, 45.0, 100.0, 222.0, 300.5] {
-                    let (s, c) = a.to_radians().sin_cos();
+                    let (s, c) = a.to_radians().dsin_cos();
                     let brute = m
                         .triangles
                         .iter()

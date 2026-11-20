@@ -17,6 +17,7 @@
 //! The defaults for profiles without timing data are in [`Dynamics::from_profile`]. They
 //! are estimates, not measurements.
 
+use crate::det::Det;
 use crate::machine::FeedMode;
 use crate::profiles::MachineProfile;
 use crate::verify::words;
@@ -245,13 +246,13 @@ pub fn estimate_gcode(text: &str, dy: &Dynamics) -> Estimate {
             }
         }
         // arcs in XY (G17): the arc length replaces the chord's XY part
-        let mut xy_len = d[0].hypot(d[1]);
+        let mut xy_len = d[0].dhypot(d[1]);
         if motion == 2 || motion == 3 {
             if let (Some(x0), Some(y0)) = (pos[0], pos[1]) {
                 let (cx, cy) = (x0 + ij[0], y0 + ij[1]);
-                let r = ij[0].hypot(ij[1]);
-                let a0 = (y0 - cy).atan2(x0 - cx);
-                let a1 = (y0 + d[1] - cy).atan2(x0 + d[0] - cx);
+                let r = ij[0].dhypot(ij[1]);
+                let a0 = (y0 - cy).datan2(x0 - cx);
+                let a1 = (y0 + d[1] - cy).datan2(x0 + d[0] - cx);
                 let mut sweep = a1 - a0;
                 if motion == 2 && sweep >= 0.0 {
                     sweep -= std::f64::consts::TAU;
@@ -266,7 +267,7 @@ pub fn estimate_gcode(text: &str, dy: &Dynamics) -> Estimate {
             }
         }
         // the tool's mean distance from the rotary axis (surface-speed feeds)
-        let yz = |p: &[Option<f64>; 4]| p[1].unwrap_or(0.0).hypot(p[2].unwrap_or(0.0));
+        let yz = |p: &[Option<f64>; 4]| p[1].unwrap_or(0.0).dhypot(p[2].unwrap_or(0.0));
         let radius = (yz(&pos) + yz(&end)) / 2.0;
         pos = end;
         let lin = (xy_len * xy_len + d[2] * d[2]).sqrt();
@@ -442,6 +443,8 @@ pub fn format_duration(s: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     /// Fast axes with the given acceleration (inf: none), degrees-as-length.
     fn dynamics(accel: f64) -> Dynamics {

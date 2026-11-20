@@ -1,6 +1,7 @@
 //! Mesh finishing with a radial drop-cutter: rasters along the axis (constant A per pass) or a
 //! helix around it.
 
+use crate::det::Det;
 use crate::dropcutter::DropCutter;
 use crate::job::{FinishPattern, RotaryFinish};
 use crate::toolpath::{Builder, Move};
@@ -113,7 +114,7 @@ pub(crate) fn boundary<P: Copy>(
     len: f64,
 ) -> P {
     let (mut lo, mut hi) = (0.0f64, 1.0f64); // lo on p's side
-    let n = ((len.max(1e-9) / 1e-3).log2().ceil().max(1.0) as usize).min(40);
+    let n = ((len.max(1e-9) / 1e-3).dlog2().ceil().max(1.0) as usize).min(40);
     for _ in 0..n {
         let m = 0.5 * (lo + hi);
         if inside(lerp(p, q, m)) == p_inside {
@@ -201,7 +202,7 @@ pub fn rotary_finish_on(
     // along the turn), then onto it turning (the move never goes below the surface)
     let lead_deg = |x: f64, a: f64| {
         let r = cl(x, a).max(0.5);
-        (op.lead_in / 15f64.to_radians().tan() / r).to_degrees()
+        (op.lead_in / 15f64.to_radians().dtan() / r).to_degrees()
     };
     let onto = |b: &mut Builder, x: f64, a: f64, dir: f64| {
         if op.lead_in > 0.0 {

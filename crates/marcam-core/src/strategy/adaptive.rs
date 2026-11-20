@@ -8,6 +8,7 @@
 //! The level is a grid: where the tool's centre may stand (it cuts nothing it must not), the
 //! stock at that height, and what the tool has cut. The tool cuts a disc of its radius.
 
+use crate::det::Det;
 /// The level's grid: cell (i, j) at (x0 + i h, y0 + j h).
 #[derive(Debug, Clone, Copy)]
 pub struct Grid {
@@ -256,7 +257,7 @@ impl Level<'_> {
                 }
             }
         }
-        let l = v[0].hypot(v[1]);
+        let l = v[0].dhypot(v[1]);
         (n > 0 && l > 1e-9).then(|| [v[0] / l, v[1] / l])
     }
 
@@ -288,7 +289,7 @@ impl Level<'_> {
             for k in 0..=N {
                 let turn = SWEEP - 2.0 * SWEEP * k as f64 / N as f64;
                 let a = dir + side * at(turn);
-                let q = [p[0] + s * a.cos(), p[1] + s * a.sin()];
+                let q = [p[0] + s * a.dcos(), p[1] + s * a.dsin()];
                 if !self.may(q) {
                     prev = None;
                     continue;
@@ -304,7 +305,7 @@ impl Level<'_> {
                         for _ in 0..4 {
                             let mid = 0.5 * (lo + hi);
                             let am = dir + side * at(mid);
-                            let qm = [p[0] + s * am.cos(), p[1] + s * am.sin()];
+                            let qm = [p[0] + s * am.dcos(), p[1] + s * am.dsin()];
                             if self.may(qm) && self.engagement(qm) as f64 >= target {
                                 hi = mid;
                             } else {
@@ -312,7 +313,7 @@ impl Level<'_> {
                             }
                         }
                         let am = dir + side * at(hi);
-                        let qm = [p[0] + s * am.cos(), p[1] + s * am.sin()];
+                        let qm = [p[0] + s * am.dcos(), p[1] + s * am.dsin()];
                         chosen = Some(if self.may(qm) { hi } else { turn });
                     } else {
                         chosen = Some(turn);
@@ -325,7 +326,7 @@ impl Level<'_> {
                 (Some(t), _) => {
                     // more than twice the target even at the least: a slot
                     let a = dir + side * t.to_radians();
-                    let e = self.engagement([p[0] + s * a.cos(), p[1] + s * a.sin()]);
+                    let e = self.engagement([p[0] + s * a.dcos(), p[1] + s * a.dsin()]);
                     if e as f64 > 2.0 * target && !forced {
                         return (pts, true);
                     }
@@ -336,7 +337,7 @@ impl Level<'_> {
                 _ => break,
             };
             dir += side * turn.to_radians();
-            let q = [p[0] + s * dir.cos(), p[1] + s * dir.sin()];
+            let q = [p[0] + s * dir.dcos(), p[1] + s * dir.dsin()];
             let mid = [0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1])];
             self.removed += self.cut_at(mid, self.p.r) + self.cut_at(q, self.p.r);
             pts.push(q);
@@ -402,7 +403,7 @@ impl Level<'_> {
         let side = if self.p.climb { 1.0 } else { -1.0 };
         let m = self.towards_material(p, 1.5 * self.p.r + 2.0 * self.g.h);
         m.map_or(0.0, |m| {
-            m[1].atan2(m[0]) + side * std::f64::consts::FRAC_PI_2
+            m[1].datan2(m[0]) + side * std::f64::consts::FRAC_PI_2
         })
     }
 
@@ -412,7 +413,7 @@ impl Level<'_> {
         let step = self.g.h;
         let mut l = 0.0;
         while l < cap {
-            let q = [p[0] + (l + step) * a.cos(), p[1] + (l + step) * a.sin()];
+            let q = [p[0] + (l + step) * a.dcos(), p[1] + (l + step) * a.dsin()];
             if !self.may(q) {
                 break;
             }
@@ -499,7 +500,7 @@ impl Level<'_> {
     fn straighten(&self, path: &[usize], free: &[bool]) -> Vec<[f64; 2]> {
         let g = &self.g;
         let clear = |a: [f64; 2], b: [f64; 2]| {
-            let n = ((b[0] - a[0]).hypot(b[1] - a[1]) / (0.5 * g.h)).ceil() as usize;
+            let n = ((b[0] - a[0]).dhypot(b[1] - a[1]) / (0.5 * g.h)).ceil() as usize;
             (0..=n).all(|k| {
                 let t = k as f64 / n.max(1) as f64;
                 let q = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
@@ -626,7 +627,7 @@ pub fn clear_level(
             let best = (0..n).filter(|&c| front_down[c]).min_by(|&a, &b| {
                 let d = |c: usize| {
                     let q = g.point(c);
-                    (q[0] - from[0]).hypot(q[1] - from[1])
+                    (q[0] - from[0]).dhypot(q[1] - from[1])
                 };
                 d(a).total_cmp(&d(b))
             });
@@ -648,7 +649,7 @@ pub fn clear_level(
                         start: a0,
                     });
                     lv.removed += lv.cut_at(c, p.r + hr);
-                    let s = [c[0] + hr * a0.cos(), c[1] + hr * a0.sin()];
+                    let s = [c[0] + hr * a0.dcos(), c[1] + hr * a0.dsin()];
                     // round the hole: climb counter-clockwise (the material outside on the right)
                     (s, a0 + side * std::f64::consts::FRAC_PI_2)
                 } else {
@@ -667,7 +668,7 @@ pub fn clear_level(
                     (
                         q,
                         m.map_or(0.0, |m| {
-                            m[1].atan2(m[0]) + side * std::f64::consts::FRAC_PI_2
+                            m[1].datan2(m[0]) + side * std::f64::consts::FRAC_PI_2
                         }),
                     )
                 }
@@ -726,6 +727,8 @@ pub fn clear_level(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::det::Det;
 
     /// A 40 x 30 pocket, a 6 mm tool: everything inside reachable is cut, nothing outside.
     #[test]
@@ -778,7 +781,7 @@ mod tests {
                 Step::Helix { centre, radius, .. } => stamp(*centre, r + radius),
                 Step::Cut(pts) | Step::Link(pts) => {
                     for w in pts.windows(2) {
-                        len += (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]);
+                        len += (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1]);
                         for k in 0..=4 {
                             let t = k as f64 / 4.0;
                             stamp(

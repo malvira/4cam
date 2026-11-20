@@ -713,6 +713,7 @@ name = "marcam-core"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "libm",
  "ruzstd",
  "serde",
  "serde_json",
