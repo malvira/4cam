@@ -646,7 +646,7 @@ try {
   await settle();
   const plateMachine = await js("document.getElementById('machine').value");
   const plateTypes = (await addTypes()).join(",");
-  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,bore,contour,raster3d,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
+  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,bore,contour,raster3d,waterline,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
   await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 60000);
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
