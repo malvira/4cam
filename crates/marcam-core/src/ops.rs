@@ -422,9 +422,29 @@ pub fn registry() -> Vec<OperationType> {
                 let mut ps = raster_params();
                 let at = ps.iter().position(|p| p.name == "feed").unwrap_or(ps.len());
                 ps.insert(at, p("lead_in", "number", "mm", "Lead-in: each pass comes onto the surface from this high above it, down along the pass at the ramp angle, instead of plunging onto it (0: plunge).").opt(json!(0.0)).min(0.0));
+                ps.insert(at, p("rest_tool", "integer", "", "Rest finishing: the number of the earlier finish's (larger) tool; the passes cut only where it could not reach (corners, fillets); 0: everywhere.").opt(json!(0)).min(0.0));
                 ps
             },
             tool_shapes: &["ball", "flat", "vbit", "tapered_ball"],
+            geometry: &["mesh"],
+            machine_needs: &["xyz"],
+            shapes_part: false,
+        },
+        OperationType {
+            kind: "waterline",
+            title: "3D waterline finishing",
+            description: "Round the part's steep walls at constant heights, level by level down the part (where a parallel finish's passes run down a wall too far apart); shallow stretches are left to the parallel finish.",
+            group: "finishing",
+            params: {
+                let mut ps: Vec<ParamSpec> = raster_params()
+                    .into_iter()
+                    .filter(|p| !["angle", "pattern", "scallop", "stepover"].contains(&p.name))
+                    .collect();
+                let at = ps.iter().position(|p| p.name == "feed").unwrap_or(ps.len());
+                ps.insert(at, p("min_slope", "number", "deg", "Only where the surface is at least this steep (from the horizontal); 0: everywhere.").opt(json!(30.0)).min(0.0).max(90.0));
+                ps
+            },
+            tool_shapes: &["ball", "flat", "tapered_ball"],
             geometry: &["mesh"],
             machine_needs: &["xyz"],
             shapes_part: false,
@@ -656,6 +676,7 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::Bore(_) => "bore",
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
+        Operation::Waterline(_) => "waterline",
         Operation::Rough3d(_) => "rough3d",
         Operation::Engrave(_) => "engrave",
         Operation::Vcarve(_) => "vcarve",
@@ -1017,7 +1038,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("feed".into(), json!(feed));
             v.insert("plunge_feed".into(), json!(plunge));
         }
-        "face" | "pocket" | "drill" | "bore" | "contour" | "raster3d" | "rough3d" => {
+        "face" | "pocket" | "drill" | "bore" | "contour" | "raster3d" | "rough3d" | "waterline" => {
             // the vise block, or around the bar over the part (indexed 3+1 on a rotary setup)
             let rad = job.stock.radius;
             let sb = job.stock_box.unwrap_or(crate::job::StockBox {
@@ -1110,7 +1131,17 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                     v.insert("direction".into(), json!("climb"));
                     v.insert("sample".into(), json!(nice((0.1 * d).max(0.05), 0.01)));
                     v.insert("tolerance".into(), json!(0.005));
-                    if kind == "rough3d" {
+                    if kind == "waterline" {
+                        // levels a fifth of the tool apart, sampled finely, on the walls
+                        v.insert("step_down".into(), json!(nice((0.2 * d).max(0.05), 0.05)));
+                        v.insert("sample".into(), json!(nice((0.05 * d).max(0.05), 0.01)));
+                        v.insert("leave".into(), json!(0.0));
+                        v.insert("min_slope".into(), json!(30.0));
+                        // levels, not passes: no pass direction, pattern or spacing
+                        for k in ["angle", "pattern", "stepover", "scallop"] {
+                            v.remove(k);
+                        }
+                    } else if kind == "rough3d" {
                         // flat-end clearing: wide passes, deep levels, stock left for the finish
                         v.insert("scallop".into(), json!(0.0));
                         v.insert("stepover".into(), json!(nice(0.4 * d, 0.05)));

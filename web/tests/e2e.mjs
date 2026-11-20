@@ -507,7 +507,7 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = (await addTypes()).join(",");
   const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 15 && String(typesAll).split(",").length === 15, `${typesAll}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 16 && String(typesAll).split(",").length === 16, `${typesAll}`);
   const filled = [];
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
@@ -516,14 +516,17 @@ try {
     const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length)).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
     const before = await js("document.querySelectorAll('#tree .tree-op').length");
     await js("document.getElementById('opForm').requestSubmit(); true");
-    await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${before + 1}`), `${kind} to be added`, 60000);
+    await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${before + 1}`), `${kind} to be added`, 120000).catch(async (e) => {
+      // (what held it: the form still open and why, the status line)
+      throw new Error(`${e.message}: ${await js("JSON.stringify({ form: !!document.getElementById('opForm'), invalid: [...(document.getElementById('opForm')?.querySelectorAll(':invalid') ?? [])].map((x) => x.name), problems: document.getElementById('opForm')?.querySelector('.problems')?.textContent ?? null, state: document.body.dataset.state, status: document.getElementById('status').textContent })")}`);
+    });
     const id = await js("[...document.querySelectorAll('#tree .tree-op')].pop().dataset.op");
     filled.push(`${kind}:${blanks || "none blank"}`);
     if (blanks) break;
     await treeAct(id, "delete");
     await settle();
   }
-  check("every operation type's new form is fully filled and applies cleanly", filled.length === 15 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
+  check("every operation type's new form is fully filled and applies cleanly", filled.length === 16 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 60000);

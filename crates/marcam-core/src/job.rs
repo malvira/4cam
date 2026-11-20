@@ -413,6 +413,18 @@ pub struct Program {
     pub operations: Vec<Operation>,
 }
 
+/// A waterline's fields: a [`Raster3d`]'s without the pass direction, pattern and spacing
+/// (it cuts levels, `step_down` apart).
+fn waterline_fields<S: serde::Serializer>(r: &Raster3d, s: S) -> Result<S::Ok, S::Error> {
+    let mut v = serde_json::to_value(r).map_err(serde::ser::Error::custom)?;
+    if let Some(m) = v.as_object_mut() {
+        for k in ["angle", "pattern", "stepover", "scallop"] {
+            m.remove(k);
+        }
+    }
+    v.serialize(s)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Operation {
@@ -430,6 +442,10 @@ pub enum Operation {
     /// 3D roughing: the parallel raster with a flat (or ball) tool in step-down levels,
     /// leaving stock for the finish.
     Rough3d(Raster3d),
+    /// 3D waterline finishing: the part's steep walls cut round at constant Z levels, where
+    /// a parallel finish's passes run down them too far apart.
+    #[serde(serialize_with = "waterline_fields")]
+    Waterline(Raster3d),
     Engrave(Engrave),
     Vcarve(Vcarve),
     Parting(Parting),
@@ -711,6 +727,8 @@ pub struct Raster3d {
     pub index_a: f64,
     pub x_range: [f64; 2],
     pub y_range: [f64; 2],
+    /// (A waterline has none: its levels are `step_down` apart.)
+    #[serde(default)]
     pub stepover: f64,
     pub sample: f64,
     pub step_down: f64,
@@ -742,6 +760,15 @@ pub struct Raster3d {
     /// the setup left material, simulated (a smaller tool after a larger one).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rest: bool,
+    /// Rest finishing (a parallel finish): only where the earlier finish's tool, this number
+    /// (larger), could not reach: where this tool goes deeper than it would (corners,
+    /// fillets); 0: everywhere.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub rest_tool: u32,
+    /// Waterline: only where the surface is at least this steep (degrees from the
+    /// horizontal); 0: everywhere.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub min_slope: f64,
     /// Lead-in (finishing): each pass comes onto the surface from this high above it (mm),
     /// down along the pass at the ramp angle, instead of plunging onto it; 0: plunge.
     #[serde(default, skip_serializing_if = "is_zero_f64")]
@@ -871,7 +898,9 @@ impl Operation {
             Operation::Drill(o) => Some(o.index_a),
             Operation::Bore(o) => Some(o.index_a),
             Operation::Contour(o) => Some(o.index_a),
-            Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.index_a),
+            Operation::Raster3d(o) | Operation::Rough3d(o) | Operation::Waterline(o) => {
+                Some(o.index_a)
+            }
             _ => None,
         }
     }
@@ -879,7 +908,9 @@ impl Operation {
     /// The ramp angle of an operation that descends along its path (None: plunges only).
     pub fn ramp_angle(&self) -> Option<f64> {
         match self {
-            Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.ramp_angle),
+            Operation::Raster3d(o) | Operation::Rough3d(o) | Operation::Waterline(o) => {
+                Some(o.ramp_angle)
+            }
             Operation::Engrave(o) => Some(o.ramp_angle),
             Operation::Vcarve(o) => Some(o.ramp_angle),
             Operation::RotaryTurning(o) => Some(o.ramp_angle),
@@ -904,6 +935,7 @@ impl Operation {
             Operation::RotaryRough(o) => (o.smoothing, false),
             Operation::Raster3d(o) => (o.smoothing, true),
             Operation::Rough3d(o) => (o.smoothing, false),
+            Operation::Waterline(o) => (o.smoothing, true),
             Operation::Engrave(o) => (o.smoothing, true),
             Operation::Vcarve(o) => (o.smoothing, true),
             Operation::Contour(o) => (o.smoothing, true),
@@ -923,7 +955,7 @@ impl Operation {
             Operation::Drill(o) => o.tool,
             Operation::Bore(o) => o.tool,
             Operation::Contour(o) => o.tool,
-            Operation::Raster3d(o) | Operation::Rough3d(o) => o.tool,
+            Operation::Raster3d(o) | Operation::Rough3d(o) | Operation::Waterline(o) => o.tool,
             Operation::Engrave(o) => o.tool,
             Operation::Vcarve(o) => o.tool,
             Operation::RotaryTurning(o) => o.tool,

@@ -499,7 +499,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // (pocket, contour and face take one), "select all similar" adds the ones alike. Finishing
   // operations record the picked faces (a faces selection); the others take the fields the
   // engine fills from the picks (drill points and depth, a pocket's outline, ...).
-  const FACE_TYPES = ["raster3d", "rough3d", "rotary_finish"];
+  const FACE_TYPES = ["raster3d", "rough3d", "waterline", "rotary_finish"];
   const SINGLE = ["helical_knurl", "flank_chamfer", "engrave", "vcarve"];
   function pickModeOf(ty) {
     if (!ty) return null;

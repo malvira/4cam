@@ -402,6 +402,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       if (preset.machine) $("sdMachine").value = preset.machine;
       const k = preset.kind ?? "rotary";
       for (const r of dlg.querySelectorAll('input[name="sdKind"]')) r.checked = r.value === k;
+      dlg.dataset.kind = k;
       // a vise needs the part as a mesh
       const noMesh = (mode === "edit" || mode === "add") && !preset.hasMesh;
       for (const el of dlg.querySelectorAll(".sd-kind")) {
@@ -520,7 +521,17 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
   // ------------------------------------------------------------ wiring
   dlg.addEventListener("change", (ev) => {
     const t = ev.target;
-    if (t.name === "sdKind") return layout(true);
+    if (t.name === "sdKind") {
+      // to or from a vise: its usual stock (a block; a bar on the rotary axis), unless the
+      // sizes were given
+      const was = dlg.dataset.kind;
+      if (was && bar(was) !== bar(t.value) && stockMode() !== "explicit") {
+        const sh = bar(t.value) ? "round" : "block";
+        for (const r of dlg.querySelectorAll('input[name="sdShape"]')) r.checked = r.value === sh;
+      }
+      dlg.dataset.kind = t.value;
+      return layout(true);
+    }
     if (t.name === "sdShape" || t.name === "sdStock") {
       stockLayout();
       return preview();

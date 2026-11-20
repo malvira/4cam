@@ -809,7 +809,7 @@ impl Project {
                     }
                     f.faces = face_ids;
                 }
-                Operation::Raster3d(r) => {
+                Operation::Raster3d(r) | Operation::Waterline(r) => {
                     // only faces: the passes' area comes from the parameters
                     if o.geometry.iter().any(|s| {
                         !matches!(s, crate::geometry::Selection::Faces { .. })

@@ -938,7 +938,127 @@ pub fn raster3d(
     safe: f64,
     op: &Raster3d,
 ) -> Result<(), String> {
-    raster3d_on(b, dc, None, None, stock, safe, op)
+    raster3d_on(b, dc, None, None, None, stock, safe, op)
+}
+
+/// Material thicker than this (mm) left by the earlier finish is cut by a rest finish.
+pub const REST_FINISH_MIN: f64 = 0.02;
+
+/// Where a rest finish cuts: the surface the earlier finish's ball (radius `big`) leaves (the
+/// lower envelope of the ball everywhere it rests on the part), where it stands more than
+/// [`REST_FINISH_MIN`] above the part, widened by the rest finish's tool radius (`small`).
+#[derive(Debug, Clone)]
+pub struct RestFinish {
+    x0: f64,
+    y0: f64,
+    h: f64,
+    nx: usize,
+    ny: usize,
+    cut: Vec<bool>,
+}
+
+impl RestFinish {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        big_dc: &DropCutter3,
+        part: &DropCutter3,
+        x_range: [f64; 2],
+        y_range: [f64; 2],
+        big: f64,
+        small: f64,
+        floor: f64,
+    ) -> RestFinish {
+        // (the balls placed on a grid: between them the envelope stands proud of a curved
+        // surface by about the square of the spacing; a sixth of the small radius keeps that
+        // well under the threshold)
+        let h = (small / 6.0).clamp(0.03, 0.25);
+        // a margin of the big ball round the area: its envelope there reaches in
+        let (x0, x1) = (
+            x_range[0].min(x_range[1]) - big,
+            x_range[0].max(x_range[1]) + big,
+        );
+        let (y0, y1) = (
+            y_range[0].min(y_range[1]) - big,
+            y_range[0].max(y_range[1]) + big,
+        );
+        let nx = ((x1 - x0) / h).ceil() as usize + 1;
+        let ny = ((y1 - y0) / h).ceil() as usize + 1;
+        let at = |i: usize, j: usize| (x0 + i as f64 * h, y0 + j as f64 * h);
+        // the big ball's centre over each point, and the part's top there
+        let mut centre = vec![f64::NEG_INFINITY; nx * ny];
+        let mut top = vec![f64::NEG_INFINITY; nx * ny];
+        for j in 0..ny {
+            for i in 0..nx {
+                let (x, y) = at(i, j);
+                centre[j * nx + i] = big_dc.z_at(x, y, floor) + big;
+                top[j * nx + i] = part.z_at(x, y, floor);
+            }
+        }
+        // what it leaves: at each point the lowest of the balls over it
+        let k = (big / h).ceil() as isize;
+        let mut left_over = vec![false; nx * ny];
+        for j in 0..ny as isize {
+            for i in 0..nx as isize {
+                let mut low = f64::INFINITY;
+                for dj in -k..=k {
+                    for di in -k..=k {
+                        let (a, c) = (i + di, j + dj);
+                        if a < 0 || c < 0 || a >= nx as isize || c >= ny as isize {
+                            continue;
+                        }
+                        let d2 = ((di * di + dj * dj) as f64) * h * h;
+                        if d2 > big * big {
+                            continue;
+                        }
+                        low =
+                            low.min(centre[c as usize * nx + a as usize] - (big * big - d2).sqrt());
+                    }
+                }
+                let t = top[j as usize * nx + i as usize];
+                left_over[j as usize * nx + i as usize] =
+                    t.is_finite() && low - t > REST_FINISH_MIN;
+            }
+        }
+        // the small tool cuts there with any part of it: widened by its radius
+        let s = (small / h).ceil() as isize;
+        let mut cut = vec![false; nx * ny];
+        for j in 0..ny as isize {
+            for i in 0..nx as isize {
+                if !left_over[j as usize * nx + i as usize] {
+                    continue;
+                }
+                for dj in -s..=s {
+                    for di in -s..=s {
+                        let (a, c) = (i + di, j + dj);
+                        if a < 0 || c < 0 || a >= nx as isize || c >= ny as isize {
+                            continue;
+                        }
+                        if ((di * di + dj * dj) as f64) * h * h <= small * small {
+                            cut[c as usize * nx + a as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+        RestFinish {
+            x0,
+            y0,
+            h,
+            nx,
+            ny,
+            cut,
+        }
+    }
+
+    /// Whether the rest finish cuts with its tool over (x, y).
+    pub fn cuts(&self, x: f64, y: f64) -> bool {
+        let i = ((x - self.x0) / self.h).round();
+        let j = ((y - self.y0) / self.h).round();
+        if i < 0.0 || j < 0.0 || i as usize >= self.nx || j as usize >= self.ny {
+            return false;
+        }
+        self.cut[j as usize * self.nx + i as usize]
+    }
 }
 
 /// Material thinner than this (mm) over what a pass leaves is not cut by rest roughing: the
@@ -1024,11 +1144,13 @@ impl RestMap {
 /// [`raster3d`] limited to where the tool rests on the faces in `sel` (a drop-cutter on just
 /// those faces, following the whole part through `dc`): it lifts to the safe height between
 /// runs, and links rows at depth only when the link stays on the faces.
+#[allow(clippy::too_many_arguments)]
 pub fn raster3d_on(
     b: &mut Builder,
     dc: &DropCutter3,
     sel: Option<&DropCutter3>,
     rest: Option<&RestMap>,
+    bigger: Option<&RestFinish>,
     stock: &StockBox,
     safe: f64,
     op: &Raster3d,
@@ -1131,12 +1253,14 @@ pub fn raster3d_on(
             } else {
                 row
             };
-            if sel.is_some() || rest.is_some() {
-                // on the selected faces, and (rest roughing) where material is left above
-                // the pass
+            if sel.is_some() || rest.is_some() || bigger.is_some() {
+                // on the selected faces, (rest roughing) where material is left above the
+                // pass, and (rest finishing) where the earlier finish's larger tool could not
+                // go as deep
                 let inside = |p: [f64; 2]| {
                     sel.is_none_or(|s| on_sel(dc, s, p[0], p[1]))
                         && rest.is_none_or(|r| r.at(p[0], p[1]) > z_of(p[0], p[1]) + REST_MIN)
+                        && bigger.is_none_or(|g| g.cuts(p[0], p[1]))
                 };
                 masked_row(
                     b,
@@ -1218,6 +1342,207 @@ pub fn raster3d_on(
         leave(b, safe);
         if !held.get() {
             break;
+        }
+    }
+    Ok(())
+}
+
+/// Most grid points a waterline samples the part at.
+pub const WATERLINE_MAX_POINTS: usize = 4_000_000;
+
+/// 3D waterline finishing: at each level from the part's top down to `floor` (every
+/// `step_down`), the tool goes round where it touches the part at that height: the level's
+/// contour on a grid of drop-cutter heights (`sample` apart), followed with the part on the
+/// tool's left (climb with a clockwise spindle; conventional: the other way). With
+/// `min_slope`, only where the surface is at least that steep (the walls a parallel finish
+/// passes down too far apart); shallow stretches are left for it.
+pub fn waterline(
+    b: &mut Builder,
+    dc: &DropCutter3,
+    stock: &StockBox,
+    safe: f64,
+    op: &Raster3d,
+) -> Result<(), String> {
+    let (x0, x1) = (
+        op.x_range[0].min(op.x_range[1]),
+        op.x_range[0].max(op.x_range[1]),
+    );
+    let (y0, y1) = (
+        op.y_range[0].min(op.y_range[1]),
+        op.y_range[0].max(op.y_range[1]),
+    );
+    let h = op.sample.max(0.02);
+    let nx = ((x1 - x0) / h).ceil() as usize + 1;
+    let ny = ((y1 - y0) / h).ceil() as usize + 1;
+    if nx * ny > WATERLINE_MAX_POINTS {
+        return Err(format!(
+            "waterline: a {h} mm sample over {:.0} x {:.0} mm is {} points (at most {WATERLINE_MAX_POINTS}): sample coarser",
+            x1 - x0,
+            y1 - y0,
+            nx * ny
+        ));
+    }
+    let floor = op.floor + op.leave;
+    let px = |i: usize| x0 + (x1 - x0) * i as f64 / (nx - 1).max(1) as f64;
+    let py = |j: usize| y0 + (y1 - y0) * j as f64 / (ny - 1).max(1) as f64;
+    // the tool's height over each grid point (where it rests on the part, plus what is left)
+    let mut v = vec![floor; nx * ny];
+    for j in 0..ny {
+        if crate::budget::over() {
+            return Ok(());
+        }
+        for i in 0..nx {
+            v[j * nx + i] = (dc.z_at(px(i), py(j), op.floor) + op.leave).max(floor);
+        }
+    }
+    let top = v
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max)
+        .min(stock.max[2]);
+    let at = |i: usize, j: usize| v[j * nx + i];
+    // the surface's steepness at a cell (degrees), from its corners
+    let steep = |i: usize, j: usize| {
+        let gx = ((at(i + 1, j) - at(i, j)) + (at(i + 1, j + 1) - at(i, j + 1))) / (2.0 * h);
+        let gy = ((at(i, j + 1) - at(i, j)) + (at(i + 1, j + 1) - at(i + 1, j))) / (2.0 * h);
+        gx.hypot(gy).atan().to_degrees()
+    };
+    // a grid edge's id: 2 * point + (0 along X, 1 along Y)
+    let edge_point = |e: usize, z: f64| -> [f64; 2] {
+        let (k, dir) = (e / 2, e % 2);
+        let (i, j) = (k % nx, k / nx);
+        let (a, bv, q) = if dir == 0 {
+            (at(i, j), at(i + 1, j), [px(i), px(i + 1), py(j), py(j)])
+        } else {
+            (at(i, j), at(i, j + 1), [px(i), px(i), py(j), py(j + 1)])
+        };
+        let t = if (bv - a).abs() < 1e-12 {
+            0.5
+        } else {
+            ((z - a) / (bv - a)).clamp(0.0, 1.0)
+        };
+        [q[0] + (q[1] - q[0]) * t, q[2] + (q[3] - q[2]) * t]
+    };
+    let climb = op.direction != "conventional";
+    let feeds = [op.feed, op.plunge_feed];
+    let _ = feeds;
+    b.comment("--- 3D waterline ---");
+    let mut last: Option<[f64; 2]> = None;
+    for z in levels(top, floor, op.step_down.max(0.01)) {
+        if crate::budget::over() {
+            break;
+        }
+        // the level's contour: per cell, oriented segments (edge to edge) with the part
+        // (above the level) on the left
+        let mut segs: Vec<(usize, usize)> = Vec::new();
+        for j in 0..ny - 1 {
+            for i in 0..nx - 1 {
+                let c = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+                let up = c.map(|vv| vv > z);
+                if up.iter().all(|&u| u) || up.iter().all(|&u| !u) {
+                    continue;
+                }
+                if op.min_slope > 0.0 && steep(i, j) < op.min_slope {
+                    continue;
+                }
+                let k = j * nx + i;
+                // the cell's edges: bottom, right, top, left (between corners 0-1, 1-2, 2-3, 3-0)
+                let edges = [2 * k, 2 * (k + 1) + 1, 2 * (k + nx), 2 * k + 1];
+                let cross: Vec<usize> = (0..4).filter(|&e| up[e] != up[(e + 1) % 4]).collect();
+                let pairs: Vec<(usize, usize)> = if cross.len() == 2 {
+                    vec![(cross[0], cross[1])]
+                } else {
+                    // a saddle: the middle decides which corners join
+                    let mid = c.iter().sum::<f64>() / 4.0 > z;
+                    if mid == up[0] {
+                        vec![(0, 1), (2, 3)]
+                    } else {
+                        vec![(0, 3), (1, 2)]
+                    }
+                };
+                for (ea, eb) in pairs {
+                    // the part (above) on the left of a -> b
+                    let (pa, pb) = (edge_point(edges[ea], z), edge_point(edges[eb], z));
+                    let corner = (0..4)
+                        .find(|&q| up[q])
+                        .map(|q| {
+                            [
+                                [px(i), py(j)],
+                                [px(i + 1), py(j)],
+                                [px(i + 1), py(j + 1)],
+                                [px(i), py(j + 1)],
+                            ][q]
+                        })
+                        .unwrap();
+                    let cross_z = (pb[0] - pa[0]) * (corner[1] - pa[1])
+                        - (pb[1] - pa[1]) * (corner[0] - pa[0]);
+                    let (sa, sb) = if (cross_z > 0.0) == climb {
+                        (edges[ea], edges[eb])
+                    } else {
+                        (edges[eb], edges[ea])
+                    };
+                    segs.push((sa, sb));
+                }
+            }
+        }
+        // chained into runs: each segment's end is the next one's start
+        let mut by_start: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        let mut ends: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for (k, &(a, e)) in segs.iter().enumerate() {
+            by_start.insert(a, k);
+            ends.insert(e);
+        }
+        let mut used = vec![false; segs.len()];
+        let mut runs: Vec<Vec<[f64; 2]>> = Vec::new();
+        // open runs first (from a segment nothing leads into), then the closed loops
+        let order: Vec<usize> = (0..segs.len())
+            .filter(|&k| !ends.contains(&segs[k].0))
+            .chain(0..segs.len())
+            .collect();
+        for k0 in order {
+            if used[k0] {
+                continue;
+            }
+            let mut pts = vec![edge_point(segs[k0].0, z)];
+            let mut k = k0;
+            loop {
+                used[k] = true;
+                pts.push(edge_point(segs[k].1, z));
+                match by_start.get(&segs[k].1) {
+                    Some(&n) if !used[n] => k = n,
+                    _ => break,
+                }
+            }
+            if pts.len() >= 2 {
+                runs.push(pts);
+            }
+        }
+        // nearest first
+        while !runs.is_empty() {
+            let from = last.unwrap_or(runs[0][0]);
+            let k = (0..runs.len())
+                .min_by(|&a, &c| {
+                    let d = |r: &Vec<[f64; 2]>| (r[0][0] - from[0]).hypot(r[0][1] - from[1]);
+                    d(&runs[a]).total_cmp(&d(&runs[c]))
+                })
+                .unwrap();
+            let run = runs.swap_remove(k);
+            let [sx, sy] = run[0];
+            enter(
+                b,
+                safe,
+                sx,
+                sy,
+                z + op.step_down.max(0.5),
+                z,
+                op.plunge_feed,
+            );
+            for q in run.iter().skip(1) {
+                b.line3(q[0], q[1], z, UP, op.feed);
+            }
+            leave(b, safe);
+            last = run.last().copied();
         }
     }
     Ok(())

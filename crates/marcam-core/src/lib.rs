@@ -119,6 +119,7 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::Bore(_) => "bore",
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
+        Operation::Waterline(_) => "waterline",
         Operation::Rough3d(_) => "rough3d",
         Operation::Engrave(_) => "engrave",
         Operation::Vcarve(_) => "vcarve",
@@ -400,6 +401,7 @@ fn is_three_axis(op: &Operation) -> bool {
             | Operation::Contour(_)
             | Operation::Raster3d(_)
             | Operation::Rough3d(_)
+            | Operation::Waterline(_)
     )
 }
 
@@ -558,7 +560,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 Operation::RotaryFinish(_)
                 | Operation::RotaryRough(_)
                 | Operation::Raster3d(_)
-                | Operation::Rough3d(_),
+                | Operation::Rough3d(_)
+                | Operation::Waterline(_),
                 shape,
             ) => Some(cutter_for(number, shape)?),
             (
@@ -802,7 +805,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         strategy::bore::bore(&mut b, d, sb, safe_r, o).map_err(err)?
                     }
                     Operation::Contour(o) => t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?,
-                    Operation::Raster3d(o) | Operation::Rough3d(o) => {
+                    Operation::Raster3d(o) | Operation::Rough3d(o) | Operation::Waterline(o) => {
                         // rest roughing: only where the moves before it left material
                         let rest = if o.rest {
                             if !matches!(op, Operation::Rough3d(_)) {
@@ -831,9 +834,45 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         let turned = (index != 0.0).then(|| mesh.rotated_x(index));
                         let c = cutter.expect("set above");
                         let dc = t3::DropCutter3::new(turned.as_ref().unwrap_or(mesh), c);
-                        if o.faces.is_empty() {
-                            t3::raster3d_on(&mut b, &dc, None, rest.as_ref(), sb, safe_r, o)
-                                .map_err(err)?
+                        // rest finishing: the earlier finish's tool, to find where it could not reach
+                        let bigger = if o.rest_tool > 0 && matches!(op, Operation::Raster3d(_)) {
+                            let t = job.tool(o.rest_tool).ok_or_else(|| {
+                                err(format!(
+                                    "rest_tool {}: the project has no such tool",
+                                    o.rest_tool
+                                ))
+                            })?;
+                            let gc = cutter_for(o.rest_tool, t.shape)?;
+                            let surface = turned.as_ref().unwrap_or(mesh);
+                            let big_dc = t3::DropCutter3::new(surface, gc);
+                            let point =
+                                t3::DropCutter3::new(surface, Cutter::Flat { radius: 1e-4 });
+                            Some(t3::RestFinish::new(
+                                &big_dc,
+                                &point,
+                                o.x_range,
+                                o.y_range,
+                                gc.radius(),
+                                c.radius(),
+                                o.floor,
+                            ))
+                        } else {
+                            None
+                        };
+                        if matches!(op, Operation::Waterline(_)) {
+                            t3::waterline(&mut b, &dc, sb, safe_r, o).map_err(err)?
+                        } else if o.faces.is_empty() {
+                            t3::raster3d_on(
+                                &mut b,
+                                &dc,
+                                None,
+                                rest.as_ref(),
+                                bigger.as_ref(),
+                                sb,
+                                safe_r,
+                                o,
+                            )
+                            .map_err(err)?
                         } else {
                             let sub = face_subset(mesh, &o.faces).map_err(err)?;
                             let sub = if index != 0.0 {
@@ -858,8 +897,17 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                                 o.y_range = clip(o.y_range, lo[1], hi[1]);
                             }
                             let seld = t3::DropCutter3::new(&sub, c);
-                            t3::raster3d_on(&mut b, &dc, Some(&seld), rest.as_ref(), sb, safe_r, &o)
-                                .map_err(err)?
+                            t3::raster3d_on(
+                                &mut b,
+                                &dc,
+                                Some(&seld),
+                                rest.as_ref(),
+                                bigger.as_ref(),
+                                sb,
+                                safe_r,
+                                &o,
+                            )
+                            .map_err(err)?
                         }
                     }
                     _ => unreachable!(),
@@ -950,7 +998,9 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         Operation::Drill(o) => Some(o.feed),
                         Operation::Bore(o) => Some(o.plunge_feed),
                         Operation::Contour(o) => Some(o.plunge_feed),
-                        Operation::Raster3d(o) | Operation::Rough3d(o) => Some(o.plunge_feed),
+                        Operation::Raster3d(o)
+                        | Operation::Rough3d(o)
+                        | Operation::Waterline(o) => Some(o.plunge_feed),
                         Operation::Engrave(o) => Some(o.plunge_feed),
                         Operation::Vcarve(o) => Some(o.plunge_feed),
                         _ => None,
