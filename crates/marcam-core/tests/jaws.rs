@@ -81,3 +81,61 @@ fn a_cut_below_the_jaws_top_is_warned_about() {
         "{w:?}"
     );
 }
+
+#[test]
+fn a_shank_that_reaches_the_jaws_is_a_collision() {
+    let libs = marcam::profiles::builtin_libraries();
+    let machine = marcam::profiles::builtin_machine("makera-carvera-4axis")
+        .unwrap()
+        .post;
+    // the outline's tool with 1 mm of flute under a 6 mm shank, its tip 1 mm past the Y
+    // faces down to Z-2.5
+    let check = |grip: f64| {
+        let mut p = plate();
+        p.setups[0].holding.jaws = Some(grip);
+        let mut job = p.setup_job(&p.setups[0], &libs).unwrap();
+        // a tool of its own for the outline (the pocket's shank would collide with the stock)
+        let t = job
+            .programs
+            .iter()
+            .flat_map(|pr| &pr.operations)
+            .find_map(|o| match o {
+                marcam::job::Operation::Contour(c) => Some(c.tool),
+                _ => None,
+            })
+            .unwrap();
+        let mut own = job.tool(t).unwrap().clone();
+        own.number = 9;
+        own.flute_length = Some(1.0);
+        own.shank_diameter = Some(6.0);
+        job.tools.push(own);
+        for pr in &mut job.programs {
+            for o in &mut pr.operations {
+                if let marcam::job::Operation::Contour(c) = o {
+                    c.tool = 9;
+                }
+            }
+        }
+        let mesh = load_mesh(&job, Path::new(PLATE)).unwrap();
+        let tps = plan_with_mesh(&job, mesh.as_ref()).unwrap();
+        marcam::collision_check(&job, &tps, &machine)
+            .unwrap()
+            .iter()
+            .flat_map(|r| r.collisions.clone())
+            .collect::<Vec<_>>()
+    };
+    // gripped 9.8 of 10 (their top Z-0.2): the shank (from Z-1.5 up) beside the block
+    let hit = check(9.8);
+    assert!(
+        hit.iter()
+            .any(|c| c.contact == marcam::collision::Contact::ShankOnJaws && c.tip[1] < 2.0),
+        "{hit:?}"
+    );
+    // gripped 3 mm: the jaws far below
+    let low = check(3.0);
+    assert!(
+        low.iter()
+            .all(|c| c.contact != marcam::collision::Contact::ShankOnJaws),
+        "{low:?}"
+    );
+}

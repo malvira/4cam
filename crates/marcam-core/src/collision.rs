@@ -108,10 +108,17 @@ impl ToolBody {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
 pub enum Contact {
+    #[serde(rename = "shank")]
     Shank,
+    #[serde(rename = "holder")]
     Holder,
+    /// The shank against the vise's jaws.
+    #[serde(rename = "shank on the vise jaws")]
+    ShankOnJaws,
+    /// The holder against the vise's jaws.
+    #[serde(rename = "holder on the vise jaws")]
+    HolderOnJaws,
 }
 
 impl std::fmt::Display for Contact {
@@ -119,6 +126,8 @@ impl std::fmt::Display for Contact {
         f.write_str(match self {
             Contact::Shank => "shank",
             Contact::Holder => "holder",
+            Contact::ShankOnJaws => "shank on the vise jaws",
+            Contact::HolderOnJaws => "holder on the vise jaws",
         })
     }
 }
@@ -345,6 +354,44 @@ pub fn contact_block(
     best
 }
 
+/// How far beyond the stock's X ends the vise's jaws reach (mm; as drawn).
+pub const JAW_X: f64 = 10.0;
+
+/// Deepest contact of the shank or holder with the vise's jaws (beside the stock's Y faces
+/// `sb`, up to `jaw_top`), tip at work `tip`.
+pub fn contact_jaws(
+    sb: &crate::job::StockBox,
+    jaw_top: f64,
+    tip: [f64; 3],
+    body: &ToolBody,
+) -> Option<(Contact, f64)> {
+    let mut best: Option<(Contact, f64)> = None;
+    for (which, lo, hi, rad) in body.zones() {
+        if rad <= 0.0 || hi <= lo {
+            continue;
+        }
+        let z_lo = tip[2] + lo;
+        if z_lo >= jaw_top {
+            continue;
+        }
+        let in_x = tip[0] + rad >= sb.min[0] - JAW_X && tip[0] - rad <= sb.max[0] + JAW_X;
+        let past_y = tip[1] - rad < sb.min[1] - 1e-9 || tip[1] + rad > sb.max[1] + 1e-9;
+        if !(in_x && past_y) {
+            continue;
+        }
+        let d = (jaw_top - z_lo).min(hi - lo);
+        let which = if which == Contact::Holder {
+            Contact::HolderOnJaws
+        } else {
+            Contact::ShankOnJaws
+        };
+        if d > CONTACT_TOL && best.is_none_or(|(_, b)| d > b) {
+            best = Some((which, d));
+        }
+    }
+    best
+}
+
 /// Tool tip positions evaluated along a segment (machine [x, y, z], A), at most `step` apart.
 /// Rotary segments ([x, r, a]) put the tip at (x, 0, r).
 fn samples(seg: &Segment, step: f64) -> Vec<([f64; 3], f64)> {
@@ -526,6 +573,7 @@ pub fn simulate_block(
     body_for: &dyn Fn(u32) -> Option<ToolBody>,
     step: f64,
     top: f64,
+    jaws: Option<(crate::job::StockBox, f64)>,
 ) -> (SimStats, CollisionReport) {
     let mut st = SimStats::default();
     let mut rep = CollisionReport {
@@ -534,13 +582,22 @@ pub fn simulate_block(
     };
     let mut since = f64::INFINITY;
     for seg in sim3::segments3(std::slice::from_ref(tp)) {
+        // (the jaws' top may be above the stock's when it is gripped whole)
+        let reach = jaws.map_or(top, |(_, jt)| top.max(jt));
         let body = seg
             .tool
             .and_then(|t| body_for(t).map(|b| (t, b)))
-            .filter(|(_, b)| lowest_tip(&seg) + b.lowest() < top);
+            .filter(|(_, b)| lowest_tip(&seg) + b.lowest() < reach);
         match body {
             Some((t, b)) if !rep.full() => {
-                let contact = |tip: [f64; 3], _a: f64| contact_block(hm, top, tip, &b);
+                let contact = |tip: [f64; 3], _a: f64| {
+                    let stock = contact_block(hm, top, tip, &b);
+                    let jaw = jaws.and_then(|(sb, jt)| contact_jaws(&sb, jt, tip, &b));
+                    match (stock, jaw) {
+                        (Some(s), Some(j)) => Some(if j.1 > s.1 { j } else { s }),
+                        (s, j) => s.or(j),
+                    }
+                };
                 if let Some(c) = worst(&seg, step, t, &contact, &mut since) {
                     rep.add(c);
                 }

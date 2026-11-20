@@ -1415,8 +1415,15 @@ pub fn collision_check(
     if let Some(sb) = &job.stock_box {
         let mut hm = sim3::Heightmap3::of_job(job, sb, res.cell_for(sb));
         for tp in tps {
-            let (_, rep) =
-                collision::simulate_block(&mut hm, tp, &cutters, &bodies, step, sb.max[2]);
+            let (_, rep) = collision::simulate_block(
+                &mut hm,
+                tp,
+                &cutters,
+                &bodies,
+                step,
+                sb.max[2],
+                job.jaws.map(|g| (*sb, sb.min[2] + g)),
+            );
             out.push(rep);
         }
     } else {

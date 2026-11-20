@@ -770,8 +770,15 @@ pub mod api {
         let bodies = |t: u32| job.tool(t).map(marcam::collision::ToolBody::of);
         let mut stocks = Vec::new();
         for tp in tps {
-            let (st, coll) =
-                marcam::collision::simulate_block(&mut hm, tp, &cutters, &bodies, step, sb.max[2]);
+            let (st, coll) = marcam::collision::simulate_block(
+                &mut hm,
+                tp,
+                &cutters,
+                &bodies,
+                step,
+                sb.max[2],
+                job.jaws.map(|g| (*sb, sb.min[2] + g)),
+            );
             let dev = sim3::deviation3_with(&hm, &part, 0.02, &|t| intended.contains(&t));
             stocks.push(json!({
                 "name": tp.name,
