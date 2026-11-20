@@ -359,6 +359,57 @@ pub fn registry() -> Vec<OperationType> {
             shapes_part: false,
         },
         OperationType {
+            kind: "chamfer",
+            title: "Chamfer / deburr (3-axis)",
+            description: "Chamfer the top edges of outlines and holes with a V-bit, a width wide (a small width deburrs): the cone cuts the edge, its point clear of it.",
+            group: "feature",
+            params: vec![
+                tool(),
+                p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
+                p("paths", "paths", "mm", "Closed outlines whose top edge is chamfered.").opt(json!([])),
+                p("side", "choice", "", "Outside: the part's outline or a boss (the material inside the outline); inside: a pocket's edge.").choices(&["outside", "inside"]).opt(json!("outside")),
+                p("holes", "points3", "mm", "Round holes to chamfer: [[x, y, diameter], ...].").opt(json!([])),
+                p("width", "number", "mm", "The chamfer's width on the top face (0.2 to 0.5: a deburr).").min(0.01),
+                p("top", "number", "mm", "Top of the edges (default: stock top).").opt(Value::Null),
+                p("tip_clearance", "number", "mm", "How much deeper the V-bit's point goes than the chamfer needs (the cone cuts, not the point).").opt(json!(0.2)).min(0.0),
+                p("direction", "choice", "", "Climb or conventional milling, spindle clockwise.").choices(&["climb", "conventional"]).opt(json!("climb")),
+                feed(),
+                plunge(),
+                smoothing(),
+            ],
+            tool_shapes: &["vbit"],
+            geometry: &["paths", "points"],
+            machine_needs: &["xyz"],
+            shapes_part: true,
+        },
+        OperationType {
+            kind: "thread_mill",
+            title: "Thread milling (3-axis)",
+            description: "Mill threads in holes or on bosses with a thread mill (a 60° single-form one as a V-bit with its diameter, or a flat tool) on a helix, a pitch a turn, in radial passes: right or left hand, climb or conventional.",
+            group: "feature",
+            params: vec![
+                tool(),
+                p("index_a", "number", "deg", "Rotary setups: the A angle the part is turned to first (indexed 3+1); 0 on a vise.").opt(json!(0.0)),
+                p("points", "points", "mm", "The threads' centres as [[x, y], ...]."),
+                p("diameter", "number", "mm", "The thread's nominal (major) diameter, e.g. 6 for M6.").min(0.1),
+                p("pitch", "number", "mm", "Thread pitch, e.g. 1.0 for M6.").min(0.05),
+                p("depth", "number", "mm", "Thread length below the top.").min(0.01),
+                p("top", "number", "mm", "Top (default: stock top).").opt(Value::Null),
+                p("internal", "boolean", "", "A thread in a hole (else on a boss).").opt(json!(true)),
+                p("hand", "choice", "", "Right- or left-hand thread.").choices(&["right", "left"]).opt(json!("right")),
+                p("direction", "choice", "", "Climb or conventional milling, spindle clockwise.").choices(&["climb", "conventional"]).opt(json!("climb")),
+                p("thread_depth", "number", "mm", "The thread's radial depth (default: ISO metric's for the pitch).").opt(Value::Null).min(0.0),
+                p("passes", "integer", "", "Radial passes to the depth.").opt(json!(1)).min(1.0),
+                p("spring_passes", "integer", "", "Passes again at the final size.").opt(json!(0)).min(0.0),
+                feed(),
+                plunge(),
+            ],
+            tool_shapes: &["vbit", "flat"],
+            geometry: &["points"],
+            machine_needs: &["xyz"],
+            shapes_part: true,
+        },
+        OperationType {
             kind: "bore",
             title: "Boring (3-axis)",
             description: "Bore round holes bigger than the end mill: helical entry, roughing rings, the finish at the size and spring passes, as G2/G3 arcs or segments.",
@@ -622,6 +673,12 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
                 });
                 pairs && a.len() >= if p.name == "path" { 3 } else { 1 }
             }),
+            "points3" => v.as_array().is_some_and(|a| {
+                a.iter().all(|q| {
+                    q.as_array()
+                        .is_some_and(|q| q.len() == 3 && q.iter().all(Value::is_number))
+                })
+            }),
             // (an optional list may be empty: none placed)
             "numbers" => v
                 .as_array()
@@ -646,6 +703,7 @@ pub fn check(op: &Value, tools: Option<&[crate::job::Tool]>) -> Vec<String> {
                     "points" if p.name == "path" =>
                         "[[x, y], ...] with 3 or more points".to_string(),
                     "points" => "[[x, y], ...]".to_string(),
+                    "points3" => "[[x, y, diameter], ...]".to_string(),
                     "paths" => "[[[x, y], ...], ...] (polylines of 2 or more points)".to_string(),
                     "numbers" | "integers" => format!("a list of {}", p.kind),
                     "choice" => format!("one of {:?}", p.choices),
@@ -681,6 +739,8 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::Pocket(_) => "pocket",
         Operation::Drill(_) => "drill",
         Operation::Bore(_) => "bore",
+        Operation::Chamfer(_) => "chamfer",
+        Operation::ThreadMill(_) => "thread_mill",
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
         Operation::Waterline(_) => "waterline",
@@ -1045,7 +1105,8 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("feed".into(), json!(feed));
             v.insert("plunge_feed".into(), json!(plunge));
         }
-        "face" | "pocket" | "drill" | "bore" | "contour" | "raster3d" | "rough3d" | "waterline" => {
+        "face" | "pocket" | "drill" | "bore" | "contour" | "raster3d" | "rough3d" | "waterline"
+        | "chamfer" | "thread_mill" => {
             // the vise block, or around the bar over the part (indexed 3+1 on a rotary setup)
             let rad = job.stock.radius;
             let sb = job.stock_box.unwrap_or(crate::job::StockBox {
@@ -1059,7 +1120,10 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                 sb.max[2] - sb.min[2],
             );
             let (mx, my) = ((sb.min[0] + sb.max[0]) / 2.0, (sb.min[1] + sb.max[1]) / 2.0);
-            if matches!(kind, "pocket" | "drill" | "bore" | "contour") {
+            if matches!(
+                kind,
+                "pocket" | "drill" | "bore" | "contour" | "chamfer" | "thread_mill"
+            ) {
                 v.insert("top".into(), json!(sb.max[2]));
             }
             match kind {
@@ -1090,6 +1154,39 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                     v.insert("peck".into(), json!(nice(d.max(0.5), 0.05)));
                     v.insert("retract".into(), json!(1.0));
                     v.insert("feed".into(), json!(plunge));
+                }
+                "chamfer" => {
+                    // the block's outline, a 0.5 mm chamfer
+                    let i = 2.0f64.min(w / 4.0).min(h / 4.0);
+                    let (x0, y0, x1, y1) =
+                        (sb.min[0] + i, sb.min[1] + i, sb.max[0] - i, sb.max[1] - i);
+                    v.insert(
+                        "paths".into(),
+                        json!([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]),
+                    );
+                    v.insert("side".into(), json!("outside"));
+                    v.insert("holes".into(), json!([]));
+                    v.insert("width".into(), json!(0.5));
+                    v.insert("tip_clearance".into(), json!(0.2));
+                    let dir = cx
+                        .machine
+                        .and_then(|m| m.cut_direction.clone())
+                        .unwrap_or_else(|| "climb".into());
+                    v.insert("direction".into(), json!(dir));
+                }
+                "thread_mill" => {
+                    // an M6 x 1 hole in the middle, a third of the block deep
+                    v.insert("points".into(), json!([[nice(mx, 0.01), nice(my, 0.01)]]));
+                    v.insert("diameter".into(), json!(6.0));
+                    v.insert("pitch".into(), json!(1.0));
+                    v.insert("depth".into(), json!(nice((hz / 3.0).max(1.0), 0.5)));
+                    v.insert("internal".into(), json!(true));
+                    v.insert("hand".into(), json!("right"));
+                    v.insert("direction".into(), json!("climb"));
+                    // ISO metric inside a nut: 5/8 of the thread's height
+                    v.insert("thread_depth".into(), json!(0.54));
+                    v.insert("passes".into(), json!(2));
+                    v.insert("spring_passes".into(), json!(0));
                 }
                 "bore" => {
                     // a hole twice the tool's size, half the block deep
@@ -1355,6 +1452,7 @@ mod tests {
                     ]]),
                     "string" => json!("4CAM"),
                     "numbers" => json!([1.0]),
+                    "points3" => json!([[10.0, 10.0, 6.0]]),
                     "integers" => json!([1]),
                     "choice" => json!(p.choices[0]),
                     "boolean" => json!(true),

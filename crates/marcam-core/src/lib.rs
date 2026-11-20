@@ -121,6 +121,8 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::Pocket(_) => "pocket",
         Operation::Drill(_) => "drill",
         Operation::Bore(_) => "bore",
+        Operation::Chamfer(_) => "chamfer",
+        Operation::ThreadMill(_) => "thread_mill",
         Operation::Contour(_) => "contour",
         Operation::Raster3d(_) => "raster3d",
         Operation::Waterline(_) => "waterline",
@@ -429,6 +431,8 @@ fn is_three_axis(op: &Operation) -> bool {
             | Operation::Raster3d(_)
             | Operation::Rough3d(_)
             | Operation::Waterline(_)
+            | Operation::Chamfer(_)
+            | Operation::ThreadMill(_)
     )
 }
 
@@ -621,6 +625,10 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             ) => None,
             (Operation::Engrave(_), _) => None,
             (Operation::Vcarve(_), ToolShape::Vbit { .. }) => None,
+            (Operation::Chamfer(_), ToolShape::Vbit { .. }) => None,
+            (Operation::Chamfer(_), _) => return Err(wrong("vbit")),
+            (Operation::ThreadMill(_), ToolShape::Vbit { .. } | ToolShape::Flat { .. }) => None,
+            (Operation::ThreadMill(_), _) => return Err(wrong("vbit or flat")),
             (Operation::Vcarve(_), _) => return Err(wrong("vbit")),
             (
                 Operation::Face(_)
@@ -894,6 +902,37 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         strategy::bore::bore(&mut b, d, sb, safe_r, o).map_err(err)?
                     }
                     Operation::Contour(o) => t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?,
+                    Operation::Chamfer(o) => {
+                        let half = match tool.shape {
+                            ToolShape::Vbit { angle, .. } => (angle / 2.0).to_radians(),
+                            _ => unreachable!("checked above"),
+                        };
+                        strategy::edges::chamfer(&mut b, half, sb, safe_r, o).map_err(err)?
+                    }
+                    Operation::ThreadMill(o) => {
+                        // the thread mill's radius at its tip: a single-form one's diameter
+                        let r = match tool.shape {
+                            ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0) / 2.0,
+                            ToolShape::Flat { diameter } => diameter / 2.0,
+                            _ => unreachable!("checked above"),
+                        };
+                        if r <= 0.0 {
+                            return Err(err(
+                                "thread mill: the tool needs a diameter (its cutting width)"
+                                    .to_string(),
+                            ));
+                        }
+                        // its helices written as G2/G3 arcs on a vise
+                        if let Some(Move::Operation { arcs, .. }) = b
+                            .moves
+                            .iter_mut()
+                            .rev()
+                            .find(|m| matches!(m, Move::Operation { .. }))
+                        {
+                            *arcs = Some(1e-3);
+                        }
+                        strategy::edges::thread_mill(&mut b, r, sb, safe_r, o).map_err(err)?
+                    }
                     Operation::Raster3d(o) | Operation::Rough3d(o) | Operation::Waterline(o) => {
                         let adaptive = o.pattern == "adaptive";
                         if adaptive && !matches!(op, Operation::Rough3d(_)) {
@@ -1145,6 +1184,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         Operation::Drill(o) => Some(o.feed),
                         Operation::Bore(o) => Some(o.plunge_feed),
                         Operation::Contour(o) => Some(o.plunge_feed),
+                        Operation::Chamfer(o) => Some(o.plunge_feed),
+                        Operation::ThreadMill(o) => Some(o.plunge_feed),
                         Operation::Raster3d(o)
                         | Operation::Rough3d(o)
                         | Operation::Waterline(o) => Some(o.plunge_feed),

@@ -587,6 +587,91 @@ pub enum Operation {
     Engrave(Engrave),
     Vcarve(Vcarve),
     Parting(Parting),
+    /// 3-axis: chamfer or deburr the top edges of outlines and holes with a V-bit.
+    Chamfer(Chamfer),
+    /// 3-axis: mill threads in holes or on bosses, on a helix.
+    ThreadMill(ThreadMill),
+}
+
+/// 3-axis: chamfer (or deburr) the top edges of closed outlines (`side`: "outside" for the
+/// part's outline or a boss, "inside" for a pocket's edge) and of round holes, `width` wide,
+/// with a V-bit (see [`crate::strategy::edges`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Chamfer {
+    pub tool: u32,
+    /// Rotary setups: the A angle (deg) the part is indexed to (indexed 3+1).
+    #[serde(default)]
+    pub index_a: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<Vec<[f64; 2]>>,
+    #[serde(default = "default_outside")]
+    pub side: String,
+    /// Round holes: [x, y, diameter].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<[f64; 3]>,
+    /// The chamfer's width on the top face (mm).
+    pub width: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    /// How much deeper the tip goes than the chamfer needs, so the cone cuts, not the point.
+    #[serde(default = "default_tip_clearance")]
+    pub tip_clearance: f64,
+    #[serde(default = "default_direction")]
+    pub direction: String,
+    pub feed: f64,
+    pub plunge_feed: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
+}
+
+fn default_outside() -> String {
+    "outside".into()
+}
+
+fn default_tip_clearance() -> f64 {
+    0.2
+}
+
+/// 3-axis: mill a thread (`diameter` its nominal, `pitch`, `depth` long from the top) in a
+/// hole (`internal`) or on a boss at each of `points`, with a thread mill (a V-bit or flat
+/// tool; its radius at the tip cuts the profile) on a helix, in radial `passes` (see
+/// [`crate::strategy::edges`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ThreadMill {
+    pub tool: u32,
+    #[serde(default)]
+    pub index_a: f64,
+    pub points: Vec<[f64; 2]>,
+    pub diameter: f64,
+    pub pitch: f64,
+    pub depth: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f64>,
+    #[serde(default = "default_true")]
+    pub internal: bool,
+    /// "right" or "left".
+    #[serde(default = "default_right")]
+    pub hand: String,
+    #[serde(default = "default_direction")]
+    pub direction: String,
+    /// The thread's radial depth; None: ISO metric's for the pitch (0.541 P inside, 0.613 P
+    /// outside).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_depth: Option<f64>,
+    #[serde(default = "default_one")]
+    pub passes: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub spring_passes: u32,
+    pub feed: f64,
+    pub plunge_feed: f64,
+}
+
+fn default_right() -> String {
+    "right".into()
+}
+
+fn default_one() -> u32 {
+    1
 }
 
 /// One of several features a facing, pocket or contour works on, each in turn (the ones
@@ -1047,6 +1132,8 @@ impl Operation {
             Operation::Raster3d(o) | Operation::Rough3d(o) | Operation::Waterline(o) => {
                 Some(o.index_a)
             }
+            Operation::Chamfer(o) => Some(o.index_a),
+            Operation::ThreadMill(o) => Some(o.index_a),
             _ => None,
         }
     }
@@ -1085,6 +1172,7 @@ impl Operation {
             Operation::Engrave(o) => (o.smoothing, true),
             Operation::Vcarve(o) => (o.smoothing, true),
             Operation::Contour(o) => (o.smoothing, true),
+            Operation::Chamfer(o) => (o.smoothing, true),
             Operation::Pocket(o) => (o.smoothing, false),
             Operation::Parting(o) => (o.smoothing, false),
             _ => return 0.0,
@@ -1108,6 +1196,8 @@ impl Operation {
             Operation::HelicalKnurl(o) => o.tool,
             Operation::FlankChamfer(o) => o.tool,
             Operation::Parting(o) => o.tool,
+            Operation::Chamfer(o) => o.tool,
+            Operation::ThreadMill(o) => o.tool,
         }
     }
 }

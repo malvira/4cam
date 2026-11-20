@@ -444,6 +444,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
           <label>height (mm) <input name="__svg_height" value="20" size="4"></label></div>`;
       } else if (p.kind === "points") {
         html += `<label title="${esc(p.help)}">${label} <span class="muted">x y; x y; ...</span><input name="${p.name}" value="${esc(Array.isArray(v) ? pointsText(v) : "")}" placeholder="required"></label>`;
+      } else if (p.kind === "points3") {
+        html += `<label title="${esc(p.help)}">${label} <span class="muted">x y diameter; ...</span><input name="${p.name}" value="${esc(Array.isArray(v) ? v.map((q) => q.join(" ")).join("; ") : "")}" placeholder="none"></label>`;
       } else {
         const text = v == null ? "" : Array.isArray(v) ? v.join(", ") : v;
         html += `<label title="${esc(p.help)}">${label}<input name="${p.name}" value="${esc(text)}" placeholder="${p.default != null ? esc(Array.isArray(p.default) ? p.default.join(", ") : p.default) : p.required ? "required" : ""}"></label>`;
@@ -514,6 +516,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       } else if (p.kind === "points") {
         const pts = el.value.split(";").map((q) => q.split(/[,\s]+/).filter(Boolean).map(Number)).filter((q) => q.length);
         out[p.name] = pts.length ? pts : undefined;
+      } else if (p.kind === "points3") {
+        out[p.name] = el.value.split(";").map((q) => q.split(/[,\s]+/).filter(Boolean).map(Number)).filter((q) => q.length === 3);
       } else if (["vec2", "rect", "numbers", "integers"].includes(p.kind)) {
         const nums = el.value.split(/[,\s]+/).filter(Boolean).map(Number);
         out[p.name] = nums.length ? nums : undefined;
