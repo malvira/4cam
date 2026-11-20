@@ -195,6 +195,7 @@ The CLI covers the same features:
 
 ## Adapters
 
-- SolidCraft: `adapters/solidcraft` is a SolidCraft command plugin, with one entry per marcam
-  operation. It runs on a body and writes G-code to a granted folder. See
+- SolidCraft: `adapters/solidcraft` is a SolidCraft command plugin: `plan` runs any marcam
+  operation on a body and writes G-code to a granted folder, `describe` lists the operations
+  and their fields, `plan-project` plans a whole project from a folder. See
   `docs/adapters/solidcraft.md`.

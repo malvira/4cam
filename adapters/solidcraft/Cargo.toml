@@ -1,6 +1,6 @@
 [package]
 name = "marcam-solidcraft"
-description = "marcam as a SolidCraft plugin: one entry per marcam operation, G-code written to a granted folder"
+description = "marcam as a SolidCraft plugin: any marcam operation on a body (or a whole project), G-code written to a granted folder"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
