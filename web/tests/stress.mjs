@@ -145,7 +145,7 @@ function pageErrors(from = 0) {
   });
 }
 
-const busy = () => js("document.body.dataset.state === 'busy'");
+const busy = () => js("document.body.dataset.state === 'busy' || !!window.__marcam.state.three?.drawing");
 const app_settle = () => settle(400);
 async function settle(ms = 250) {
   await waitFor(async () => !(await busy()) && (await js("!!window.__marcam.state.registry")), "the app to settle", 240000);
@@ -225,7 +225,7 @@ const INVARIANTS = `(async () => {
   // the part is drawn (a mesh part needs its mesh)
   const v = st.three;
   if (v && !v.failed && doc.models?.length && (doc.models.some((x) => x.kind !== 'mesh') || st.mesh)) {
-    if (!v.groups.part.children.length && !t.pickMesh) bad.push('the part is not drawn');
+    if (!v.groups.part.children.length && !t.pickMesh && !v.drawing) bad.push('the part is not drawn');
   }
   return bad;
 })()`;

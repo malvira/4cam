@@ -162,6 +162,8 @@ async function clickGenerate() {
 }
 // console.error from the page (an error swallowed into the console is still a failure), less
 // the browser's own resource noise (a favicon) and what a test causes on purpose
+// the fast suite (scripts/check.sh --fast): the core sections only
+const FAST = !!process.env.MARCAM_E2E_FAST;
 const EXPECTED_CONSOLE = [/favicon/i, /net::ERR_/, /Failed to load resource/];
 function consoleErrors() {
   return cdp.events
@@ -399,6 +401,8 @@ try {
   await shot("11_machining_recoloured");
   await js("document.getElementById('simClose').click(); true");
 
+  // (the fast suite, MARCAM_E2E_FAST: these sections are left to the full one)
+  if (!FAST) {
   // 5. LinuxCNC machine (G93)
   await js("document.getElementById('machine').value = 'linuxcnc-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); true");
   await clickGenerate();
@@ -446,6 +450,7 @@ try {
   await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await sleep(500);
 
+  }
   // 5d. project tree (document model 0.2)
   await js("document.getElementById('machine').value = 'makera-z1-4axis'; document.getElementById('machine').dispatchEvent(new Event('change')); document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
   await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 3"), "the project tree", 15000);
@@ -583,6 +588,8 @@ try {
   await settle();
   await waitFor(() => js("(() => { try { return JSON.parse(document.getElementById('job').value).stock?.radius !== undefined && !!document.getElementById('q_stock_radius'); } catch { return false; } })()"), "the knob's quick settings", 30000);
 
+  // (the fast suite, MARCAM_E2E_FAST: these sections are left to the full one)
+  if (!FAST) {
   // 6. quick settings edit the JSON
   await js("const i = document.getElementById('q_stock_radius'); i.value = 13; i.dispatchEvent(new Event('change')); true");
   const r = await js("JSON.parse(document.getElementById('job').value).stock.radius");
@@ -1382,6 +1389,7 @@ try {
     await shot("16c_auto_regenerated");
   }
 
+  }
   // 8l. picking: the bracket's detected holes and pocket start operations; the picking mode
   // lights up what an operation takes, chips list the picks, "select all similar", hover
   // labels, a click on the canvas toggles a feature, wrong features are refused with a note
@@ -1505,6 +1513,8 @@ try {
       /stepover [\d.]+ mm/.test(rinfo) && /\d+ rows/.test(rinfo) && /no 3D roughing before it/.test(rinfo), rinfo);
   }
 
+  // (the fast suite, MARCAM_E2E_FAST: these sections are left to the full one)
+  if (!FAST) {
   // 8m. picking on every operation type: rotary turning (a band -> its X span), knurl (a
   // cone -> the body), chamfer (a round edge), engraving wrapped round the bar (its radius,
   // the text centred), facing on an indexed setup (a side face -> its A index and depth)
@@ -1954,15 +1964,21 @@ try {
     const p0 = await js("window.__marcam.calls.planAndPost || 0");
     const dirs = {};
     const camDir = () => js("(() => { const v = window.__marcam.state.three; const d = v.camera.position.clone().sub(v.controls.target).normalize(); return [d.x, d.y, d.z].map((c) => Math.round(c * 100) / 100); })()");
+    // the camera at rest (its move animated: a slow machine takes longer than a fixed pause)
+    const still = async () => {
+      let last = "";
+      await waitFor(async () => { const d = (await camDir()).join(","); const same = d === last; last = d; await sleep(120); return same; }, "the camera at rest", 15000);
+    };
     const clickAt = async (x, y) => {
       await S("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
       await S("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
-      await sleep(600);
+      await sleep(300);
+      await still();
     };
     for (const name of ["top", "front", "right", "back", "left", "bottom"]) {
       // look from near that side first (its face toward the camera), then click the face
       await js(`(() => { const d = { top: [0.4, -0.5, 1], bottom: [0.4, -0.5, -1], front: [0.4, -1, 0.5], back: [-0.4, 1, 0.5], right: [1, -0.4, 0.5], left: [-1, -0.4, 0.5] }['${name}']; window.__marcam.viewCube.goTo(d, 1); return true; })()`);
-      await sleep(200);
+      await still();
       const at = await js(`window.__marcam.viewCube.screenOf('${name}')`);
       await clickAt(at[0], at[1]);
       dirs[name] = (await camDir()).join(",");
@@ -2205,6 +2221,7 @@ try {
     await js(`const g = document.getElementById('simGpu'); g.checked = ${gpuWas}; g.dispatchEvent(new Event('change')); true`);
   }
 
+  }
   // 8v. (Mar) live updating, no Generate: a project in is planned by itself; an edit shows its
   // operation waiting while the others stay planned, then plans only it; the settled results
   // are what a fresh plan gives; view actions plan nothing; the G-code download waits for the
@@ -2367,6 +2384,8 @@ try {
     await js("const s = document.getElementById('simSpeed'); s.value = '1'; s.dispatchEvent(new Event('input')); true");
   }
 
+  // (the fast suite, MARCAM_E2E_FAST: these sections are left to the full one)
+  if (!FAST) {
   // 8x. (Mar) contour tabs placed by hand: a click on the outline in the 3D view adds a tab
   // there (kept as a fraction of the way round the outline), the toolpath leaves it; it
   // stays put when the direction changes; a click on it removes it
@@ -2497,6 +2516,7 @@ try {
       `rest ${Math.round(restS)} s, full ${Math.round(fullS)} s; switch shown ${shown}`);
   }
 
+  }
   // 8w2. (Mar: "way too busy") the viewer's toggles: a row of icons in the 3D view's corner
   // (Part, Stock, Toolpaths all / up to the playhead / off, Rapids, Tool, Only selected), each
   // with a key, remembered; view only (nothing planned); calm by default (part and toolpaths,

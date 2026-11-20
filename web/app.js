@@ -1365,8 +1365,8 @@ async function drawModel() {
   const key = JSON.stringify([setup?.id, setup?.stock, models, v2 ? null : [doc.stock, doc.part], state.mesh?.length || 0, colorsGen]);
   if (v.modelKey === key) return;
   v.modelKey = key;
-  clear(groups.stock);
-  clear(groups.part);
+  // built aside and swapped in at once when complete: the old part stays shown meanwhile
+  const partNew = [], stockNew = [];
   // the part: a mesh model (as the engine places it) or a revolved profile
   const partMat = new THREE.MeshStandardMaterial({ color: colorNum("part"), metalness: 0.3, roughness: 0.5 });
   const mesh = v2 ? models.find((m) => m.kind === "mesh") : doc.part?.mesh;
@@ -1374,14 +1374,21 @@ async function drawModel() {
   let bounds = null;
   if (mesh && state.mesh) {
     try {
-      const { result } = await engine("meshTriangles", doc, { max_triangles: 150000, setup: setup?.id }, state.mesh);
+      // (a part being drawn: tests wait for it)
+      v.drawing = (v.drawing || 0) + 1;
+      let result;
+      try {
+        ({ result } = await engine("meshTriangles", doc, { max_triangles: 150000, setup: setup?.id }, state.mesh));
+      } finally {
+        v.drawing--;
+      }
       if (v.modelKey !== key) return; // superseded meanwhile
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(result.triangles, 3));
       g.computeVertexNormals();
       const meshMat = partMat.clone();
       meshMat.side = THREE.DoubleSide; // a user's mesh may have inconsistent winding
-      groups.part.add(new THREE.Mesh(g, meshMat));
+      partNew.push(new THREE.Mesh(g, meshMat));
       bounds = result.bounds;
     } catch (e) {
       // the engine restarted under the draw (a cancel, a project opened meanwhile): drawn
@@ -1395,7 +1402,7 @@ async function drawModel() {
       console.warn(`the part is not drawn: ${e?.message}`);
     }
   } else if (prof && prof.length > 1) {
-    groups.part.add(new THREE.Mesh(toGeometry(THREE, revolveProfile(prof, 120)), partMat));
+    partNew.push(new THREE.Mesh(toGeometry(THREE, revolveProfile(prof, 120)), partMat));
     bounds = [[Math.min(...prof.map((q) => q[0])), 0, 0], [Math.max(...prof.map((q) => q[0])), 0, 0]];
   }
   // the stock: the setup's block or bar (a 0.1 job's bar)
@@ -1407,17 +1414,21 @@ async function drawModel() {
     const size = [0, 1, 2].map((k) => sb.max[k] - sb.min[k]);
     const box = stockObject(THREE, new THREE.BoxGeometry(...size));
     box.position.set(...[0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2));
-    groups.stock.add(box);
+    stockNew.push(box);
     fitKey = JSON.stringify(sb);
     v.bounds = { xmin: sb.min[0], xmax: sb.max[0], R: Math.max(sb.max[1] - sb.min[1], sb.max[2] - sb.min[2]) / 2 };
   } else if (st?.radius) {
     // the bar: from the part's front face back by its length
     const front = Math.max(0, bounds ? bounds[1][0] : 0);
     const xmin = front - (st.length || 30) - 1, xmax = front + 1;
-    groups.stock.add(stockObject(THREE, toGeometry(THREE, cylinder(st.radius, xmin, xmax, 96))));
+    stockNew.push(stockObject(THREE, toGeometry(THREE, cylinder(st.radius, xmin, xmax, 96))));
     v.bounds = { xmin, xmax, R: st.radius };
     fitKey = JSON.stringify([st.radius, Math.round(xmin), Math.round(xmax)]);
   }
+  clear(groups.stock);
+  clear(groups.part);
+  for (const o of partNew) groups.part.add(o);
+  for (const o of stockNew) groups.stock.add(o);
   // frame the view when the stock changes; keep the person's orbit otherwise
   if (fitKey && v.fitted !== fitKey && v.fitted !== "picking") {
     if (sb) {

@@ -4,6 +4,34 @@
 # (headless Chrome/Edge; needs network for three.js).
 set -e
 cd "$(dirname "$0")/.."
+# --fast: the suite merges are gated on (about 10 minutes): format, lints, the engine's unit
+# tests and every golden G-code, the engine in WebAssembly, the web app's core sections, two
+# monkey seeds and the frame budget. The full suite (this script without --fast, CI on every
+# push) runs behind it.
+if [ "$1" = "--fast" ]; then
+  t0=$(date +%s)
+  cargo fmt --all -- --check
+  cargo clippy --workspace --exclude marcam-step --all-targets -- -D warnings
+  # the engine's slowest test files are the full suite's (each above 20 s)
+  SLOW=" plan_cache project_toml tapered smoothing "
+  tests=""
+  for f in crates/marcam-core/tests/*.rs; do
+    n=$(basename "$f" .rs)
+    case "$SLOW" in *" $n "*) ;; *) tests="$tests --test $n" ;; esac
+  done
+  # (golden.rs and the CLI's knob run: every golden G-code, byte for byte)
+  cargo test --release -p marcam-core --lib $tests
+  cargo test --release -p marcam-cli --test cli
+  sh scripts/build-wasm.sh
+  node crates/marcam-wasm/js/test.mjs
+  node web/tests/meshes.test.mjs
+  node web/tests/project.test.mjs
+  MARCAM_E2E_FAST=1 node web/tests/e2e.mjs
+  node web/tests/stress.mjs --only monkey --seeds 1,2 --steps 30
+  node web/tests/perf.mjs --gate --seconds 2
+  echo "FAST CHECKS PASSED in $(( $(date +%s) - t0 )) s"
+  exit 0
+fi
 cargo fmt --all -- --check
 # STEP import builds SolidCraft's kernel: MARCAM_SKIP_STEP leaves it to scripts/check-step.sh
 # (CI runs that as a job of its own)
