@@ -542,8 +542,11 @@ fn cmd_run(o: &Opts) -> Result<ExitCode, String> {
     let reg = profiles_cmd::Registry::load();
     let dir = project_dir(job_path);
     let meshes = |src: &marcam::job::MeshSource| src.load(&dir).ok();
-    let jobs = marcam::project::jobs_from_any_with(&read(job_path)?, &reg.libraries(), &meshes)
+    let mut jobs = marcam::project::jobs_from_any_with(&read(job_path)?, &reg.libraries(), &meshes)
         .map_err(|e| format!("{job_path}: {e}"))?;
+    // setups whose stock the one before left: that stock
+    let part = |j: &Job| load_mesh(j, &dir).ok().flatten();
+    marcam::carry::carry_stock(&mut jobs, &part, None).map_err(|e| format!("{job_path}: {e}"))?;
     let mut bad = 0;
     let mut total = 0.0;
     for (setup, job) in &jobs {

@@ -280,6 +280,21 @@ pub fn carry_stock(
             })?;
         let prev = jobs[p].1.clone();
         let mesh = meshes(&prev);
+        // the same setup before (its stock, part, tools and programs) and the same carry:
+        // what it left, worked out before (the web app plans a setup at every edit)
+        let key = crate::hash_of(&(
+            crate::job_key(&prev, mesh.as_ref()),
+            serde_json::to_string(&(&prev.programs, &carry)).unwrap_or_default(),
+        ));
+        if let Some(c) = MEMO.with(|m| {
+            m.borrow()
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, c)| c.clone())
+        }) {
+            set_carried(&mut jobs[k].1, c);
+            continue;
+        }
         let tps = crate::plan_with_mesh(&prev, mesh.as_ref())
             .map_err(|e| format!("setup {:?} (its stock goes on): {e}", jobs[p].0))?;
         let cutters = |t: u32| {
@@ -308,16 +323,34 @@ pub fn carry_stock(
                 turn_bar(&map, &carry)
             }
         };
-        let job = &mut jobs[k].1;
-        // a bar: planned from its largest radius (no passes in the air above it)
-        if let Some(r) = carried.max_radius() {
-            if r > 0.0 && r < job.stock.radius {
-                job.stock.radius = r;
+        let carried = std::sync::Arc::new(carried);
+        MEMO.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.len() >= MEMO_SIZE {
+                m.remove(0);
             }
-        }
-        job.carried = Some(std::sync::Arc::new(carried));
+            m.push((key, carried.clone()));
+        });
+        set_carried(&mut jobs[k].1, carried);
     }
     Ok(())
+}
+
+/// Carried stocks worked out lately (by the setup before and the carry).
+const MEMO_SIZE: usize = 8;
+thread_local! {
+    static MEMO: std::cell::RefCell<Vec<(u64, std::sync::Arc<Carried>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn set_carried(job: &mut Job, carried: std::sync::Arc<Carried>) {
+    // a bar: planned from its largest radius (no passes in the air above it)
+    if let Some(r) = carried.max_radius() {
+        if r > 0.0 && r < job.stock.radius {
+            job.stock.radius = r;
+        }
+    }
+    job.carried = Some(carried);
 }
 
 #[cfg(test)]

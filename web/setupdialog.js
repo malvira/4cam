@@ -94,6 +94,11 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     if (!allowed.includes(shape())) dlg.querySelector(`input[name="sdShape"][value="${allowed[0]}"]`).checked = true;
     const sh = shape();
     const given = stockMode() === "explicit";
+    // from the previous setup: its stock turned, nothing to size
+    const carried = stockMode() === "previous";
+    $("sdCarry").classList.toggle("hidden", !carried);
+    for (const id of ["sdMargins", "sdDims"]) $(id).classList.toggle("hidden", carried);
+    for (const el of dlg.querySelectorAll(".sd-shape")) if (carried) el.classList.add("hidden");
     for (const l of $("sdMargins").querySelectorAll("label")) {
       const f = l.dataset.for;
       // (a bar in a vise: no chuck)
@@ -293,6 +298,10 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       $("sdInfo").textContent = cur?.mode === "new" ? "No part yet: choose an STL now, or import one after." : "";
       return;
     }
+    if (stockMode() === "previous") {
+      $("sdInfo").textContent = "The stock the setup before leaves (simulated), and the part with it, turned and moved as set here.";
+      return;
+    }
     let place;
     try {
       place = placePart(t, options());
@@ -438,6 +447,13 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       for (const r of dlg.querySelectorAll('input[name="sdShape"]')) r.checked = r.value === sh;
       cur.presetShape = sh;
       dlg.querySelector(`input[name="sdStock"][value="${ex || preset.stockSpec?.mode === "given" ? "explicit" : "auto"}"]`).checked = true;
+      // a setup after another: its stock may be what that one left
+      $("sdCarryOpt").classList.toggle("hidden", !preset.canCarry);
+      $("sdTurn").value = st?.shape === "from_previous" ? st.turn ?? "none" : "none";
+      const off = st?.shape === "from_previous" ? st.offset ?? [0, 0, 0] : [0, 0, 0];
+      ["sdOffX", "sdOffY", "sdOffZ"].forEach((id, i) => ($(id).value = off[i]));
+      if (preset.canCarry && st?.shape === "from_previous") dlg.querySelector('input[name="sdStock"][value="previous"]').checked = true;
+      cur.presetCarry = st?.shape === "from_previous" ? JSON.stringify([st.turn ?? "none", off]) : null;
       if (sp?.dims) {
         const d = sp.dims;
         setMm("sdDia", d.radius != null ? 2 * d.radius : null);
@@ -467,7 +483,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     if (ok) {
       const k = kind();
       const spec = stockSpec();
-      const need = missing(spec);
+      const carry = stockMode() === "previous" ? { turn: $("sdTurn").value, offset: ["sdOffX", "sdOffY", "sdOffZ"].map((id) => num(id) || 0) } : null;
+      const need = carry ? [] : missing(spec);
       if (need.length) {
         $("sdWarn").textContent = `Give every stock size (${need.join(", ")}), or fit the stock to the part.`;
         $("sdWarn").classList.remove("hidden");
@@ -494,11 +511,12 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         axis: $("sdAxis").value,
         origin: num("sdOrigin"),
         margin: num("sdMargin"),
-        explicit: ex,
-        stock: spec,
+        explicit: carry ? undefined : ex,
+        stock: carry ? undefined : spec,
+        carry,
         jaws: k === "vise" ? mm("sdJaws") : undefined,
         // (the stock changed: given sizes, another shape, a margin typed)
-        stockChanged: !!ex || shape() !== c.presetShape || STOCK_FIELDS.some((id) => id !== "sdJaws" && $(id).dataset.edited),
+        stockChanged: carry ? JSON.stringify([carry.turn, carry.offset]) !== c.presetCarry : !!ex || shape() !== c.presetShape || c.presetCarry !== null || STOCK_FIELDS.some((id) => id !== "sdJaws" && $(id).dataset.edited),
         tailstock: bar(k) && $("sdTail").checked,
         material: $("sdMaterial").value.trim() || null,
         // the placement fields typed in (others are the type's defaults)

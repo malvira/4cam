@@ -1369,7 +1369,9 @@ async function drawModel() {
   const ids = v2 ? (setup?.part?.length ? setup.part : doc.models?.map((m) => m.id) || []) : [];
   const models = v2 ? (doc.models || []).filter((m) => ids.includes(m.id)) : [];
   // (with the colours' generation: a draw begun before a colour changed is dropped)
-  const key = JSON.stringify([setup?.id, setup?.stock, setup?.kind, setup?.holding, models, v2 ? null : [doc.stock, doc.part], state.mesh?.length || 0, colorsGen]);
+  // (a setup whose stock the one before left: that one's stock and part too)
+  const carried = v2 && setup?.stock?.shape === "from_previous";
+  const key = JSON.stringify([setup?.id, setup?.stock, setup?.kind, setup?.holding, models, v2 ? null : [doc.stock, doc.part], carried ? [doc.setups.map((s) => [s.id, s.stock, s.part, s.kind]), doc.models] : null, state.mesh?.length || 0, colorsGen]);
   if (v.modelKey === key) return;
   v.modelKey = key;
   // built aside and swapped in at once when complete: the old part stays shown meanwhile
@@ -1377,7 +1379,17 @@ async function drawModel() {
   // the part: a mesh model (as the engine places it) or a revolved profile
   const partMat = new THREE.MeshStandardMaterial({ color: colorNum("part"), metalness: 0.3, roughness: 0.5 });
   const mesh = v2 ? models.find((m) => m.kind === "mesh") : doc.part?.mesh;
-  const prof = v2 ? models.find((m) => m.kind === "profile")?.points : doc.part?.profile?.points;
+  // carried: the stock and the part as the engine turns them from the setup before
+  let frame = null;
+  if (carried) {
+    try {
+      ({ result: frame } = await engine("setupFrame", doc, { setup: setup.id }));
+    } catch (e) {
+      console.warn(`the carried stock is not drawn: ${e?.message}`);
+    }
+    if (v.modelKey !== key) return;
+  }
+  const prof = frame?.profile ? frame.profile.points : v2 ? models.find((m) => m.kind === "profile")?.points : doc.part?.profile?.points;
   let bounds = null;
   if (mesh && state.mesh) {
     try {
@@ -1414,7 +1426,7 @@ async function drawModel() {
   }
   // the stock: the setup's block or bar (a 0.1 job's bar)
   // (a light tint with its edges drawn: see meshes.js stockObject)
-  const st0 = v2 ? setup?.stock : doc.stock ? { shape: "cylinder", ...doc.stock } : null;
+  const st0 = frame ? (frame.stock_box ? { shape: "box", ...frame.stock_box } : { shape: "cylinder", ...frame.stock }) : v2 ? setup?.stock : doc.stock ? { shape: "cylinder", ...doc.stock } : null;
   // a bar lying in a vise: drawn along X at its axis, the block round it for the view
   const viseBar = v2 && st0 && st0.shape !== "box" && (setup?.kind === "vise" || setup?.holding?.kind === "vise") ? lyingBar(st0) : null;
   const st = viseBar ? { shape: "box", ...viseBar.box } : st0;
@@ -1456,7 +1468,8 @@ async function drawModel() {
   }
   clear(groups.jaws);
   if (sb && v2 && (setup?.kind === "vise" || setup?.holding?.kind === "vise" || setup?.stock?.shape === "box")) {
-    const grip = jawGrip(setup);
+    // (carried: the block as the engine has it)
+    const grip = jawGrip(frame?.stock_box ? { ...setup, stock: { shape: "box", ...frame.stock_box } } : setup);
     const top = sb.min[2] + grip, low = sb.min[2] - 4;
     const len = sb.max[0] - sb.min[0] + 20, thick = 8;
     for (const y of [sb.min[1] - thick / 2, sb.max[1] + thick / 2]) {

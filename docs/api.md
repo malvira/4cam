@@ -24,6 +24,20 @@ below; JSON reads too). It holds:
   rotary ones, and also the 3-axis types with `index_a` (deg): indexed 3+1, cut with the
   part turned to that A. A vise setup rejects a non-zero `index_a`. Example: `examples/plate/plate.marcam.toml`.
 
+  Stock carried between setups: `{"shape": "from_previous", "turn": "y180", "offset": [x, y,
+  z]}` starts a setup from what the setup before it left (planned and simulated), in a vise
+  or on the rotary axis like that one. `turn` is `x180` or `y180` (over: front to back, left
+  to right), `z180` (end for end) or absent; the stock is re-zeroed where it was (its X and
+  Y low corner, and a block's top at Z0), then moved by `offset`. The part turns and moves
+  with it (the setup's job takes the previous one's part placement, turned: `MeshSource`
+  has a `turn`), so the other side of a block can be machined after the first. A block
+  carries each cell's top and bottom, so cuts from either side are kept, through-cuts
+  included (`marcam::carry`). From it, 3D roughing works only where material is left (a
+  rest roughing of the carried block, also below: the other side's pocket is a hollow it
+  skips), adaptive clearing too, and the simulation starts from it. A bar's `radius` and
+  `length` are the previous setup's unless given. `carry::carry_stock` works it out for a
+  project's jobs; `marcam run`, the web app, `marcam mcp` and the plugins do it.
+
 0.1 jobs upgrade automatically. Machine profiles and tool libraries are separate JSON files
 (`docs/profiles.md`).
 

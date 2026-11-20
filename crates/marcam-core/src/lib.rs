@@ -274,7 +274,7 @@ impl PlanCache {
     }
 }
 
-fn hash_of<T: std::hash::Hash + ?Sized>(v: &T) -> u64 {
+pub(crate) fn hash_of<T: std::hash::Hash + ?Sized>(v: &T) -> u64 {
     use std::hash::Hasher;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     v.hash(&mut h);
@@ -282,7 +282,7 @@ fn hash_of<T: std::hash::Hash + ?Sized>(v: &T) -> u64 {
 }
 
 /// What a job's operations share: everything they may depend on but themselves.
-fn job_key(job: &Job, mesh: Option<&Mesh>) -> u64 {
+pub(crate) fn job_key(job: &Job, mesh: Option<&Mesh>) -> u64 {
     let mut bits: Vec<u64> = Vec::new();
     if let Some(m) = mesh {
         bits.reserve(m.triangles.len() * 9);

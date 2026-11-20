@@ -69,6 +69,8 @@ export async function load(source) {
     wizardKnurl: (doc, params, meshBytes) => call("wizard_knurl", doc, params || {}, meshBytes),
     // a new operation with every field filled: opts {type, setup, tool, geometry, machine}
     opDefaults: (doc, opts, meshBytes) => call("op_defaults", doc, opts || {}, meshBytes),
+    // a setup's stock and part as its job has them (carried from the setup before: turned)
+    setupFrame: (doc, opts) => call("setup_frame", doc, opts || {}),
     // feeds and speeds: {material, tool: {kind, diameter, angle?}, flutes?, flute_length?,
     // op?, adaptive?, stepover?, stepdown?, rpm?, machine?} -> {rpm, feed, plunge, ..., preset}
     feedsCalc: (opts) => call("feeds_calc", opts || {}),

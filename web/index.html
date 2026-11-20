@@ -251,6 +251,7 @@
       <div class="sd-stockmode">
         <label><input type="radio" name="sdStock" value="auto" checked> fit to the part</label>
         <label><input type="radio" name="sdStock" value="explicit"> given sizes</label>
+        <label id="sdCarryOpt" class="hidden" title="This setup starts from what the setup before it left (simulated): the part and the stock turned and moved together"><input type="radio" name="sdStock" value="previous"> from the previous setup</label>
         <button type="button" id="sdFit" title="Fill the sizes from the part (the smallest stock of this shape round it, with the margins)">Fit to model</button>
         <label>Units <select id="sdStockUnits" aria-label="Units of the stock sizes"><option value="mm">mm</option><option value="inch">inch</option></select></label>
         <label>Common sizes <select id="sdCommon" aria-label="Common stock sizes"></select></label>
@@ -263,6 +264,17 @@
         <label data-for="block">Y+ side <input id="sdMyh" type="number" step="any" min="0" placeholder="2"> <span class="u">mm</span></label>
         <label data-for="block">Below the part <input id="sdMzb" type="number" step="any" min="0" placeholder="2"> <span class="u">mm</span></label>
         <label data-for="bar">Held in the chuck <input id="sdChuckFit" type="number" step="any" min="0" placeholder="12"> <span class="u">mm</span></label>
+      </div>
+      <div id="sdCarry" class="sd-dims hidden">
+        <label>Turned <select id="sdTurn" aria-label="How the stock is turned from the previous setup">
+          <option value="none">as it was</option>
+          <option value="y180">over, left to right (about Y)</option>
+          <option value="x180">over, front to back (about X)</option>
+          <option value="z180">end for end (about Z)</option>
+        </select></label>
+        <label title="Moved this far after the turn (the stock is re-zeroed where it was: its X and Y low corner, and a block's top at Z0)">Moved X <input id="sdOffX" type="number" step="any" value="0"> mm</label>
+        <label>Y <input id="sdOffY" type="number" step="any" value="0"> mm</label>
+        <label>Z <input id="sdOffZ" type="number" step="any" value="0"> mm</label>
       </div>
       <div id="sdDims" class="sd-dims">
         <!-- (each shape's own sizes, all of them, with units) -->

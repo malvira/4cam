@@ -225,7 +225,11 @@ export function describeStock(st, chuck) {
     case "square": return `square bar ${f(st.side)} mm${turned}${len}`;
     case "rect": return `bar ${f(st.width)} x ${f(st.height)} mm${turned}${len}`;
     case "hex": return `hex bar ${f(st.across_flats)} mm across flats${turned}${len}`;
-    case "from_previous": return "stock from the previous setup";
+    case "from_previous": {
+      const turn = { x180: ", turned over front to back", y180: ", turned over left to right", z180: ", turned end for end" }[st.turn] ?? "";
+      const moved = st.offset?.some((v) => v) ? `, moved ${st.offset.map(f).join(", ")} mm` : "";
+      return `stock from the previous setup${turn}${moved}`;
+    }
     default: return st.radius ? `bar Ø${f(2 * st.radius)}${len}` : "stock from the previous setup";
   }
 }
@@ -787,7 +791,16 @@ export function setupProject(ctx) {
     if (cfg.setupName) s.name = cfg.setupName;
     s.holding = { kind: kind === "vise" ? "vise" : "rotary_chuck", tailstock: kind !== "vise" && !!cfg.tailstock };
     const model = ownModel(doc, s);
-    if (model && tris) {
+    if (cfg.carry) {
+      // what the setup before left: the engine turns the part and the stock together
+      s.stock = { shape: "from_previous" };
+      if (cfg.carry.turn && cfg.carry.turn !== "none") s.stock.turn = cfg.carry.turn;
+      if (cfg.carry.offset?.some((v) => v)) s.stock.offset = cfg.carry.offset.map(r3);
+      // the starter tools, for the stock it started from (the first setup back with its own)
+      let k = doc.setups.indexOf(s) - 1;
+      while (k > 0 && doc.setups[k].stock?.shape === "from_previous") k--;
+      if (k >= 0) ensureTools(doc, doc.setups[k].stock);
+    } else if (model && tris) {
       const place = placePart(tris, { kind, axis: cfg.axis, up: cfg.axis, margin: cfg.margin, explicit: cfg.stock ? undefined : cfg.explicit, stock: cfg.stock, origin: cfg.origin });
       model.axis = place.axis;
       model.translate = place.translate.map(r3);
@@ -1046,6 +1059,7 @@ export function setupProject(ctx) {
     const cfg = await dialog.open("edit", {
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
       stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null, previewTris,
+      canCarry: doc.setups.indexOf(s) > 0,
     });
     if (!cfg) return false;
     // nothing about the placement changed (only the name or the material): the operations
@@ -1100,7 +1114,7 @@ export function setupProject(ctx) {
     if (!meshModel || !state.mesh) return showError("Import an STL first: a new setup needs the part as a mesh.");
     let n = doc.setups.length + 1;
     while (doc.setups.some((s) => s.id === `setup${n}`)) n++;
-    const cfg = await dialog.open("add", { kind: "vise", machine: currentMachine()?.id, setupName: `Setup ${n}`, hasMesh: true, tris: parseStl(state.mesh).tris });
+    const cfg = await dialog.open("add", { kind: "vise", machine: currentMachine()?.id, setupName: `Setup ${n}`, hasMesh: true, tris: parseStl(state.mesh).tris, canCarry: true });
     if (!cfg) return false;
     setStatus(`Adding a ${KINDS[cfg.kind]} setup...`, "busy");
     const before = $("job").value;

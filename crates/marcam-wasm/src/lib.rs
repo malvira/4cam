@@ -59,7 +59,18 @@ pub mod api {
 
     /// The job to plan from a 0.1 job or a 0.2 project (its first setup).
     /// (Also given the mesh bytes, so face selections on mesh models resolve.)
+    /// The setup's job (`opts.setup`, see [`SETUP`]) with the stock the setup before left
+    /// when it takes that ([`marcam::carry::carry_stock`]: those setups planned and simulated).
     fn job_any_mesh(text: &str, libs: &[ToolLibrary], mesh: &[u8]) -> Result<Job, String> {
+        job_of(text, libs, mesh, true)
+    }
+
+    /// The setup's job as the project gives it (no carried stock worked out: for drawing).
+    fn job_plain(text: &str, libs: &[ToolLibrary], mesh: &[u8]) -> Result<Job, String> {
+        job_of(text, libs, mesh, false)
+    }
+
+    fn job_of(text: &str, libs: &[ToolLibrary], mesh: &[u8], carry: bool) -> Result<Job, String> {
         let meshes = |src: &marcam::job::MeshSource| {
             (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
         };
@@ -74,6 +85,18 @@ pub mod api {
                 .ok_or(format!("no setup {id:?}"))?,
             None => 0,
         };
+        // a setup whose stock the one before left: that stock (the setups before planned and
+        // simulated, the mesh the same file)
+        if carry && jobs[k].1.carry.is_some() {
+            let part = |j: &Job| {
+                j.part
+                    .mesh
+                    .as_ref()
+                    .filter(|_| !mesh.is_empty())
+                    .and_then(|src| src.mesh(mesh).ok())
+            };
+            marcam::carry::carry_stock(&mut jobs, &part, Some(k))?;
+        }
         Ok(jobs.swap_remove(k).1)
     }
 
@@ -490,6 +513,25 @@ pub mod api {
         })
     }
 
+    /// A setup's stock and part as its job has them (`opts.setup`): a setup whose stock the
+    /// one before left has them turned and moved from that one's. For drawing; nothing planned.
+    pub fn setup_frame(job_json: &str, opts: &str) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = libraries(&opts).unwrap_or_default();
+        match with_setup(&opts, || job_plain(job_json, &libs, &[])) {
+            Ok(job) => json!({
+                "stock": job.stock,
+                "stock_box": job.stock_box,
+                "stock_axis": job.stock_axis,
+                "profile": job.part.profile,
+                "mesh": job.part.mesh,
+                "carry": job.carry,
+            }),
+            Err(e) => err(e),
+        }
+    }
+
     /// Oriented mesh triangles (flattened xyz, f32) for display, thinned to about
     /// `max_triangles` (`opts`, default 200000).
     pub fn mesh_triangles(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
@@ -500,7 +542,7 @@ pub mod api {
             Ok(l) => l,
             Err(e) => return err(e),
         };
-        let job = match job_any_mesh(job_json, &libs, mesh) {
+        let job = match job_plain(job_json, &libs, mesh) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -1760,6 +1802,7 @@ pub mod api {
             "wizard_knurl" => wizard_knurl(&d(a), &s(b), c),
             "body_project" => body_project(&s(a), b),
             "op_defaults" => op_defaults(&d(a), &s(b), c),
+            "setup_frame" => setup_frame(&d(a), &s(b)),
             "feeds_calc" => feeds_calc(&s(a)),
             "set_material" => set_material(&d(a), &s(b)),
             "pickables" => pickables(&d(a), &s(b), c),

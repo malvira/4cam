@@ -2173,6 +2173,37 @@ try {
     await js("document.getElementById('opForm').reset?.(); true");
   }
 
+  // 8s1b. stock carried between setups: the plate's second setup takes what the first left,
+  // turned over (about Y); the engine turns the part with it, plans it from that stock
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate's dome mesh", 60000);
+    await settle();
+    await js("document.getElementById('treeAddSetup').click(); true");
+    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 60000);
+    const offered = await js("!document.getElementById('sdCarryOpt').classList.contains('hidden')");
+    await js(`document.querySelector('.sd-kind[data-kind="vise"]').click();
+      const r = document.querySelector('input[name="sdStock"][value="previous"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true }));
+      const t = document.getElementById('sdTurn'); t.value = 'y180'; t.dispatchEvent(new Event('change', { bubbles: true })); true`);
+    await sleep(200);
+    const hidden = await js("({ carry: !document.getElementById('sdCarry').classList.contains('hidden'), dims: document.getElementById('sdDims').classList.contains('hidden') })");
+    await shot("32a_carry_dialog");
+    await js("document.getElementById('sdOk').click(); true");
+    await waitFor(() => js("document.body.dataset.state === 'ready' && JSON.parse(document.getElementById('job').value).setups.length === 2"), "the carried setup", 60000);
+    const d = JSON.parse(await js("document.getElementById('job').value"));
+    const s2 = d.setups[1];
+    const frame = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${s2.id}' }).then((r) => r.result)`);
+    await waitFor(() => js("window.__marcam.state.three.groups.stock.children.length > 0 && !window.__marcam.state.three.drawing"), "the carried stock drawn", 60000);
+    await clickGenerate();
+    await waitDone("generation of the carried setup", 240000);
+    const v = await js("({ stock: window.__marcam.state.three.groups.stock.children.length, tabs: [...document.querySelectorAll('#tabs button')].map((b) => b.textContent) })");
+    await shot("32b_carried_setup");
+    check("a setup takes the stock the one before left, turned over: offered in + Setup, the part turned with it, the block where it was, planned",
+      offered && hidden.carry && hidden.dims && JSON.stringify(s2.stock) === JSON.stringify({ shape: "from_previous", turn: "y180" }) && frame.mesh.turn === "y180" &&
+      JSON.stringify([frame.stock_box.min, frame.stock_box.max]) === JSON.stringify([d.setups[0].stock.min, d.setups[0].stock.max]) && frame.carry.from === d.setups[0].id && v.stock > 0 && v.tabs.length >= 1 && v.tabs.every((t) => t.endsWith("OK")),
+      `${JSON.stringify(s2.stock)}; ${JSON.stringify(frame.stock_box)}; turn ${frame.mesh?.turn}; tabs ${v.tabs}`);
+  }
+
   // 8s2. (Mar) parting: a new operation type, placed by a click on the part (snapped to a
   // band's end when near it), typed or defaulted to the part's back; it plans with a time
   {

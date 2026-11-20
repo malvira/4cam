@@ -604,7 +604,10 @@ fn plan(p: &Project, a: &Value, out: Option<&Path>) -> ToolResult {
         Some(d) => src.load(d).ok(),
         None => None,
     };
-    let jobs = marcam::project::jobs_from_any_with(&text, &reg.libraries(), &meshes)?;
+    let mut jobs = marcam::project::jobs_from_any_with(&text, &reg.libraries(), &meshes)?;
+    // setups whose stock the one before left: that stock
+    let part = |j: &marcam::Job| marcam::load_mesh(j, dir).ok().flatten();
+    marcam::carry::carry_stock(&mut jobs, &part, None)?;
     let full = a["gcode"].as_str() == Some("full");
     let mut setups = Vec::new();
     let mut written = Vec::new();
