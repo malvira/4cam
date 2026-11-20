@@ -1131,6 +1131,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // at rest the part stands at A0 (the whole toolpath drawn on it); playing, it turns
     if (!editing) v.groups.work.rotation.x = m.expanded ? m.angle || 0 : 0;
     if (v.groups.toolModel) v.groups.toolModel.visible = !editing && !!m.expanded && view.tool;
+    if (v.groups.jaws) v.groups.jaws.visible = view.part || view.stock;
     // the played/coming distinction ends a moment after the last scrub
     if (m.moving !== moving()) showRange();
     // the selection changed: its toolpath stands out

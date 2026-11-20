@@ -20,6 +20,10 @@ pub struct Job {
     /// `stock_box` round it (Z0 at its top). None: the block is the stock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_axis: Option<[f64; 2]>,
+    /// A vise: the depth of the stock its jaws grip (mm up from the bottom of `stock_box`); the
+    /// jaws stand beside its Y faces up to there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jaws: Option<f64>,
     /// Radial clearance above the stock for safe rapids (mm).
     #[serde(default = "default_clearance")]
     pub clearance: f64,

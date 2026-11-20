@@ -86,6 +86,10 @@ pub struct Holding {
     /// A bar's length held in the chuck (mm): the rest sticks out to be cut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chuck: Option<f64>,
+    /// A vise: the stock's depth gripped by the jaws (mm up from its bottom). None: 3 mm or a
+    /// third of a block's height (the smaller), 40% of a bar's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jaws: Option<f64>,
 }
 
 impl Default for Holding {
@@ -94,6 +98,7 @@ impl Default for Holding {
             kind: "rotary_chuck".into(),
             tailstock: false,
             chuck: None,
+            jaws: None,
         }
     }
 }
@@ -902,6 +907,19 @@ impl Project {
             let (sb, axis) = stock.lying();
             v["stock_box"] = serde_json::json!({"min": sb.min, "max": sb.max});
             v["stock_axis"] = serde_json::json!(axis);
+        }
+        // the vise's jaws: the depth they grip
+        if let Some(sb) = v
+            .get("stock_box")
+            .and_then(|b| serde_json::from_value::<job::StockBox>(b.clone()).ok())
+        {
+            let h = sb.max[2] - sb.min[2];
+            let grip = setup.holding.jaws.unwrap_or(if setup.stock.is_bar() {
+                0.4 * h
+            } else {
+                (h / 3.0).min(3.0)
+            });
+            v["jaws"] = serde_json::json!(grip.clamp(0.0, h));
         }
         self.number_tools(&mut v);
         profiles::resolve_job_tools(&mut v, libraries)?;

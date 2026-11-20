@@ -279,6 +279,7 @@
         <label data-for="block" title="Where the part's corner sits on the block (blank: centred)">Part from X&minus; edge <input id="sdPx" type="number" step="any" placeholder="centred"> <span class="u">mm</span></label>
         <label data-for="block" title="Where the part's corner sits on the block (blank: centred)">Part from Y&minus; edge <input id="sdPy" type="number" step="any" placeholder="centred"> <span class="u">mm</span></label>
       </div>
+      <div id="sdJawsRow" class="sd-dims"><label title="How much of the stock the vise's jaws hold, up from its bottom (blank: 3 mm or a third of a block, 40% of a bar)">Gripped by the jaws <input id="sdJaws" type="number" step="any" min="0"> <span class="u">mm</span></label></div>
       <canvas id="sdEnd" width="170" height="170" aria-label="The stock's section with the part's outline (looking along X)"></canvas>
       <div><label>Material <input id="sdMaterial" list="sdMaterials" placeholder="not set" autocomplete="off" size="16"></label>
         <span class="small muted">picks the tools' cutting data for it (feeds, depths, stepovers)</span></div>

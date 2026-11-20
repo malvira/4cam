@@ -2691,6 +2691,41 @@ try {
       `${JSON.stringify(bars)} inch ${JSON.stringify(inch)} common ${common} ${JSON.stringify(commonSt)} fitted ${JSON.stringify(fitted)} toml ${String(toml).split(String.fromCharCode(10)).filter((l) => /stock|shape|across/.test(l)).join(" | ").slice(0, 200)} block ${blockOnly} ${blockFit} ${blockFields} ${JSON.stringify(block)} part at ${blockModel} vise bar ${JSON.stringify(viseBar)} ${viseBarFields}`);
   }
 
+  // 8st3. (Mar) the vise's jaws: the depth they grip (3 mm or a third of a block by default,
+  // or given), drawn beside the stock (with the part or the stock shown), and a warning when a
+  // cut reaches them
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate", 120000);
+    const jawsLook = () => js("(() => { const g = window.__marcam.state.three.groups.jaws; return { n: g?.children.length || 0, visible: !!g?.visible, top: g?.children[0] ? +(g.children[0].position.z + g.children[0].children[0].geometry.parameters.depth / 2).toFixed(3) : null }; })()");
+    const before = { look: await jawsLook(), warnings: await js("window.__marcam.state.result.programs.flatMap((p) => p.warnings || [])") };
+    await js("document.getElementById('treeEditSetup').click(); true");
+    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 15000);
+    const shownJaws = await js("!document.getElementById('sdJawsRow').classList.contains('hidden')");
+    await js("(() => { const e = document.getElementById('sdJaws'); e.value = '8.5'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await js("document.getElementById('sdOk').click(); true");
+    await waitFor(() => js("!document.getElementById('setupDialog').open"), "the dialog closed", 15000);
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate with the jaws higher", 120000);
+    await sleep(500);
+    const after = { look: await jawsLook(), warnings: await js("window.__marcam.state.result.programs.flatMap((p) => p.warnings || [])"), grip: await js("JSON.parse(document.getElementById('job').value).setups[0].holding.jaws"), shown: await js("document.getElementById('toolWarnings')?.textContent || ''") };
+    await shot("31_vise_jaws");
+    // hidden with the part and the stock
+    const key = (k) => js(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', bubbles: true })); true`);
+    const view0 = await js("JSON.stringify(window.__marcam.state.machining.view)");
+    await js("(() => { const v = window.__marcam.state.machining.view; if (v.stock) window.__marcam.machining.toggle('stock'); if (v.part) window.__marcam.machining.toggle('part'); return true; })()");
+    await sleep(200);
+    const hidden = await jawsLook();
+    await js("window.__marcam.machining.toggle('part'); true");
+    check("vise jaws: 3 mm of the plate gripped by default, drawn beside it; gripped 8.5 mm the outline's pass past the Y faces is warned about (as it cuts into them); hidden with the part and the stock",
+      shownJaws && before.look.n === 2 && Math.abs(before.look.top - -7) < 1e-3 && before.warnings.every((w) => !/jaws/.test(w)) &&
+      after.grip === 8.5 && Math.abs(after.look.top - -1.5) < 1e-3 && after.warnings.some((w) => /cuts into the vise jaws/.test(w)) && /cuts into the vise jaws/.test(after.shown) && !hidden.visible,
+      `${JSON.stringify(before)} ${JSON.stringify(after)} hidden ${JSON.stringify(hidden)} view ${view0}`);
+  }
+
   // 8st2. (Mar) no form field silently lost: every operation type's form shows each of its
   // registry parameters (but the documented exceptions), and the setup dialog each stock size
   {

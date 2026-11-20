@@ -7,7 +7,7 @@ import { addViewCube } from "./viewcube.js";
 import { setupToolDialogs } from "./tooldialog.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
-import { lyingBar, setupProject } from "./project.js";
+import { jawGrip, lyingBar, setupProject } from "./project.js";
 import { color, colorNum, colorRgb, COLOR_DEFAULTS, COLOR_LABELS, onColorsChange, resetColors, setColor } from "./colors.js";
 
 // Settings saved before the rename (4cam -> marcam) carry over once: "4cam.x" -> "marcam.x".
@@ -1362,7 +1362,7 @@ async function drawModel() {
   const ids = v2 ? (setup?.part?.length ? setup.part : doc.models?.map((m) => m.id) || []) : [];
   const models = v2 ? (doc.models || []).filter((m) => ids.includes(m.id)) : [];
   // (with the colours' generation: a draw begun before a colour changed is dropped)
-  const key = JSON.stringify([setup?.id, setup?.stock, models, v2 ? null : [doc.stock, doc.part], state.mesh?.length || 0, colorsGen]);
+  const key = JSON.stringify([setup?.id, setup?.stock, setup?.kind, setup?.holding, models, v2 ? null : [doc.stock, doc.part], state.mesh?.length || 0, colorsGen]);
   if (v.modelKey === key) return;
   v.modelKey = key;
   // built aside and swapped in at once when complete: the old part stays shown meanwhile
@@ -1442,6 +1442,23 @@ async function drawModel() {
   clear(groups.part);
   for (const o of partNew) groups.part.add(o);
   for (const o of stockNew) groups.stock.add(o);
+  // a vise's jaws: beside the stock's Y faces, up to what they grip
+  if (!groups.jaws) {
+    groups.jaws = new THREE.Group();
+    v.scene.add(groups.jaws);
+  }
+  clear(groups.jaws);
+  if (sb && v2 && (setup?.kind === "vise" || setup?.holding?.kind === "vise" || setup?.stock?.shape === "box")) {
+    const grip = jawGrip(setup);
+    const top = sb.min[2] + grip, low = sb.min[2] - 4;
+    const len = sb.max[0] - sb.min[0] + 20, thick = 8;
+    for (const y of [sb.min[1] - thick / 2, sb.max[1] + thick / 2]) {
+      const jaw = stockObject(THREE, new THREE.BoxGeometry(len, thick, top - low), 0.12);
+      jaw.position.set((sb.min[0] + sb.max[0]) / 2, y, (top + low) / 2);
+      jaw.userData.jaw = true;
+      groups.jaws.add(jaw);
+    }
+  }
   // frame the view when the stock changes; keep the person's orbit otherwise
   if (fitKey && v.fitted !== fitKey && v.fitted !== "picking") {
     if (sb) {

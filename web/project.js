@@ -175,6 +175,17 @@ export function lyingBar(st) {
   return { axis: [-y0, -z1], box: { min: [0, 0, z0 - z1], max: [st.length, y1 - y0, 0] } };
 }
 
+/** The depth a vise's jaws grip (mm up from the stock's bottom): the setup's own, else 3 mm or
+ *  a third of a block's height (the smaller), 40% of a bar's (as the engine's default). */
+export function jawGrip(s) {
+  const st = s?.stock;
+  if (!st) return 0;
+  if (s.holding?.jaws != null) return s.holding.jaws;
+  if (st.shape === "box") return Math.min(3, (st.max[2] - st.min[2]) / 3);
+  const b = lyingBar(st).box;
+  return 0.4 * (b.max[2] - b.min[2]);
+}
+
 /** The project's stock for a given stock spec (no part to place: a block's sizes, a bar's). */
 export function stockOfSpec(kind, spec) {
   if (spec.dims) {
@@ -785,8 +796,9 @@ export function setupProject(ctx) {
     } else if (cfg.explicit) {
       s.stock = stockOfSpec(kind, cfg.explicit);
     }
-    // the length of a bar held in the chuck
+    // the length of a bar held in the chuck; the depth the vise's jaws grip
     if (kind !== "vise" && cfg.stock?.chuck > 0) s.holding.chuck = r3(cfg.stock.chuck);
+    if (kind === "vise" && cfg.jaws != null) s.holding.jaws = r3(cfg.jaws);
     // operations: keep what fits, with its defaults for the new part and kind
     const types = state.tree?.types?.length ? state.tree.types : (await engine("opTypes")).result;
     const removed = [], recomputed = [];
@@ -1033,7 +1045,7 @@ export function setupProject(ctx) {
     const axis = kind === "vise" ? Object.entries(UP_AXIS).find(([, v]) => v === (m?.axis ?? "x"))?.[0] ?? "z" : m?.axis ?? "x";
     const cfg = await dialog.open("edit", {
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
-      stock: s.stock, chuck: s.holding?.chuck, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null, previewTris,
+      stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null, previewTris,
     });
     if (!cfg) return false;
     // nothing about the placement changed (only the name or the material): the operations
@@ -1049,6 +1061,11 @@ export function setupProject(ctx) {
       }
       const s1 = doc.setups.find((x) => x.id === s.id);
       if (cfg.setupName) s1.name = cfg.setupName;
+      // the jaws' grip (nothing moves: the warnings change)
+      if (kind === "vise") {
+        if (cfg.jaws != null) s1.holding = { ...s1.holding, jaws: r3(cfg.jaws) };
+        else if (s1.holding) delete s1.holding.jaws;
+      }
       const what = (cfg.material ?? null) !== (s.material ?? null) ? `material ${cfg.material ?? "not set"}` : "renamed";
       await commitSetupChange(doc, { removed: [], added: [] }, { label: `Setup "${s1.name || s1.id}": ${what}.`, job: before });
       if (changed.length) setStatus(`Material ${cfg.material ?? "not set"}: ${changed.length} cutting value${changed.length > 1 ? "s" : ""} updated (typed ones kept). Generate to plan it again`, "ready");

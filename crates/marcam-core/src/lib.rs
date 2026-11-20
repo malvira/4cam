@@ -1106,6 +1106,45 @@ pub struct GougeReport {
     pub at: Option<(f64, f64)>,
 }
 
+/// Cuts that reach the vise's jaws: a tool below the jaws' top with its edge past the stock's
+/// Y faces, where the jaws stand. One warning per operation, with where.
+pub fn jaw_check(job: &Job, tps: &[Toolpath]) -> Vec<(String, String)> {
+    let (Some(sb), Some(grip)) = (job.stock_box, job.jaws) else {
+        return Vec::new();
+    };
+    let top = sb.min[2] + grip;
+    let mut out = Vec::new();
+    for tp in tps {
+        let mut tool = None;
+        let mut op = String::new();
+        let mut seen = std::collections::HashSet::new();
+        for m in &tp.moves {
+            match m {
+                Move::ToolChange { tool: t, .. } => tool = Some(*t),
+                Move::Operation { kind, id, .. } => op = format!("{kind} (#{})", id + 1),
+                Move::Line3 { x, y, z, .. } if *z < top - 1e-6 => {
+                    let r = tool
+                        .and_then(|t| job.tool(t))
+                        .and_then(|d| cutter_for(0, d.shape).ok())
+                        .map_or(0.0, |c| c.radius());
+                    if *x + r < sb.min[0] || *x - r > sb.max[0] {
+                        continue;
+                    }
+                    let into_jaw = *y - r < sb.min[1] - 1e-6 || *y + r > sb.max[1] + 1e-6;
+                    if into_jaw && seen.insert(op.clone()) {
+                        out.push((
+                            tp.name.clone(),
+                            format!("{op} cuts into the vise jaws: Z{z:.3} below their top (Z{top:.3}) at X{x:.3} Y{y:.3}"),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// Check every program against the part surface (the mesh if given, else the revolved
 /// profile) with a drop-cutter for each tool.
 pub fn gouge_check(

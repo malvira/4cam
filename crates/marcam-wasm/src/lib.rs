@@ -329,6 +329,7 @@ pub mod api {
         let gouges = gouge_check(&job, &tps, mesh.as_ref()).unwrap_or_default();
         let collisions = marcam::collision_check(&job, &tps, &machine).unwrap_or_default();
         let limits = profiles::check_limits(&job, &tps, &profile);
+        let jaws = marcam::jaw_check(&job, &tps);
         // project operation ids by planning order (0.2 documents), for per-operation times
         let op_ids = with_setup(&opts_v, || op_ids_and_colors(job_json)).map(|(ids, _)| ids);
         let mut total_s = 0.0;
@@ -364,7 +365,9 @@ pub mod api {
                     "tool": tp.tool,
                     "lines": gcode.lines().count(),
                     // what its G-code warns about (tools without a number, one tool twice)
-                    "warnings": tp.notes.iter().filter(|n| n.starts_with("(Warning")).map(|n| n.trim_start_matches("(Warning: ").trim_end_matches(')').to_string()).collect::<Vec<_>>(),
+                    // (and cuts that reach the vise's jaws)
+                    "warnings": tp.notes.iter().filter(|n| n.starts_with("(Warning")).map(|n| n.trim_start_matches("(Warning: ").trim_end_matches(')').to_string())
+                        .chain(jaws.iter().filter(|(p, _)| p == &tp.name).map(|(_, w)| w.clone())).collect::<Vec<_>>(),
                     "gcode": gcode,
                     "issues": issues,
                     "gouge": g.map(|g| json!({"moves_checked": g.moves_checked, "max_depth": g.max_depth, "at": g.at})),
@@ -390,6 +393,7 @@ pub mod api {
             "tools": job.tools,
             "stock": job.stock,
             "stock_box": job.stock_box,
+            "jaws": job.jaws,
             "profile": job.part.profile,
             "mesh_bounds": mesh.as_ref().and_then(|m| m.bounds()),
             "programs": programs,

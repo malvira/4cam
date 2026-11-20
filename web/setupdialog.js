@@ -41,7 +41,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
   // ---- the stock: its shape, fitted to the part or given, in mm or inches
   const shape = () => dlg.querySelector('input[name="sdShape"]:checked')?.value ?? (bar(kind()) ? "round" : "block");
   const unit = () => ($("sdStockUnits").value === "inch" ? IN : 1);
-  const STOCK_FIELDS = ["sdMargin", "sdMxl", "sdMxh", "sdMyl", "sdMyh", "sdMzb", "sdChuckFit", "sdDia", "sdSide", "sdW", "sdH", "sdAf", "sdAc", "sdLen", "sdChuck", "sdBx", "sdBy", "sdBz", "sdPx", "sdPy"];
+  const STOCK_FIELDS = ["sdJaws", "sdMargin", "sdMxl", "sdMxh", "sdMyl", "sdMyh", "sdMzb", "sdChuckFit", "sdDia", "sdSide", "sdW", "sdH", "sdAf", "sdAc", "sdLen", "sdChuck", "sdBx", "sdBy", "sdBz", "sdPx", "sdPy"];
   const mm = (id) => {
     const v = num(id);
     return v === undefined ? undefined : v * unit();
@@ -110,6 +110,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     const list = COMMON[sh] || [];
     $("sdCommon").innerHTML = `<option value="">choose...</option>` + list.map((c, i) => `<option value="${i}">${c.label}</option>`).join("");
     for (const u of dlg.querySelectorAll("#sdStockSet .u")) u.textContent = $("sdStockUnits").value === "inch" ? "in" : "mm";
+    // (the vise's jaws: how much they grip)
+    $("sdJawsRow").classList.toggle("hidden", bar(k));
   }
 
   /** A common size chosen: its sizes given (a plate: its thickness; X and Y fitted). */
@@ -450,6 +452,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         setMm("sdLen", sp.length);
       }
       setMm("sdChuck", preset.chuck);
+      setMm("sdJaws", preset.jaws);
       setMm("sdChuckFit", preset.chuck);
       $("sdWarn").classList.add("hidden");
       layout(false);
@@ -492,8 +495,9 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         margin: num("sdMargin"),
         explicit: ex,
         stock: spec,
+        jaws: k === "vise" ? mm("sdJaws") : undefined,
         // (the stock changed: given sizes, another shape, a margin typed)
-        stockChanged: !!ex || shape() !== c.presetShape || STOCK_FIELDS.some((id) => $(id).dataset.edited),
+        stockChanged: !!ex || shape() !== c.presetShape || STOCK_FIELDS.some((id) => id !== "sdJaws" && $(id).dataset.edited),
         tailstock: bar(k) && $("sdTail").checked,
         material: $("sdMaterial").value.trim() || null,
         // the placement fields typed in (others are the type's defaults)
