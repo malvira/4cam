@@ -197,12 +197,28 @@ pub fn rotary_finish_on(
             }
         }
     };
+    // the lead-in: down to `lead_in` above the surface a little before `a` (at 15 degrees
+    // along the turn), then onto it turning (the move never goes below the surface)
+    let lead_deg = |x: f64, a: f64| {
+        let r = cl(x, a).max(0.5);
+        (op.lead_in / 15f64.to_radians().tan() / r).to_degrees()
+    };
+    let onto = |b: &mut Builder, x: f64, a: f64, dir: f64| {
+        if op.lead_in > 0.0 {
+            let a0 = a - dir * lead_deg(x, a);
+            b.rapid(Some(x), None, Some(a0));
+            b.plunge(cl(x, a0) + op.lead_in, op.plunge_feed);
+            cut(b, x, a);
+        } else {
+            b.rapid(Some(x), None, Some(a));
+            b.plunge(cl(x, a), op.plunge_feed);
+        }
+    };
     // the first point of a pass: from the safe radius
     let start = |b: &mut Builder, x: f64, a: f64| {
         b.rapid_r(safe_r);
         if sel.is_none() {
-            b.rapid(Some(x), None, Some(a));
-            b.plunge(cl(x, a), op.plunge_feed);
+            onto(b, x, a, 1.0);
         } else {
             lifted.set(true);
             last.set(None);
@@ -303,7 +319,11 @@ pub fn rotary_finish_on(
                         let a = b.a;
                         b.rapid_r(safe_r);
                         b.rapid_x(xw);
-                        b.plunge(cl(xw, a), op.plunge_feed);
+                        if op.lead_in > 0.0 {
+                            onto(b, xw, a, 1.0);
+                        } else {
+                            b.plunge(cl(xw, a), op.plunge_feed);
+                        }
                         for k in 1..=n_rev {
                             cut(b, xw, a + seg * k as f64);
                         }

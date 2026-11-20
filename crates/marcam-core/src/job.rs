@@ -742,6 +742,10 @@ pub struct Raster3d {
     /// the setup left material, simulated (a smaller tool after a larger one).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rest: bool,
+    /// Lead-in (finishing): each pass comes onto the surface from this high above it (mm),
+    /// down along the pass at the ramp angle, instead of plunging onto it; 0: plunge.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub lead_in: f64,
     pub feed: f64,
     pub plunge_feed: f64,
     /// Descents gentler than this (degrees below the horizontal, along the path) run at
@@ -1130,6 +1134,10 @@ pub struct RotaryFinish {
     /// only touch once per turn.
     #[serde(default = "default_true")]
     pub clean_walls: bool,
+    /// Lead-in: a pass comes onto the surface turning, from this high above it (mm), not a
+    /// radial plunge onto it; 0: plunge.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub lead_in: f64,
     pub feed: f64,
     pub plunge_feed: f64,
     /// Descents gentler than this (degrees below the horizontal, along the path) run at

@@ -41,6 +41,7 @@ fn finish(angle: f64, pattern: &str, direction: &str, scallop: f64) -> Raster3d 
         scallop,
         faces: Vec::new(),
         rest: false,
+        lead_in: 0.0,
         feed: 600.0,
         plunge_feed: 60.0,
         ramp_angle: marcam::job::default_ramp_angle(),

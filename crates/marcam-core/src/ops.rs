@@ -202,6 +202,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),
                 p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
                 p("clean_walls", "boolean", "", "'around': a full turn at the foot of each wall.").opt(json!(true)),
+                p("lead_in", "number", "mm", "Lead-in: each pass comes onto the surface turning, from this high above it (at 15 degrees), instead of a radial plunge (0: plunge).").opt(json!(0.0)).min(0.0),
                 feed(),
                 plunge(),
                 ramp(),
@@ -417,7 +418,12 @@ pub fn registry() -> Vec<OperationType> {
             title: "3D parallel finishing",
             description: "Drop-cutter passes over the part mesh (or an image relief) at an angle, zigzag or one-way, stepover from a scallop target; in step-down levels if the stock is above it.",
             group: "finishing",
-            params: raster_params(),
+            params: {
+                let mut ps = raster_params();
+                let at = ps.iter().position(|p| p.name == "feed").unwrap_or(ps.len());
+                ps.insert(at, p("lead_in", "number", "mm", "Lead-in: each pass comes onto the surface from this high above it, down along the pass at the ramp angle, instead of plunging onto it (0: plunge).").opt(json!(0.0)).min(0.0));
+                ps
+            },
             tool_shapes: &["ball", "flat", "vbit", "tapered_ball"],
             geometry: &["mesh"],
             machine_needs: &["xyz"],
@@ -857,6 +863,8 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             }
             v.insert("feed".into(), json!(nice(1.25 * feed, 5.0).min(0.75 * cap)));
             v.insert("plunge_feed".into(), json!(plunge));
+            // onto each pass turning, from a little above the surface
+            v.insert("lead_in".into(), json!(0.3));
         }
         "helical_knurl" => {
             let regions = cx
@@ -1109,6 +1117,8 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                         v.insert("step_down".into(), json!(nice((0.5 * d).max(0.1), 0.05)));
                         v.insert("leave".into(), json!(0.25));
                     } else {
+                        // onto each pass from a little above the surface, not a plunge
+                        v.insert("lead_in".into(), json!(nice((0.25 * d).max(0.2), 0.05)));
                         // finishing: a ball or V-bit works to a scallop target (the stepover
                         // shown is what it gives), a flat tool to 15% of its diameter
                         // a 0.02 mm cusp: about a sixth of a 3 mm ball's diameter apart

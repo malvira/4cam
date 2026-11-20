@@ -194,6 +194,72 @@ fn ramp_in(
     bld.line3(a[0], a[1], z, UP, feed);
 }
 
+/// The unit vector from `a` to `b` (zero when they meet).
+fn unit2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    let l = (b[0] - a[0]).hypot(b[1] - a[1]);
+    if l < 1e-12 {
+        [1.0, 0.0]
+    } else {
+        [(b[0] - a[0]) / l, (b[1] - a[1]) / l]
+    }
+}
+
+/// Down from `z_start` to `z` along the closed loop `lp` (its last point repeats its first)
+/// from its point `s`, at `angle` degrees below the horizontal (fed so the tip falls no faster
+/// than `plunge`), round it as often as needed. Returns where it reached the depth: the
+/// segment it is on (its first point's index) and the point.
+#[allow(clippy::too_many_arguments)]
+fn ramp_along(
+    b: &mut Builder,
+    safe: f64,
+    lp: &[[f64; 2]],
+    s: usize,
+    z_start: f64,
+    z: f64,
+    angle: f64,
+    feed: f64,
+    plunge: f64,
+) -> (usize, [f64; 2]) {
+    let n = lp.len() - 1;
+    let tan = angle.clamp(0.5, 45.0).to_radians().tan();
+    b.rapid3(None, None, Some(safe));
+    b.rapid3(Some(lp[s][0]), Some(lp[s][1]), None);
+    b.rapid3(None, None, Some(z_start));
+    let (mut k, mut at, mut zz) = (s, lp[s], z_start);
+    // (a loop shorter than a hair: nothing to ramp along)
+    let perimeter: f64 = (0..n)
+        .map(|i| (lp[i + 1][0] - lp[i][0]).hypot(lp[i + 1][1] - lp[i][1]))
+        .sum();
+    if perimeter < 1e-3 {
+        b.line3(at[0], at[1], z, UP, plunge);
+        return (k, at);
+    }
+    let mut guard = 0;
+    while zz > z + 1e-9 && guard < 100_000 {
+        let to = lp[(k + 1) % n];
+        let seg = (to[0] - at[0]).hypot(to[1] - at[1]);
+        let fall = seg * tan;
+        if zz - fall > z {
+            let next = [to[0], to[1], zz - fall];
+            let f = descent_feed([at[0], at[1], zz], next, feed, plunge, 0.0);
+            b.line3(to[0], to[1], zz - fall, UP, f);
+            at = to;
+            zz -= fall;
+            k = (k + 1) % n;
+        } else {
+            // the depth reached partway along this segment
+            let t = if fall > 0.0 { (zz - z) / fall } else { 1.0 };
+            let p = [at[0] + (to[0] - at[0]) * t, at[1] + (to[1] - at[1]) * t];
+            let f = descent_feed([at[0], at[1], zz], [p[0], p[1], z], feed, plunge, 0.0);
+            b.line3(p[0], p[1], z, UP, f);
+            at = p;
+            zz = z;
+        }
+        guard += 1;
+    }
+    (k, at)
+}
+
 /// Largest spacing between a shaped pocket's offset loops, in tool diameters (see
 /// [`path_pocket`]): a larger stepover is cut at this.
 pub const MAX_LOOP_SPACING: f64 = 0.7;
@@ -320,19 +386,22 @@ fn path_pocket(
                 .filter(|_| at[0].is_finite())
                 .unwrap_or(0);
             let start = lp[s];
-            enter(
-                b,
-                safe,
-                start[0],
-                start[1],
-                z + op.step_down.max(0.5),
-                z,
-                op.plunge_feed,
-            );
+            let z_start = z + op.step_down.max(0.5);
+            // in: down along the loop itself at the ramp's angle (it stays in the pocket),
+            // round it again if one lap is not long enough, then a whole lap at depth from
+            // where it got there; or straight down at the plunge feed
+            let mut from = (s, start);
+            if op.ramp > 0.0 {
+                from = ramp_along(b, safe, lp, s, z_start, z, op.ramp, op.feed, op.plunge_feed);
+            } else {
+                enter(b, safe, start[0], start[1], z_start, z, op.plunge_feed);
+            }
+            let (k0, p0) = from;
             for k in 1..=n {
-                let q = lp[(s + k) % n];
+                let q = lp[(k0 + k) % n];
                 b.line3(q[0], q[1], z, UP, op.feed);
             }
+            b.line3(p0[0], p0[1], z, UP, op.feed);
             leave(b, safe);
             at = start;
         }
@@ -1072,14 +1141,50 @@ pub fn raster3d_on(
             }
             let [sx, sy] = row[0];
             let z0 = z_of(sx, sy);
+            // the lead-in: from `lead_in` above the surface, a little behind the pass's start,
+            // down along the pass at the ramp angle (never below the surface)
+            let lead = |b: &mut Builder| {
+                let tan = op.ramp_angle.clamp(1.0, 45.0).to_radians().tan();
+                let len = op.lead_in / tan;
+                let u = unit2(row[0], row.get(1).copied().unwrap_or(row[0]));
+                let n = ((len / op.sample.max(0.05)).ceil() as usize).clamp(2, 200);
+                let pts: Vec<[f64; 3]> = (0..=n)
+                    .map(|k| {
+                        let back = len * (1.0 - k as f64 / n as f64);
+                        let (x, y) = (sx - u[0] * back, sy - u[1] * back);
+                        [x, y, z_of(x, y) + op.lead_in * (1.0 - k as f64 / n as f64)]
+                    })
+                    .collect();
+                enter(
+                    b,
+                    safe,
+                    pts[0][0],
+                    pts[0][1],
+                    top + 1.0,
+                    pts[0][2],
+                    op.plunge_feed,
+                );
+                for w in pts.windows(2) {
+                    let f = descent_feed(w[0], w[1], op.feed, op.plunge_feed, tan);
+                    b.line3(w[1][0], w[1][1], w[1][2].max(z_of(w[1][0], w[1][1])), UP, f);
+                }
+            };
             if first {
                 // one entry per level (per pass one-way), from above the uncut stock, so the
                 // tool never drops beside material outside the raster area
-                enter(b, safe, sx, sy, top + 1.0, z0, op.plunge_feed);
+                if op.lead_in > 0.0 {
+                    lead(b);
+                } else {
+                    enter(b, safe, sx, sy, top + 1.0, z0, op.plunge_feed);
+                }
                 first = false;
             } else if one_way {
                 leave(b, safe);
-                enter(b, safe, sx, sy, top + 1.0, z0, op.plunge_feed);
+                if op.lead_in > 0.0 {
+                    lead(b);
+                } else {
+                    enter(b, safe, sx, sy, top + 1.0, z0, op.plunge_feed);
+                }
             } else {
                 let p = b.p3.expect("inside a level");
                 line_refined(b, &z_of, p, [sx, sy, z0], op.tolerance, 0, feeds);
