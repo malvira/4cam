@@ -74,9 +74,9 @@ pub fn offered() -> Vec<ops::OperationType> {
 }
 
 /// Operation types the plugin leaves to a marcam project: parting (a cut-off belongs with
-/// the part's other operations; SolidCraft caps manifests at 16 KiB, and each entry costs
-/// about 1 KiB).
-pub const NOT_OFFERED: [&str; 1] = ["parting"];
+/// the part's other operations) and waterline finishing (a 3-axis finish after a parallel
+/// one); SolidCraft caps manifests at 16 KiB, and each entry costs about 1 KiB.
+pub const NOT_OFFERED: [&str; 2] = ["parting", "waterline"];
 
 /// Entry name for an operation type (`rotary_rough` -> `rotary-rough`).
 pub fn entry_name(kind: &str) -> String {
@@ -207,7 +207,7 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
 /// Operation fields the plugin does not offer: marcam's defaults apply (tabs placed by hand,
 /// their size, a contour's direction and leads, a pocket's ramp are set in the app or a
 /// project; climb, no leads, plunging by default).
-pub const LEFT_AT_DEFAULT: [&str; 10] = [
+pub const LEFT_AT_DEFAULT: [&str; 11] = [
     "ramp_angle",
     "smoothing",
     "regions",
@@ -218,6 +218,7 @@ pub const LEFT_AT_DEFAULT: [&str; 10] = [
     "lead_in",
     "lead_out",
     "ramp",
+    "rest_tool",
 ];
 
 /// The package manifest (`plugin.json`), generated from the operation registry.
