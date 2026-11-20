@@ -661,6 +661,9 @@ async function generate(opts = {}) {
     return;
   }
   $("generate").disabled = $("simulate").disabled = true;
+  // the playback being made for the last plan by itself is stale now: stopped, so it does not
+  // hold the machine while this one plans (a slow one took minutes on a slow PC)
+  if (window.__marcam.machining?.state?.autoOpening) cancelEngine("superseded");
   setStatus(opts.auto ? "Updating the toolpaths..." : "Generating...", "busy");
   const run = (state.genRun = (state.genRun || 0) + 1);
   const hadSim = !!state.sim;

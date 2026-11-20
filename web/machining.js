@@ -849,7 +849,14 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     try {
       const setup = job.schema_version === "0.2" ? state.tree?.setup : undefined;
       const machine = machineArg?.() ?? null;
-      const { result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup, machine: typeof machine === "string" ? machine : null, path_only: !stock }, state.mesh);
+      // (opened by itself after a plan: a newer plan makes it stale, and stops it)
+      m.autoOpening = !!opts.auto;
+      let result;
+      try {
+        ({ result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup, machine: typeof machine === "string" ? machine : null, path_only: !stock }, state.mesh));
+      } finally {
+        m.autoOpening = false;
+      }
       result.path = f32(result.path);
       result.times = result.times ? f32(result.times) : null;
       m.session = result;
@@ -1116,6 +1123,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
    *  every frame (cheap). */
   function syncFrame() {
     const v = state.three;
+    // the vise's jaws go with the part and the stock, a playback open or not
+    if (v?.groups?.jaws) v.groups.jaws.visible = view.part || view.stock;
     if (!m.open || !v || v.failed || !v.groups.work) return;
     // (a test's chosen layers, View hooks: they stand until it clears them)
     if (state.viewShow) {
