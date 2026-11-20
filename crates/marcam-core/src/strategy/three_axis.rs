@@ -717,7 +717,87 @@ pub fn raster3d(
     safe: f64,
     op: &Raster3d,
 ) -> Result<(), String> {
-    raster3d_on(b, dc, None, stock, safe, op)
+    raster3d_on(b, dc, None, None, stock, safe, op)
+}
+
+/// Material thinner than this (mm) over what a pass leaves is not cut by rest roughing: the
+/// finish takes it.
+pub const REST_MIN: f64 = 0.05;
+/// How far above the material left a rest roughing comes down to, or passes over it (mm).
+pub const REST_CLEAR: f64 = 0.3;
+
+/// What the operations before a rest roughing left of the block, as the highest top under a
+/// tool of `radius` at each cell (the block's heightmap after them, widened by the tool): a
+/// pass at Z cuts material at (x, y) only where this is above Z.
+#[derive(Debug, Clone)]
+pub struct RestMap {
+    pub x0: f64,
+    pub y0: f64,
+    pub cell: f64,
+    pub nx: usize,
+    pub ny: usize,
+    pub top: Vec<f64>,
+}
+
+impl RestMap {
+    /// From the block left (`hm`) and the rest tool's radius.
+    pub fn new(hm: &crate::sim3::Heightmap3, radius: f64) -> RestMap {
+        let (nx, ny, cell) = (hm.nx, hm.ny, hm.cell);
+        let k = (radius / cell).ceil() as isize;
+        // the disc's cells, as offsets (its centre cell included)
+        let disc: Vec<(isize, isize)> = (-k..=k)
+            .flat_map(|dj| (-k..=k).map(move |di| (di, dj)))
+            .filter(|&(di, dj)| {
+                let (dx, dy) = (
+                    (di.unsigned_abs() as f64 - 0.5).max(0.0) * cell,
+                    (dj.unsigned_abs() as f64 - 0.5).max(0.0) * cell,
+                );
+                dx * dx + dy * dy <= radius * radius
+            })
+            .collect();
+        // a row's maximum over each run of cells first, then the disc's rows (separable
+        // per row width): kept simple, the disc's offsets directly
+        let mut top = vec![f64::NEG_INFINITY; nx * ny];
+        for j in 0..ny as isize {
+            for i in 0..nx as isize {
+                let mut m = f64::NEG_INFINITY;
+                for &(di, dj) in &disc {
+                    let (a, c) = (i + di, j + dj);
+                    if a < 0 || c < 0 || a >= nx as isize || c >= ny as isize {
+                        continue;
+                    }
+                    m = m.max(hm.z[c as usize * nx + a as usize]);
+                }
+                top[j as usize * nx + i as usize] = m;
+            }
+        }
+        RestMap {
+            x0: hm.x0,
+            y0: hm.y0,
+            cell,
+            nx,
+            ny,
+            top,
+        }
+    }
+
+    /// [`RestMap::at`] at a point.
+    pub fn at_point(&self, p: [f64; 2]) -> f64 {
+        self.at(p[0], p[1])
+    }
+
+    /// The highest material under the tool centred at (x, y) (beside the block: its edge).
+    pub fn at(&self, x: f64, y: f64) -> f64 {
+        let fi = (x - self.x0) / self.cell;
+        let fj = (y - self.y0) / self.cell;
+        if fi < 0.0 || fj < 0.0 || fi >= self.nx as f64 || fj >= self.ny as f64 {
+            // (beside the block the tool's edge still reaches it: the nearest cell)
+            let i = (fi.max(0.0) as usize).min(self.nx - 1);
+            let j = (fj.max(0.0) as usize).min(self.ny - 1);
+            return self.top[j * self.nx + i];
+        }
+        self.top[fj as usize * self.nx + fi as usize]
+    }
 }
 
 /// [`raster3d`] limited to where the tool rests on the faces in `sel` (a drop-cutter on just
@@ -727,6 +807,7 @@ pub fn raster3d_on(
     b: &mut Builder,
     dc: &DropCutter3,
     sel: Option<&DropCutter3>,
+    rest: Option<&RestMap>,
     stock: &StockBox,
     safe: f64,
     op: &Raster3d,
@@ -797,6 +878,8 @@ pub fn raster3d_on(
         let mut first = true;
         // face selection: at the safe height until the first run on the faces
         let mut lifted = true;
+        // rest roughing: the tool left down where the material ended (see masked_row)
+        let mut air: Option<[f64; 2]> = None;
         let mut emitted = 0usize;
         for k in 0..=n {
             if crate::budget::over() {
@@ -827,8 +910,25 @@ pub fn raster3d_on(
             } else {
                 row
             };
-            if let Some(s) = sel {
-                masked_row(b, dc, s, &z_of, &row, safe, top, op, &mut lifted);
+            if sel.is_some() || rest.is_some() {
+                // on the selected faces, and (rest roughing) where material is left above
+                // the pass
+                let inside = |p: [f64; 2]| {
+                    sel.is_none_or(|s| on_sel(dc, s, p[0], p[1]))
+                        && rest.is_none_or(|r| r.at(p[0], p[1]) > z_of(p[0], p[1]) + REST_MIN)
+                };
+                masked_row(
+                    b,
+                    &inside,
+                    &z_of,
+                    &row,
+                    safe,
+                    top,
+                    op,
+                    &mut lifted,
+                    rest,
+                    &mut air,
+                );
                 continue;
             }
             let [sx, sy] = row[0];
@@ -875,35 +975,52 @@ fn on_sel(dc: &DropCutter3, sel: &DropCutter3, x: f64, y: f64) -> bool {
     )
 }
 
-/// One raster row on selected faces: cut its runs on them, finding their edges to 1 um,
-/// lifting between runs; a row's first run is reached at depth from the last one when the
-/// straight link stays on the faces.
+/// About how fast the machine rapids (mm/min), for choosing between a link at depth and a
+/// lift: a guess on the slow side.
+const RAPID_GUESS: f64 = 3000.0;
+/// And what each rapid costs besides its length (minutes: about 0.15 s of speeding up and
+/// slowing down).
+const RAPID_OVERHEAD: f64 = 0.0025;
+
+/// One raster row on selected faces, or (rest roughing) where material is left: cut its runs
+/// there, finding their edges to 1 um, lifting between runs; a row's first run is reached at
+/// depth from the last one when the straight link stays on the faces. With `rest`, the tool
+/// comes down from just above the material left (not the block's top), and crosses a gap at
+/// depth when that is quicker than lifting (nothing is left there to cut).
 #[allow(clippy::too_many_arguments)]
 fn masked_row(
     b: &mut Builder,
-    dc: &DropCutter3,
-    sel: &DropCutter3,
+    inside: &dyn Fn([f64; 2]) -> bool,
     z_of: &dyn Fn(f64, f64) -> f64,
     row: &[[f64; 2]],
     safe: f64,
     top: f64,
     op: &Raster3d,
     lifted: &mut bool,
+    rest: Option<&RestMap>,
+    air: &mut Option<[f64; 2]>,
 ) {
     let feeds = [op.feed, op.plunge_feed];
-    let inside = |p: [f64; 2]| on_sel(dc, sel, p[0], p[1]);
     let lerp =
         |p: [f64; 2], q: [f64; 2], t: f64| [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
     let dist = |p: [f64; 2], q: [f64; 2]| ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt();
     let at = |p: [f64; 2]| [p[0], p[1], z_of(p[0], p[1])];
+    // where a descent starts: above the block, or just above what is left there
+    let start = |p: [f64; 2], z: f64| {
+        rest.map_or(top + 1.0, |r| {
+            (r.at(p[0], p[1]) + REST_CLEAR).min(top + 1.0)
+        })
+        .max(z)
+    };
     let mut prev: Option<[f64; 2]> = None;
     for &q in row {
         let here = inside(q);
         match (*lifted, here) {
             (false, true) => {
                 let from = b.p3.expect("cutting");
-                // from the last row's end: at depth only if the link stays on the faces
-                let link_ok = prev.is_some() || {
+                // from the last row's end: at depth only if the link stays on the faces (rest
+                // roughing: always, as a full pass would)
+                let link_ok = prev.is_some() || rest.is_some() || {
                     let a = [from[0], from[1]];
                     let n = ((dist(a, q) / op.sample.max(0.01)).ceil() as usize).max(1);
                     (1..n).all(|k| inside(lerp(a, q, k as f64 / n as f64)))
@@ -913,27 +1030,56 @@ fn masked_row(
                 } else {
                     leave(b, safe);
                     let z = z_of(q[0], q[1]);
-                    enter(b, safe, q[0], q[1], top + 1.0, z, op.plunge_feed);
+                    enter(b, safe, q[0], q[1], start(q, z), z, op.plunge_feed);
                 }
             }
             (true, false) => {}
             (false, false) => {
-                // leaving the faces: cut to their edge, then up
+                // leaving: cut to the edge, then up (rest roughing: maybe not)
                 if let Some(p) = prev {
-                    let e = super::rotary_finish::boundary(p, q, true, &lerp, &inside, dist(p, q));
+                    let e = super::rotary_finish::boundary(p, q, true, &lerp, inside, dist(p, q));
                     let from = b.p3.expect("cutting");
                     line_refined(b, z_of, from, at(e), op.tolerance, 0, feeds);
                 }
-                leave(b, safe);
+                if rest.is_some() {
+                    *air = b.p3.map(|p| [p[0], p[1]]);
+                } else {
+                    leave(b, safe);
+                }
                 *lifted = true;
             }
             (true, true) => {
-                // onto the faces: down at their edge, from above the stock
+                // onto the faces (or the material): at their edge
                 let e = prev.map_or(q, |p| {
-                    super::rotary_finish::boundary(p, q, false, &lerp, &inside, dist(p, q))
+                    super::rotary_finish::boundary(p, q, false, &lerp, inside, dist(p, q))
                 });
                 let z = z_of(e[0], e[1]);
-                enter(b, safe, e[0], e[1], top + 1.0, z, op.plunge_feed);
+                let from = b.p3;
+                match (air.take(), from, rest) {
+                    (Some(a), Some(f), Some(r)) => {
+                        // across the gap at depth, or over it just above what is left along
+                        // the way: whichever is quicker
+                        let s = start(e, z);
+                        let n = ((dist(a, e) / r.cell).ceil() as usize).max(1);
+                        let hop = (0..=n)
+                            .map(|k| r.at_point(lerp(a, e, k as f64 / n as f64)))
+                            .fold(f[2].max(s), f64::max)
+                            + REST_CLEAR;
+                        let hop = hop.min(safe);
+                        let lift = ((hop - f[2]) + dist(a, e) + (hop - s)) / RAPID_GUESS
+                            + 3.0 * RAPID_OVERHEAD
+                            + (s - z) / op.plunge_feed.max(1e-6);
+                        if dist(a, e) / op.feed.max(1e-6) <= lift {
+                            line_refined(b, z_of, f, at(e), op.tolerance, 0, feeds);
+                        } else {
+                            b.rapid3(None, None, Some(hop));
+                            b.rapid3(Some(e[0]), Some(e[1]), None);
+                            b.rapid3(None, None, Some(s));
+                            b.line3(e[0], e[1], z, UP, op.plunge_feed);
+                        }
+                    }
+                    _ => enter(b, safe, e[0], e[1], start(e, z), z, op.plunge_feed),
+                }
                 *lifted = false;
                 if dist(e, q) > 1e-9 {
                     line_refined(b, z_of, at(e), at(q), op.tolerance, 0, feeds);

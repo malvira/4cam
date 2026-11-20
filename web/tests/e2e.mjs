@@ -2464,6 +2464,39 @@ try {
       `${JSON.stringify(t1.cutting)}; library: ${lib}; pocket ${d}, face ${face}`);
   }
 
+  // 8x. rest roughing: a 3D roughing with "Rest roughing" on cuts only what the operations
+  // before it left (a smaller tool after a larger one): far less than the same pass over the
+  // whole block; the form shows the switch, and turning it off plans the full pass
+  {
+    const fx = join(root, "tests", "fixtures", "picking");
+    const gp = JSON.parse(readFileSync(join(fx, "oval_grip.project.json"), "utf8"));
+    const rough = (id, tool, rest) => ({ id, type: "rough3d", tool, x_range: [-5, 65], y_range: [-5, 35], stepover: 1.2, sample: 0.4, step_down: 1.5, floor: -8.5, leave: 0.25, feed: 600, plunge_feed: 100, ...(rest ? { rest: true } : {}) });
+    gp.setups[0].operations = [rough("op1", 1, false), rough("op2", 2, true)];
+    gp.setups[0].outputs = [{ name: "grip_rough", title: "rough", operations: ["op1", "op2"] }];
+    const text = JSON.stringify({ format: "marcam-project", version: 1, project: gp, meshes: { "oval_grip.stl": readFileSync(join(fx, "oval_grip.stl")).toString("base64") } });
+    await js(`await window.__marcam.project.openText(${JSON.stringify(text)}, "rest.marcam.json").then(() => true)`);
+    await settle();
+    await clickGenerate();
+    await waitDone("the rest roughing", 240000);
+    const opTime = (id) => js(`(() => { for (const p of window.__marcam.state.result.programs) { const o = (p.time?.ops || []).find((x) => x.id === '${id}'); if (o) return o.seconds; } return null; })()`);
+    const restS = await opTime("op2");
+    // the switch in the form
+    await js("document.querySelector('#tree .tree-op[data-op=\"op2\"] [data-act=\"select\"]').click(); true");
+    await waitFor(() => js("!!document.getElementById('opForm')?.elements.rest"), "the rest switch", 15000);
+    const shown = await js("document.getElementById('opForm').elements.rest.checked");
+    await shot("28a_rest_roughing");
+    // off: the full pass
+    await js("const f = document.getElementById('opForm'); f.elements.rest.checked = false; f.requestSubmit(); true");
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups[0].operations[1].rest !== true"), "rest switched off", 15000);
+    await settle();
+    await clickGenerate();
+    await waitDone("the full second roughing", 240000);
+    const fullS = await opTime("op2");
+    check("rest roughing: a smaller tool after a larger one cuts only what was left (its time well under the full pass's); the form's switch turns it off",
+      shown === true && restS > 0 && fullS > 0 && restS < 0.75 * fullS,
+      `rest ${Math.round(restS)} s, full ${Math.round(fullS)} s; switch shown ${shown}`);
+  }
+
   // 8y. (Mar) undo and redo for every edit: Edit > Undo / Redo and Ctrl+Z / Ctrl+Shift+Z
   // (Ctrl+Y); typing in the JSON is one step; the keys in a field are the field's own
   {

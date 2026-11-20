@@ -575,6 +575,10 @@ pub struct Raster3d {
     /// only where the tool rests on them, following the whole part. Empty: the whole part.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub faces: Vec<String>,
+    /// Rest roughing (3D roughing on a vise): cut only where the operations before it in
+    /// the setup left material, simulated (a smaller tool after a larger one).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rest: bool,
     pub feed: f64,
     pub plunge_feed: f64,
     /// Descents gentler than this (degrees below the horizontal, along the path) run at

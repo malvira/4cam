@@ -119,10 +119,19 @@ impl Heightmap3 {
 pub fn segments3(tps: &[Toolpath]) -> Vec<Segment> {
     let mut out = Vec::new();
     for (p, tp) in tps.iter().enumerate() {
+        out.extend(segments_of3(&tp.moves, p as u16));
+    }
+    out
+}
+
+/// The segments of one program's `moves` (see [`segments3`]), numbered as program `p`.
+pub fn segments_of3(moves: &[Move], p: u16) -> Vec<Segment> {
+    let mut out = Vec::new();
+    {
         let mut at: [Option<f64>; 3] = [None; 3];
         let mut tool = None;
         let mut op = 0u16;
-        for (idx, m) in tp.moves.iter().enumerate() {
+        for (idx, m) in moves.iter().enumerate() {
             let (to, rapid) = match *m {
                 Move::ToolChange { tool: t, .. } => {
                     tool = Some(t);
@@ -147,7 +156,7 @@ pub fn segments3(tps: &[Toolpath]) -> Vec<Segment> {
                     rapid,
                     tool,
                     op,
-                    program: p as u16,
+                    program: p,
                     move_index: idx,
                     index_a: Some(0.0),
                 });

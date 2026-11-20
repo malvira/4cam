@@ -140,6 +140,64 @@ struct Ctx<'a> {
     /// What every operation of this job depends on besides itself (stock, part, ...): part of
     /// each cache key.
     job_key: u64,
+    /// The moves of the programs planned so far, kept when a rest roughing needs them.
+    prior: Vec<Vec<Move>>,
+}
+
+/// A hasher fed by a writer (a value serialised straight into it, without the text).
+struct HashWriter(std::collections::hash_map::DefaultHasher);
+
+impl std::io::Write for HashWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use std::hash::Hasher;
+        self.0.write(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// What the moves before a rest roughing are, for its cache key.
+fn moves_key(prior: &[Vec<Move>], before: &[Move]) -> u64 {
+    use std::hash::Hasher;
+    let mut w = HashWriter(Default::default());
+    for m in prior.iter().flatten().chain(before) {
+        let _ = serde_json::to_writer(&mut w, m);
+    }
+    w.0.finish()
+}
+
+/// The block left by the moves before a rest roughing (the programs before it and its own
+/// program so far), widened by its tool: see [`strategy::three_axis::RestMap`]. Its work
+/// counts against the operation's budget.
+fn rest_map(
+    job: &Job,
+    prior: &[Vec<Move>],
+    before: &[Move],
+    sb: &job::StockBox,
+    c: &Cutter,
+) -> Result<strategy::three_axis::RestMap, String> {
+    // cells an eighth of the tool's radius (between 0.02 and 0.25 mm)
+    let cell = (c.radius() / 8.0).clamp(0.02, 0.25);
+    let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
+    let mut segs: Vec<sim::Segment> = Vec::new();
+    for (p, moves) in prior.iter().map(Vec::as_slice).chain([before]).enumerate() {
+        segs.extend(sim3::segments_of3(moves, p as u16));
+    }
+    let work = sim3::work_estimate3(cell, sb.min[2], sb.max[2], &segs, &cutter_of, cell);
+    let mut hm = sim3::Heightmap3::new(sb, cell);
+    let disc = (c.radius() / cell).ceil().powi(2) * 4.0;
+    if !budget::spend((work + (hm.nx * hm.ny) as f64 * disc) as u64) {
+        return Err(format!(
+            "rest roughing: the operations before it are too much to simulate at {cell} mm cells"
+        ));
+    }
+    for seg in &segs {
+        let cut = seg.tool.and_then(cutter_of);
+        sim3::apply_segment3(&mut hm, seg, cut.as_ref(), cell);
+    }
+    Ok(strategy::three_axis::RestMap::new(&hm, c.radius()))
 }
 
 /// Operations planned before, kept between planning runs: an operation is planned again only
@@ -536,6 +594,9 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     b.r.map(f64::to_bits),
                     b.a.to_bits(),
                     b.p3.map(|p| p.map(f64::to_bits)),
+                    // a rest roughing: and the moves before it
+                    matches!(op, Operation::Rough3d(r) if r.rest)
+                        .then(|| moves_key(&ctx.prior, &b.moves)),
                 ))
                 .unwrap_or_default(),
             ))
@@ -738,6 +799,21 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     }
                     Operation::Contour(o) => t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Raster3d(o) | Operation::Rough3d(o) => {
+                        // rest roughing: only where the moves before it left material
+                        let rest = if o.rest {
+                            if !matches!(op, Operation::Rough3d(_)) {
+                                return Err(err("rest is for 3D roughing only".to_string()));
+                            }
+                            if !three {
+                                return Err(err(
+                                    "rest roughing needs a 3-axis vise setup".to_string()
+                                ));
+                            }
+                            let c = cutter.expect("set above");
+                            Some(rest_map(job, &ctx.prior, &b.moves, sb, &c).map_err(err)?)
+                        } else {
+                            None
+                        };
                         let mesh: &Mesh = if three {
                             ctx.mesh.ok_or_else(|| {
                                 Error::Invalid(format!(
@@ -752,7 +828,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         let c = cutter.expect("set above");
                         let dc = t3::DropCutter3::new(turned.as_ref().unwrap_or(mesh), c);
                         if o.faces.is_empty() {
-                            t3::raster3d(&mut b, &dc, sb, safe_r, o).map_err(err)?
+                            t3::raster3d_on(&mut b, &dc, None, rest.as_ref(), sb, safe_r, o)
+                                .map_err(err)?
                         } else {
                             let sub = face_subset(mesh, &o.faces).map_err(err)?;
                             let sub = if index != 0.0 {
@@ -777,7 +854,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                                 o.y_range = clip(o.y_range, lo[1], hi[1]);
                             }
                             let seld = t3::DropCutter3::new(&sub, c);
-                            t3::raster3d_on(&mut b, &dc, Some(&seld), sb, safe_r, &o)
+                            t3::raster3d_on(&mut b, &dc, Some(&seld), rest.as_ref(), sb, safe_r, &o)
                                 .map_err(err)?
                         }
                     }
@@ -922,13 +999,23 @@ fn plan_cached(
             0
         },
         cache,
+        prior: Vec::new(),
     };
+    // (a rest roughing works on what the programs before it left)
+    let rest = job.programs.iter().any(|p| {
+        p.operations
+            .iter()
+            .any(|o| matches!(o, Operation::Rough3d(r) if r.rest))
+    });
     let mut next_op = 0;
-    let mut tps: Vec<Toolpath> = job
-        .programs
-        .iter()
-        .map(|p| plan_program(&mut ctx, p, &mut next_op))
-        .collect::<Result<_, _>>()?;
+    let mut tps: Vec<Toolpath> = Vec::new();
+    for p in &job.programs {
+        let tp = plan_program(&mut ctx, p, &mut next_op)?;
+        if rest {
+            ctx.prior.push(tp.moves.clone());
+        }
+        tps.push(tp);
+    }
     cut_off_warnings(job, &mut tps);
     Ok(tps)
 }

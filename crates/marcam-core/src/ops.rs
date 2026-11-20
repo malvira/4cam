@@ -423,9 +423,15 @@ pub fn registry() -> Vec<OperationType> {
         OperationType {
             kind: "rough3d",
             title: "3D roughing",
-            description: "Clears the stock down to the part mesh (or an image relief) in step-down levels with parallel passes, leaving stock for the finish.",
+            description: "Clears the stock down to the part mesh (or an image relief) in step-down levels with parallel passes, leaving stock for the finish; as rest roughing, only what the operations before it left.",
             group: "roughing",
-            params: raster_params(),
+            params: {
+                let mut ps = raster_params();
+                // before the feeds
+                let at = ps.iter().position(|p| p.name == "feed").unwrap_or(ps.len());
+                ps.insert(at, p("rest", "boolean", "", "Rest roughing (vise): cut only where the operations before it in the setup left material, e.g. a smaller tool after a larger one.").opt(json!(false)));
+                ps
+            },
             tool_shapes: &["flat", "ball", "tapered_ball"],
             geometry: &["mesh"],
             machine_needs: &["xyz"],
