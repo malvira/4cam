@@ -111,7 +111,10 @@ pub fn thread_mill(
     safe: f64,
     op: &ThreadMill,
 ) -> Result<(), String> {
-    if [op.pitch, op.diameter, op.depth].iter().any(|v| v.is_nan() || *v <= 0.0) {
+    if [op.pitch, op.diameter, op.depth]
+        .iter()
+        .any(|v| v.is_nan() || *v <= 0.0)
+    {
         return Err("thread mill: the pitch, diameter and depth must be more than 0".into());
     }
     if op.points.is_empty() {
