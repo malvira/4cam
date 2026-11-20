@@ -215,6 +215,16 @@ details.menu[open] > summary { border-color: var(--accent); }
 .geom-row button { padding: 0 5px; }
 
 /* the simulation's progress ring, in a corner of the 3D view; a click cancels */
+/* the viewer's toggles: a compact row of icons in the 3D view's top-left corner */
+.view-toggles { position: absolute; top: 6px; left: 6px; z-index: 6; display: flex; gap: 2px; padding: 2px; border-radius: 6px; background: color-mix(in srgb, var(--panel) 80%, transparent); }
+.view-toggles button { display: inline-flex; align-items: center; gap: 1px; padding: 3px 4px; min-width: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--muted, #888); cursor: pointer; line-height: 0; }
+.view-toggles button svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.view-toggles button svg .fill { fill: currentColor; stroke: none; }
+.view-toggles button[aria-pressed="true"] { color: var(--fg, #ddd); background: color-mix(in srgb, var(--accent, #4a8) 22%, transparent); border-color: color-mix(in srgb, var(--accent, #4a8) 45%, transparent); }
+.view-toggles button:hover { color: var(--fg, #eee); }
+.view-toggles button:disabled { opacity: 0.35; cursor: default; }
+.view-toggles .vt-sub { font-size: 10px; line-height: 1; }
+.view-toggles #vtPlay { color: var(--fg, #ddd); }
 .sim-ring { position: absolute; left: 8px; bottom: 8px; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; z-index: 5;
   background: conic-gradient(var(--accent, #4a9eff) calc(var(--p, 0) * 360deg), rgba(127, 127, 127, 0.35) 0);
   -webkit-mask: radial-gradient(circle, transparent 6px, #000 7px); mask: radial-gradient(circle, transparent 6px, #000 7px); }

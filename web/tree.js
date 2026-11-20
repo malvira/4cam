@@ -242,7 +242,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     if (overlayKey !== key) return;
-    const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const bytes = (b64) => (typeof b64 === "string" ? Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) : b64);
     const tri = new Float32Array(bytes(regions.triangles).buffer);
     const of = new Uint16Array(bytes(regions.region_of).buffer);
     const { THREE } = v;
@@ -559,7 +559,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     // the project was replaced meanwhile (New, Open, an example)
     if (t.doc !== doc) return;
-    const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const bytes = (b64) => (typeof b64 === "string" ? Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) : b64);
     t.regions = { model, list: regions.regions, tri: new Float32Array(bytes(regions.triangles).buffer), of: new Uint16Array(bytes(regions.region_of).buffer) };
     const list = picks.pickables.filter((x) => mode.kinds.includes(x.kind));
     // a face may belong to several features: the one the operation prefers comes first

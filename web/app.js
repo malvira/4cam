@@ -2062,7 +2062,7 @@ window.__marcam.project = setupProject({
 });
 
 // ---------------------------------------------------------------- machining simulation
-window.__marcam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock, machineArg });
+window.__marcam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock, machineArg, simMeshOf: (THREE, sim, s) => simMesh(THREE, sim, s) });
 window.__marcam.updateSimResInfo = updateSimResInfo;
 window.__marcam.simLock = simLock;
 
@@ -2079,6 +2079,9 @@ window.__marcam.setView = async (name, show = {}) => {
   else v.camera.position.set(cx - span * 0.2, -span * 1.3, R * 2.2);
   v.controls.target.set(cx, 0, 0);
   v.controls.update();
+  // (layers chosen: the playback steps aside until a call without them)
+  state.viewShow = show.path === false ? show : null;
+  if (state.viewShow && v.groups.machining) v.groups.machining.visible = false;
   for (const [k, on] of Object.entries(show)) if (v.groups[k]) v.groups[k].visible = on;
   if (show.path === false) v.groups.tool.visible = false;
   v.axes.visible = show.axes ?? true;

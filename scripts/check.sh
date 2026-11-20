@@ -41,5 +41,8 @@ node web/tests/e2e.mjs
 node web/tests/stress.mjs
 # the simulation fuzz in the browser (fixed seeds; the engine-level one runs with cargo test)
 node web/tests/simfuzz.mjs
+# playback smoothness and a responsive page during background work (MARCAM_PERF_SLACK
+# loosens the frame budget on slow machines)
+node web/tests/perf.mjs --gate
 if [ -z "$MARCAM_SKIP_STEP" ]; then sh scripts/check-step.sh; else echo "STEP checks skipped (MARCAM_SKIP_STEP)"; fi
 echo "ALL CHECKS PASSED"

@@ -191,11 +191,9 @@
             <label for="simSpeed" class="small" title="Playback speed in machine time: ×1 is real time, ×1000 a thousand times faster">speed</label>
             <input id="simSpeed" type="range" min="0" max="3" step="0.05" value="1" aria-label="Playback speed, times machine time (log scale)">
             <span id="simSpeedLabel" class="small">×10</span>
-            <label class="small" title="Simulate the stock along with the playback (off: the tool and the toolpath on the part only)"><input id="simStock" type="checkbox"> stock</label>
-            <label class="small"><input id="simGhost" type="checkbox"> removed material</label>
-            <label class="small"><input id="showRapids" type="checkbox" checked> rapids</label>
-            <label class="small" title="The part (no stock: it turns under the tool)"><input id="showPart" type="checkbox" checked> part</label>
-            <button id="simClose" type="button" class="hidden">Close</button>
+            <!-- (what is shown: the toggles in the 3D view's corner; these hold their state) -->
+            <span class="hidden"><input id="simStock" type="checkbox"><input id="simGhost" type="checkbox"><input id="showRapids" type="checkbox" checked><input id="showPart" type="checkbox" checked></span>
+            <button id="simClose" type="button" title="Fold the playback away (the whole toolpath shown)" aria-label="Close the playback">&times;</button>
           </div>
           <div class="row scrub">
             <input id="simScrub" type="range" min="0" max="0" value="0" aria-label="Simulation position">

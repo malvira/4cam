@@ -54,8 +54,12 @@ export function gpuDevice() {
   return devicePromise;
 }
 
-const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-const u32 = (s) => new Uint32Array(b64(s).buffer);
+// (the worker decodes the engine's base64 into bytes)
+const b64 = (s) => (typeof s === "string" ? Uint8Array.from(atob(s), (c) => c.charCodeAt(0)) : s);
+const u32 = (s) => {
+  const b = b64(s);
+  return new Uint32Array(b.buffer, b.byteOffset, b.byteLength / 4);
+};
 
 /** A stock on the GPU for one gpuOpen result; advances segment by segment. */
 export class GpuStock {

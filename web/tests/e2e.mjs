@@ -2358,10 +2358,10 @@ try {
     await waitFor(() => js("window.__marcam.state.machining.open && !window.__marcam.state.machining.session?.path_only && !!window.__marcam.state.machining.stockMesh"), "the playback with stock", 120000);
     await waitFor(() => js(`window.__marcam.state.machining.pos === ${mid}`), "the same place with the stock", 60000).catch(() => {});
     const withStock = await js("(() => { const m = window.__marcam.state.machining; return { pos: m.pos, cut: [...m.op].some((t) => t > 0), path: !!m.pathLine, label: document.getElementById('simLabel').textContent }; })()");
-    const remembered = await js("({ speed: localStorage.getItem('marcam.playSpeed'), stock: localStorage.getItem('marcam.playStock') })");
+    const remembered = await js("({ speed: localStorage.getItem('marcam.playSpeed'), stock: JSON.parse(localStorage.getItem('marcam.view') || '{}').stock })");
     await shot("23b_playback_stock");
     check("Stock on mid-way: the stock simulated to the same place, the path still drawn; speed and stock remembered",
-      withStock.pos === mid && withStock.cut && withStock.path && !/no stock/.test(withStock.label) && remembered.speed === "3" && remembered.stock === "1",
+      withStock.pos === mid && withStock.cut && withStock.path && !/no stock/.test(withStock.label) && remembered.speed === "3" && remembered.stock === true,
       `mid ${mid}: ${JSON.stringify(withStock)}; ${JSON.stringify(remembered)}`);
     await js("document.getElementById('simClose').click(); true");
     await js("const s = document.getElementById('simSpeed'); s.value = '1'; s.dispatchEvent(new Event('input')); true");
@@ -2495,6 +2495,73 @@ try {
     check("rest roughing: a smaller tool after a larger one cuts only what was left (its time well under the full pass's); the form's switch turns it off",
       shown === true && restS > 0 && fullS > 0 && restS < 0.75 * fullS,
       `rest ${Math.round(restS)} s, full ${Math.round(fullS)} s; switch shown ${shown}`);
+  }
+
+  // 8w2. (Mar: "way too busy") the viewer's toggles: a row of icons in the 3D view's corner
+  // (Part, Stock, Toolpaths all / up to the playhead / off, Rapids, Tool, Only selected), each
+  // with a key, remembered; view only (nothing planned); calm by default (part and toolpaths,
+  // no rapids, no stock, no tool at rest, the playback folded to a play button); the selected
+  // operation's toolpath stands out
+  {
+    await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await clickGenerate();
+    await waitDone("the knob for the toggles", 120000);
+    await stopBackground();
+    // the defaults (as a person first sees them)
+    await js("localStorage.removeItem('marcam.view'); true");
+    await js("document.getElementById('simClose').click(); true");
+    await js("(() => { const m = window.__marcam.state.machining; Object.assign(m.view, { part: true, stock: false, paths: 'all', rapids: false, tool: true, only: false }); window.__marcam.machining.renderToggles(); window.__marcam.machining.toggle('part'); window.__marcam.machining.toggle('part'); return true; })()");
+    // (stopping the background simulation ended the playback too: open again, at rest)
+    await js("window.__marcam.machining.open({ auto: true }).then(() => true)");
+    await waitFor(() => js("window.__marcam.state.machining.open && !!window.__marcam.state.machining.paths"), "the still view", 60000);
+    await sleep(300);
+    const plans0 = await js("window.__marcam.calls.planAndPost || 0");
+    const look = `(() => { const m = window.__marcam.state.machining, v = window.__marcam.state.three;
+      return { cut: m.paths.cut[0].visible, drawn: m.paths.cut[0].geometry.drawRange.count, rapids: m.paths.rapid[0].visible,
+        part: v.groups.work.children.filter((c) => c.userData.shared).some((c) => c.visible), tool: v.groups.toolModel.visible,
+        turn: v.groups.work.rotation.x, controls: !document.getElementById('simControls').classList.contains('hidden'),
+        play: !document.getElementById('vtPlay').classList.contains('hidden'), segs: m.session.segments }; })()`;
+    const calm = await js(look);
+    await shot("29a_viewer_calm_knob");
+    const key = (k) => js(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', bubbles: true })); true`);
+    const seen = {};
+    await key("p"); seen.partOff = (await js(look)).part; await key("p"); seen.partOn = (await js(look)).part;
+    await key("r"); seen.rapidsOn = (await js(look)).rapids; await key("r");
+    await key("t"); seen.playhead = await js("window.__marcam.state.machining.view.paths");
+    await key("t"); seen.pathsOff = (await js(look)).cut; await key("t"); seen.pathsBack = (await js(look)).cut;
+    // the selected operation stands out; Only: the others not drawn
+    await js("document.querySelector('#tree .tree-op[data-op=\"op2\"] [data-act=\"select\"]').click(); true");
+    await sleep(300);
+    const dimmed = await js("(() => { const m = window.__marcam.state.machining; const c = m.paths.cut[0].geometry.attributes.color.array, c0 = m.pathBase.col; let d = 0; for (let k = 0; k < c.length; k += 6) if (Math.abs(c[k] - c0[k]) > 1e-3) d++; return d; })()");
+    await key("o");
+    await sleep(100);
+    const folded = await js("(() => { const m = window.__marcam.state.machining; const p = m.paths.cut[0].geometry.attributes.position.array; let f = 0; for (let k = 0; k < p.length; k += 6) if (p[k] === p[k + 3] && p[k + 1] === p[k + 4] && p[k + 2] === p[k + 5]) f++; return f; })()");
+    await shot("29b_only_selected");
+    await key("o");
+    await js("document.querySelector('#tree .tree-op[data-op=\"op2\"] [data-act=\"select\"]').click(); true");
+    // the play button: the controls open, the tool shows and the part turns
+    await js("document.getElementById('vtPlay').click(); true");
+    await sleep(1200);
+    const playing = await js(look);
+    await js("if (window.__marcam.state.machining.playing) document.getElementById('simPlay').click(); true");
+    await shot("29c_playing");
+    await js("document.getElementById('simClose').click(); true");
+    const folded2 = await js(look);
+    // the stock: the background simulation's result at rest
+    await key("s");
+    await waitFor(() => js("(window.__marcam.state.three.groups.simFinal?.children.length || 0) > 0"), "the simulated stock at rest", 240000);
+    const stockAtRest = await js("({ shown: window.__marcam.state.three.groups.simFinal.visible, part: window.__marcam.state.three.groups.work.children.filter((c) => c.userData.shared).some((c) => c.visible) })");
+    await shot("29d_stock_at_rest");
+    await key("s");
+    const saved = await js("localStorage.getItem('marcam.view')");
+    const plans = (await js("window.__marcam.calls.planAndPost || 0")) - plans0;
+    check("the viewer's toggles: calm by default (part and toolpaths only, no rapids, no tool, still, the playback folded); each toggle shows and hides; Only and the selection; the play button; the stock at rest from the background simulation; remembered; nothing planned",
+      calm.cut && calm.drawn === 2 * calm.segs && !calm.rapids && calm.part && !calm.tool && calm.turn === 0 && !calm.controls && calm.play &&
+      seen.partOff === false && seen.partOn === true && seen.rapidsOn === true && seen.playhead === "playhead" && seen.pathsOff === false && seen.pathsBack === true &&
+      dimmed > 0 && folded > 0 && playing.controls && playing.tool && !playing.play && !folded2.controls && !folded2.tool &&
+      stockAtRest.shown && !stockAtRest.part && /"paths":"all"/.test(saved) && plans === 0,
+      `${JSON.stringify(calm)} ${JSON.stringify(seen)} dimmed ${dimmed} folded ${folded} playing ${JSON.stringify(playing)} after ${JSON.stringify(folded2)} stock ${JSON.stringify(stockAtRest)} saved ${saved} plans ${plans}`);
   }
 
   // 8y. (Mar) undo and redo for every edit: Edit > Undo / Redo and Ctrl+Z / Ctrl+Shift+Z

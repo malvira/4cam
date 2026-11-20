@@ -51,6 +51,8 @@ jobs:
           MARCAM_E2E_SOFTWARE_GL: "1"
           # STEP import (SolidCraft's kernel) is checked by the step job
           MARCAM_SKIP_STEP: "1"
+          # shared runners, software GL: the frame budget four times looser
+          MARCAM_PERF_SLACK: "4"
         run: |
           set -o pipefail
           sh scripts/check.sh 2>&1 | tee check.log
