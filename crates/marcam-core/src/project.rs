@@ -112,14 +112,80 @@ pub enum StockDef {
         min: [f64; 3],
         max: [f64; 3],
     },
+    /// Square bar on the rotary axis: `side` across its flats, one flat at `angle` (0: on
+    /// top).
+    Square {
+        side: f64,
+        length: f64,
+        #[serde(default)]
+        angle: f64,
+    },
+    /// Rectangular bar on the rotary axis: `width` along Y, `height` along Z, turned by
+    /// `angle`.
+    Rect {
+        width: f64,
+        height: f64,
+        length: f64,
+        #[serde(default)]
+        angle: f64,
+    },
+    /// Hexagonal bar on the rotary axis: `across_flats` wide, one flat at `angle` (0: on
+    /// top).
+    Hex {
+        across_flats: f64,
+        length: f64,
+        #[serde(default)]
+        angle: f64,
+    },
 }
 
 impl StockDef {
     pub fn cylinder(&self) -> Stock {
         match *self {
             StockDef::Cylinder { radius, length } | StockDef::FromPrevious { radius, length } => {
-                Stock { radius, length }
+                Stock {
+                    radius,
+                    length,
+                    section: None,
+                }
             }
+            StockDef::Square {
+                side,
+                length,
+                angle,
+            } => Stock::of_section(
+                crate::job::Section::Polygon {
+                    sides: 4,
+                    across_flats: side,
+                    angle,
+                },
+                length,
+            ),
+            StockDef::Rect {
+                width,
+                height,
+                length,
+                angle,
+            } => Stock::of_section(
+                crate::job::Section::Rect {
+                    width,
+                    height,
+                    angle,
+                },
+                length,
+            ),
+            StockDef::Hex {
+                across_flats,
+                length,
+                angle,
+            } => Stock::of_section(
+                crate::job::Section::Polygon {
+                    sides: 6,
+                    across_flats,
+                    angle,
+                },
+                length,
+            ),
             // rotary fields for a block: the radius that encloses it about X
             StockDef::Box { min, max } => Stock {
                 radius: [min[1].abs(), max[1].abs()]
@@ -127,7 +193,24 @@ impl StockDef {
                     .flat_map(|y| [min[2].abs(), max[2].abs()].map(|z| y.hypot(z)))
                     .fold(0.0, f64::max),
                 length: max[0] - min[0],
+                section: None,
             },
+        }
+    }
+
+    /// Whether it is a bar on the rotary axis (any section) rather than a block in a vise.
+    pub fn is_bar(&self) -> bool {
+        !matches!(self, StockDef::Box { .. })
+    }
+}
+
+impl Stock {
+    /// A bar of `section`, its radius at the corners.
+    pub fn of_section(section: crate::job::Section, length: f64) -> Stock {
+        Stock {
+            radius: section.corner_radius(),
+            length,
+            section: Some(section),
         }
     }
 }
@@ -969,7 +1052,13 @@ pub fn simulate_project(
                     "setup {id:?}: stock from_previous, but it is the first setup"
                 ))
             }
-            (StockDef::Cylinder { radius, .. }, _) => crate::sim::RadialMap::filled(grid, *radius),
+            (
+                s @ (StockDef::Cylinder { .. }
+                | StockDef::Square { .. }
+                | StockDef::Rect { .. }
+                | StockDef::Hex { .. }),
+                _,
+            ) => crate::sim::RadialMap::of_stock(grid, &s.cylinder()),
             (StockDef::Box { .. }, _) => {
                 return Err(format!(
                     "setup {id:?}: 3-axis (box) setups are not simulated on the rotary heightmap"

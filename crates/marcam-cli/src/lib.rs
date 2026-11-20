@@ -852,7 +852,7 @@ fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {
     let res =
         simulate_job(&job, &tps, mesh.as_ref(), dx, na, GOUGE_TOL).map_err(|e| e.to_string())?;
     // replay to render the stock after each program
-    let mut stock = sim::RadialMap::filled(res.stock.grid, job.stock.radius);
+    let mut stock = sim::RadialMap::of_stock(res.stock.grid, &job.stock);
     let cutters = |t: u32| {
         job.tool(t)
             .and_then(|d| marcam::cutter_for(t, d.shape).ok())

@@ -455,7 +455,7 @@ pub mod api {
             Err(e) => return err(e),
         };
         // replay to capture the stock after each program
-        let mut stock = sim::RadialMap::filled(res.stock.grid, job.stock.radius);
+        let mut stock = sim::RadialMap::of_stock(res.stock.grid, &job.stock);
         let cutters = |t: u32| {
             job.tool(t)
                 .and_then(|d| marcam::cutter_for(t, d.shape).ok())
@@ -1016,7 +1016,7 @@ pub mod api {
             Ok(i) => i,
             Err(e) => return err(e),
         };
-        let start = sim::RadialMap::filled(grid, job.stock.radius);
+        let start = sim::RadialMap::of_stock(grid, &job.stock);
         let keys = marcam::gpu_input::rotary_keys(&start);
         let x_range = match (mesh.as_ref().and_then(|m| m.bounds()), &job.part.profile) {
             (Some((lo, hi)), _) => (lo[0], hi[0]),
@@ -1214,7 +1214,7 @@ pub mod api {
                 .and_then(|d| marcam::cutter_for(t, d.shape).ok())
         };
         let pb = sim::Playback::new(
-            sim::RadialMap::filled(grid, job.stock.radius),
+            sim::RadialMap::of_stock(grid, &job.stock),
             &tps,
             &cutters,
             (dx * 2.0).min(0.1),
@@ -1239,9 +1239,20 @@ pub mod api {
                     .unwrap_or(pb.len())
             })
             .collect();
+        // a bar that is not round: its radius at each cell's angle (the page's mirror starts
+        // from it)
+        let ring = job.stock.section.map(|_| {
+            (0..grid.na)
+                .map(|j| {
+                    job.stock
+                        .radius_at((j as f64 + 0.5) * std::f64::consts::TAU / grid.na as f64)
+                })
+                .collect::<Vec<f64>>()
+        });
         let out = json!({
             "grid": {"x0": grid.x0, "dx": grid.dx, "nx": grid.nx, "na": grid.na},
             "stock_radius": job.stock.radius,
+            "stock_ring": ring,
             "part": f32s(&res.part.center.r),
             "segments": pb.len(),
             "program_starts": first_seg_of_program,

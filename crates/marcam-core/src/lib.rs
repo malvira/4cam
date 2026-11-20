@@ -1314,7 +1314,7 @@ pub fn simulate_job(
         )));
     }
     let part = part_fn(grid);
-    let mut stock = sim::RadialMap::filled(grid, job.stock.radius);
+    let mut stock = sim::RadialMap::of_stock(grid, &job.stock);
     let cutters = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
     let intended = intended_tags(job, tps);
     let bodies = |t: u32| job.tool(t).map(collision::ToolBody::of);
@@ -1389,7 +1389,7 @@ pub fn collision_check(
                 "stock too long for the collision check".into(),
             ));
         }
-        let mut stock = sim::RadialMap::filled(grid, job.stock.radius);
+        let mut stock = sim::RadialMap::of_stock(grid, &job.stock);
         let bar = (job.stock.radius, -len, 0.0);
         for (k, tp) in tps.iter().enumerate() {
             // the last program's stock is not needed after its last move that can touch

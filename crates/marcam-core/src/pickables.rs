@@ -952,6 +952,8 @@ pub fn stock_top(p: &crate::project::Project, setup: &str) -> Option<f64> {
     Some(match s.stock {
         StockDef::Box { max, .. } => max[2],
         StockDef::Cylinder { radius, .. } | StockDef::FromPrevious { radius, .. } => radius,
+        // (a square, hex or rectangular bar: its corners)
+        ref bar => bar.cylinder().radius,
     })
 }
 

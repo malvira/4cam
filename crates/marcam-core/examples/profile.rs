@@ -140,12 +140,8 @@ fn profile(name: &str, dir: &str, file: &str, machine: &str) {
             &format!("{n} segments"),
         );
     } else if let Ok(g) = marcam::sim_grid(&job, mesh.as_ref(), r.dx, r.na) {
-        let mut pb = sim::Playback::new(
-            sim::RadialMap::filled(g, job.stock.radius),
-            &tps,
-            &cutter,
-            0.1,
-        );
+        let mut pb =
+            sim::Playback::new(sim::RadialMap::of_stock(g, &job.stock), &tps, &cutter, 0.1);
         let n = pb.len();
         pb.seek(n);
         row(

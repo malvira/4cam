@@ -64,6 +64,24 @@ pub struct RadialMap {
 }
 
 impl RadialMap {
+    /// The bar as it comes: each cell at the stock's radius at its angle (a square, hex or
+    /// rectangular bar is not round).
+    pub fn of_stock(grid: Grid, stock: &crate::job::Stock) -> RadialMap {
+        let mut m = RadialMap::filled(grid, stock.radius);
+        if stock.section.is_some() {
+            let ring: Vec<f32> = (0..grid.na)
+                .map(|j| {
+                    let phi = (j as f64 + 0.5) * std::f64::consts::TAU / grid.na as f64;
+                    stock.radius_at(phi) as f32
+                })
+                .collect();
+            for i in 0..grid.nx {
+                m.r[i * grid.na..(i + 1) * grid.na].copy_from_slice(&ring);
+            }
+        }
+        m
+    }
+
     pub fn filled(grid: Grid, r: f64) -> RadialMap {
         RadialMap {
             grid,

@@ -57,11 +57,98 @@ pub struct StockBox {
     pub max: [f64; 3],
 }
 
-/// Round bar stock, held on the rotary axis.
+/// Bar stock, held on the rotary axis: round, or (with `section`) square, rectangular or
+/// hexagonal, its corners at `radius` (what clearances and roughing start from).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Stock {
     pub radius: f64,
     pub length: f64,
+    /// Not round: the bar's cross-section about the axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<Section>,
+}
+
+/// A bar's cross-section about the rotary axis. Angles are in degrees about +X from +Y
+/// towards +Z (the simulation's angle), the axis at the section's centre.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Section {
+    /// A regular polygon (4: square, 6: hexagon) `across_flats` wide, one flat facing
+    /// `angle` (0: a flat on top, facing +Z).
+    Polygon {
+        sides: u32,
+        across_flats: f64,
+        #[serde(default)]
+        angle: f64,
+    },
+    /// A rectangle `width` along Y by `height` along Z, turned by `angle`.
+    Rect {
+        width: f64,
+        height: f64,
+        #[serde(default)]
+        angle: f64,
+    },
+}
+
+impl Section {
+    /// Distance from the axis to the section's edge at angle `phi` (radians, from +Y towards
+    /// +Z).
+    pub fn radius_at(&self, phi: f64) -> f64 {
+        use std::f64::consts::{FRAC_PI_2, TAU};
+        match *self {
+            Section::Polygon {
+                sides,
+                across_flats,
+                angle,
+            } => {
+                let n = sides.max(3) as f64;
+                let step = TAU / n;
+                // from the first flat's normal (up, turned by `angle`)
+                let d = (phi - FRAC_PI_2 - angle.to_radians()).rem_euclid(step);
+                let d = if d > step / 2.0 { d - step } else { d };
+                across_flats / 2.0 / d.cos()
+            }
+            Section::Rect {
+                width,
+                height,
+                angle,
+            } => {
+                let p = phi - angle.to_radians();
+                let (c, s) = (p.cos().abs(), p.sin().abs());
+                let a = if c > 1e-12 {
+                    width / 2.0 / c
+                } else {
+                    f64::INFINITY
+                };
+                let b = if s > 1e-12 {
+                    height / 2.0 / s
+                } else {
+                    f64::INFINITY
+                };
+                a.min(b)
+            }
+        }
+    }
+
+    /// The radius that encloses the section (its corners).
+    pub fn corner_radius(&self) -> f64 {
+        match *self {
+            Section::Polygon {
+                sides,
+                across_flats,
+                ..
+            } => across_flats / 2.0 / (std::f64::consts::PI / sides.max(3) as f64).cos(),
+            Section::Rect { width, height, .. } => (width / 2.0).hypot(height / 2.0),
+        }
+    }
+}
+
+impl Stock {
+    /// Distance from the axis to the bar's surface at angle `phi` (radians).
+    pub fn radius_at(&self, phi: f64) -> f64 {
+        self.section
+            .map_or(self.radius, |s| s.radius_at(phi).min(self.radius))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
