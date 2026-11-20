@@ -371,6 +371,8 @@ fn path_pocket(
     let top = op.top.unwrap_or(stock.max[2]);
     b.comment("--- pocket (outline) ---");
     let mut at = [f64::NAN; 2];
+    // loops too short to ramp along (round less than the tool's diameter): plunged
+    let mut plunged = 0usize;
     for z in levels(top, top - op.depth, op.step_down) {
         if crate::budget::over() {
             break;
@@ -391,7 +393,13 @@ fn path_pocket(
             // round it again if one lap is not long enough, then a whole lap at depth from
             // where it got there; or straight down at the plunge feed
             let mut from = (s, start);
-            if op.ramp > 0.0 {
+            let round: f64 = (0..n)
+                .map(|i| (lp[i + 1][0] - lp[i][0]).hypot(lp[i + 1][1] - lp[i][1]))
+                .sum();
+            if op.ramp > 0.0 && round < d {
+                plunged += 1;
+                enter(b, safe, start[0], start[1], z_start, z, op.plunge_feed);
+            } else if op.ramp > 0.0 {
                 from = ramp_along(b, safe, lp, s, z_start, z, op.ramp, op.feed, op.plunge_feed);
             } else {
                 enter(b, safe, start[0], start[1], z_start, z, op.plunge_feed);
@@ -405,6 +413,11 @@ fn path_pocket(
             leave(b, safe);
             at = start;
         }
+    }
+    if plunged > 0 {
+        b.warnings.push(format!(
+            "pocket: {plunged} loop(s) too short to ramp along (round less than the {d} mm tool): plunged at the plunge feed"
+        ));
     }
     Ok(())
 }

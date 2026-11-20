@@ -219,6 +219,8 @@ struct CachedOp {
     moves: Vec<Move>,
     /// The builder after it.
     exit: (Option<f64>, Option<f64>, f64, Option<[f64; 3]>),
+    /// What it warned about.
+    warnings: Vec<String>,
 }
 
 impl PlanCache {
@@ -610,6 +612,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 }
                 b.moves.extend(moves);
                 (b.x, b.r, b.a, b.p3) = hit.exit;
+                b.warnings.extend(hit.warnings.iter().cloned());
                 *next_op += 1;
                 if current != Some(number) {
                     current = Some(number);
@@ -620,6 +623,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             cache.misses += 1;
         }
         let cache_from = b.moves.len();
+        let warn_from = b.warnings.len();
         b.operation(*next_op, op_name(op));
         // boring on a vise (not indexed): the post writes its circles as arcs
         if let Operation::Bore(o) = op {
@@ -911,6 +915,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 CachedOp {
                     moves: b.moves[cache_from..].to_vec(),
                     exit: (b.x, b.r, b.a, b.p3),
+                    warnings: b.warnings[warn_from..].to_vec(),
                 },
             );
         }
@@ -919,7 +924,13 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
         name: prog.name.clone(),
         title: prog.title.clone(),
         tool: first_tool,
-        notes: prog.notes.clone(),
+        // (and what the operations warned about)
+        notes: prog
+            .notes
+            .iter()
+            .cloned()
+            .chain(b.warnings.iter().map(|w| format!("(Warning: {w})")))
+            .collect(),
         reset_a: prog.reset_a,
         safe_r,
         moves: b.moves,

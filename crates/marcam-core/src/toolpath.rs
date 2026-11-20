@@ -152,6 +152,8 @@ pub struct Builder {
     /// tan(ramp angle) of the operation being planned: gentler descents run at the cutting
     /// feed (0: every descent keeps to the plunge feed).
     pub ramp_tan: f64,
+    /// What the operation being planned warns about (the program's notes get them).
+    pub warnings: Vec<String>,
 }
 
 impl Default for Builder {
@@ -169,6 +171,7 @@ impl Builder {
             a: 0.0,
             p3: None,
             ramp_tan: 0.0,
+            warnings: Vec::new(),
         }
     }
 

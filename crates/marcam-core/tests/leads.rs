@@ -384,3 +384,44 @@ fn a_rotary_finish_comes_onto_the_surface_turning() {
         "{e0:?} -> {e1:?}"
     );
 }
+
+#[test]
+fn a_loop_too_short_to_ramp_along_is_plunged_with_a_warning() {
+    let (mut job, dir) = plate();
+    for p in &mut job.programs {
+        for o in &mut p.operations {
+            if let Operation::Pocket(pk) = o {
+                if pk.paths.is_empty() && pk.regions.is_empty() {
+                    // a 3.6 mm square for the 3.175 mm tool: one loop, 1.7 mm round
+                    let [x0, y0, _, _] = pk.rect;
+                    pk.paths = vec![vec![
+                        [x0, y0],
+                        [x0 + 3.6, y0],
+                        [x0 + 3.6, y0 + 3.6],
+                        [x0, y0 + 3.6],
+                    ]];
+                    pk.ramp = 3.0;
+                }
+            }
+        }
+    }
+    let tps = plan(&job, &dir);
+    let (_, vertical) = descents(&tps, "pocket", -0.5 - 1e-6);
+    assert!(vertical > 0, "plunged");
+    let notes: Vec<&String> = tps.iter().flat_map(|t| &t.notes).collect();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("(Warning: pocket:") && n.contains("too short to ramp along")),
+        "{notes:?}"
+    );
+    // planned again from the cache: still warned
+    let mut cache = marcam::PlanCache::new();
+    let mesh = load_mesh(&job, &dir).unwrap();
+    let _ = marcam::plan_with_mesh_cached(&job, mesh.as_ref(), &mut cache).unwrap();
+    let again = marcam::plan_with_mesh_cached(&job, mesh.as_ref(), &mut cache).unwrap();
+    assert!(again
+        .iter()
+        .flat_map(|t| &t.notes)
+        .any(|n| n.contains("too short to ramp along")));
+}
