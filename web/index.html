@@ -99,11 +99,13 @@
         <label>Tip Ø (tapered) <input id="tfTip" type="number" step="any"></label>
         <label>Taper °/side <input id="tfTaper" type="number" step="any"></label>
         <label>Flute length <input id="tfFlute" type="number" step="any"></label>
+        <label>Flutes <input id="tfFlutes" type="number" step="1" min="1" placeholder="2"></label>
         <label>Number <input id="tfNumber" type="number" step="1"></label>
         <fieldset id="tfCutting" class="tf-cutting"><legend>Cutting data</legend>
           <div class="small muted">Per stock material and operation type. A new operation takes the row that fits best: its type in the setup's material, then any type in that material, then its type in any material; else computed values. Blank: not given.</div>
           <div class="tablewrap cut-wrap"><table id="tfCutTable" class="tools small cut-table"></table></div>
           <button id="tfCutAdd" type="button">Add a row</button>
+          <div id="tfCalcNotes" class="small muted" aria-live="polite"></div>
           <datalist id="tfMaterials"></datalist>
         </fieldset>
         <div class="row"><button id="tfSave" type="submit" class="primary">Save tool</button>

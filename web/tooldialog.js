@@ -16,7 +16,9 @@ function libraryTools(state, userLibraries) {
   return out;
 }
 
-export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries }) {
+import { calcFeeds, feedsSummary } from "./feeds.js";
+
+export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries, engine, machineArg }) {
   // ------------------------------------------------------------ the library browser
   const dlg = document.createElement("dialog");
   dlg.id = "toolPick";
@@ -106,6 +108,7 @@ export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries })
     if (b.classList.contains("tn-cut")) num.querySelector(`.tn-cutrow[data-i="${b.dataset.i}"]`)?.classList.toggle("hidden");
     if (b.classList.contains("pc-add")) num.querySelector(`.pc-table[data-i="${b.dataset.i}"]`).insertAdjacentHTML("beforeend", cutRow({}));
     if (b.classList.contains("pc-del")) b.closest("tr").remove();
+    if (b.classList.contains("pc-calc")) calcRow(b.closest("tr"));
   });
 
   // ---- a library tool's cutting data for this project only (the project's `cutting`, picked
@@ -118,6 +121,30 @@ export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries })
     ["stepover", "stepover"],
     ["ramp_angle", "ramp °"],
   ];
+  /** A row's speeds, feeds and depths from the calculator, for the library tool of its table. */
+  async function calcRow(tr) {
+    const i = +tr.closest(".pc-table").dataset.i;
+    const entry = readJob().tools?.[i];
+    const lib = [...(state.registry?.libraries || []), ...(userLibraries() || [])].find((l) => l.id === entry?.library);
+    const lt = lib?.tools?.find((x) => x.id === entry?.tool);
+    const out = num.querySelector(`.pc-notes[data-i="${i}"]`);
+    try {
+      if (!lt) throw new Error("the tool is not in its library");
+      const m = machineArg?.();
+      const f = await calcFeeds(engine, {
+        material: tr.querySelector(".pc-material").value.trim(),
+        tool: lt.shape,
+        flutes: lt.flutes,
+        flute_length: lt.flute_length,
+        op: tr.querySelector(".pc-op").value || undefined,
+        machine: typeof m === "string" || m?.id ? m : null,
+      });
+      for (const [k] of CUT) tr.querySelector(`.pc-${k}`).value = f.preset[k] ?? "";
+      if (out) out.textContent = feedsSummary(f);
+    } catch (e) {
+      if (out) out.textContent = e.message;
+    }
+  }
   function libraryRows(t) {
     const lib = [...(state.registry?.libraries || []), ...(userLibraries() || [])].find((l) => l.id === t.library);
     return lib?.tools?.find((x) => x.id === t.tool)?.presets || [];
@@ -128,7 +155,7 @@ export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries })
     return `<tr class="pc-row"><td><input class="pc-material" list="sdMaterials" placeholder="any material" value="${esc(p.material)}" aria-label="Material"></td>
       <td><select class="pc-op" aria-label="Operation type"><option value="">any operation</option>${types.map((ty) => `<option value="${ty.kind}" ${p.op === ty.kind ? "selected" : ""}>${esc(ty.title)}</option>`).join("")}</select></td>
       ${CUT.map(([k, l]) => `<td><input class="pc-${k}" type="number" step="any" min="0" value="${val(k)}" aria-label="${l}" size="5"></td>`).join("")}
-      <td><button type="button" class="pc-del" aria-label="Remove this row">✕</button></td></tr>`;
+      <td class="nowrap"><button type="button" class="pc-calc" title="Calculate: speeds, feeds and depths for this material and operation, within the machine's limits">Calc</button> <button type="button" class="pc-del" aria-label="Remove this row">✕</button></td></tr>`;
   }
   function readRows(box) {
     const out = [];
@@ -163,7 +190,7 @@ export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries })
         <td>${t.library ? `<button type="button" class="tn-cut" data-i="${i}" title="This project's own cutting data for the tool (before the library's)">Cutting data${t.cutting?.length ? ` (${t.cutting.length})` : ""}</button>` : ""}</td></tr>
         ${t.library ? `<tr class="tn-cutrow hidden" data-i="${i}"><td colspan="4"><div class="small muted">For this project, picked before the library's${libRowsText(t) ? ` (the library's: ${esc(libRowsText(t))})` : ""}. Blank: not given.</div>
           <div class="tablewrap cut-wrap"><table class="tools small cut-table pc-table" data-i="${i}"><tr><th>Material</th><th>Operation</th>${CUT.map(([, l]) => `<th>${l}</th>`).join("")}<th></th></tr>${(t.cutting || []).map(cutRow).join("")}</table></div>
-          <button type="button" class="pc-add" data-i="${i}">Add a row</button></td></tr>` : ""}`).join("")}
+          <button type="button" class="pc-add" data-i="${i}">Add a row</button><div class="small muted pc-notes" data-i="${i}" aria-live="polite"></div></td></tr>` : ""}`).join("")}
       </tbody></table>
       <div id="tnError" class="error small hidden"></div>
       <div class="row"><button type="button" id="tnApply" class="primary">Apply</button> <button value="cancel" type="submit">Cancel</button></div></form>`;

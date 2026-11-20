@@ -10,6 +10,7 @@ pub mod collision;
 pub mod dropcutter;
 pub mod engrave;
 pub mod estimate;
+pub mod feeds;
 pub mod geom;
 pub mod geometry;
 pub mod gpu_input;

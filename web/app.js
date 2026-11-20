@@ -8,6 +8,7 @@ import { setupToolDialogs } from "./tooldialog.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
 import { jawGrip, lyingBar, setupProject } from "./project.js";
+import { calcFeeds, feedsSummary } from "./feeds.js";
 import { color, colorNum, colorRgb, COLOR_DEFAULTS, COLOR_LABELS, onColorsChange, resetColors, setColor } from "./colors.js";
 
 // Settings saved before the rename (4cam -> marcam) carry over once: "4cam.x" -> "marcam.x".
@@ -1914,7 +1915,7 @@ function cutRowHtml(p = {}) {
   return `<tr class="cut-row"><td><input class="cut-material" list="tfMaterials" placeholder="any material" aria-label="Material" value="${esc(p.material)}"></td>
     <td><select class="cut-op" aria-label="Operation type"><option value="">any operation</option>${ops}</select></td>
     ${CUT_FIELDS.map(([k, , help]) => `<td><input class="cut-${k}" type="number" step="any" min="0" title="${help}" aria-label="${help}" value="${val(k)}"></td>`).join("")}
-    <td><button type="button" class="cut-del" aria-label="Remove this row">✕</button></td></tr>`;
+    <td class="nowrap"><button type="button" class="cut-calc" title="Calculate: speeds, feeds and depths for this material and operation (chip load, surface speed, chip thinning), within the machine's limits">Calc</button> <button type="button" class="cut-del" aria-label="Remove this row">✕</button></td></tr>`;
 }
 
 function renderCutting(presets) {
@@ -1956,6 +1957,8 @@ function openForm(i) {
   $("tfAngle").value = t.shape.angle ?? "";
   $("tfCorner").value = t.shape.corner_radius ?? "";
   $("tfFlute").value = t.flute_length ?? "";
+  $("tfFlutes").value = t.flutes ?? "";
+  $("tfCalcNotes").textContent = "";
   $("tfNumber").value = t.number ?? "";
   renderCutting(t.presets || []);
   // (the operation names once, on the first open)
@@ -1989,6 +1992,9 @@ function saveForm(ev) {
   const number = num("tfNumber");
   if (flute) tool.flute_length = flute;
   else delete tool.flute_length;
+  const flutes = num("tfFlutes");
+  if (flutes >= 1) tool.flutes = Math.round(flutes);
+  else delete tool.flutes;
   if (number) tool.number = number;
   else delete tool.number;
   const presets = readCutting();
@@ -2057,7 +2063,29 @@ $("toolTable").addEventListener("change", (ev) => {
 });
 $("addTool").addEventListener("click", () => openForm(-1));
 $("tfCutAdd").addEventListener("click", () => $("tfCutTable").insertAdjacentHTML("beforeend", cutRowHtml({})));
-$("tfCutTable").addEventListener("click", (ev) => ev.target.closest(".cut-del")?.closest("tr").remove());
+$("tfCutTable").addEventListener("click", async (ev) => {
+  ev.target.closest(".cut-del")?.closest("tr").remove();
+  const calc = ev.target.closest(".cut-calc");
+  if (!calc) return;
+  // the row's material and operation, the tool being edited, the machine chosen
+  const tr = calc.closest("tr");
+  const num = (id) => ($(id).value === "" ? undefined : +$(id).value);
+  const shape = { kind: $("tfKind").value, diameter: num("tfDiameter"), angle: num("tfAngle"), tip_diameter: num("tfTip") };
+  try {
+    const f = await calcFeeds(engine, {
+      material: tr.querySelector(".cut-material").value.trim(),
+      tool: shape,
+      flutes: num("tfFlutes"),
+      flute_length: num("tfFlute"),
+      op: tr.querySelector(".cut-op").value || undefined,
+      machine: typeof machineArg() === "string" ? machineArg() : machineArg()?.id ? machineArg() : null,
+    });
+    for (const [k] of CUT_FIELDS) tr.querySelector(`.cut-${k}`).value = f.preset[k] ?? "";
+    $("tfCalcNotes").textContent = feedsSummary(f);
+  } catch (e) {
+    $("tfCalcNotes").textContent = e.message;
+  }
+});
 $("toolForm").addEventListener("submit", saveForm);
 $("tfCancel").addEventListener("click", () => $("toolForm").classList.add("hidden"));
 $("exportLibrary").addEventListener("click", () => {
@@ -2238,7 +2266,7 @@ document.addEventListener("click", (ev) => {
 
 // ---------------------------------------------------------------- tools from the libraries
 window.__marcam.tools = setupToolDialogs({
-  $, state, readJob,
+  $, state, readJob, engine, machineArg,
   writeJob: (doc) => {
     writeJob(doc);
     renderTools();

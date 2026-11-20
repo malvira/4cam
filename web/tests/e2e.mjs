@@ -2141,6 +2141,38 @@ try {
       fresh.pocket === 450 && fresh.depth === 0.4 && fresh.face === 500 && shown === "aluminium", `${JSON.stringify(fresh)} ${shown}`);
   }
 
+  // 8s1. the feeds and speeds calculator: a cutting-data row calculated in the tool library's
+  // form (within the Carvera's spindle range), an operation's feeds from its tool, stepover
+  // and depth in the setup's material (aluminium, set above), faster for a thin adaptive cut
+  {
+    const ti = await js("JSON.parse(localStorage.getItem('marcam.libraries')).find((l) => l.id === 'my-tools').tools.findIndex((t) => t.id === 'spiral-o-metal-3.175x12')");
+    await js(`document.getElementById('libraryPanel').open = true; document.querySelector('#toolTable button[data-edit="${ti}"]').click(); true`);
+    await waitFor(() => js("document.querySelectorAll('#tfCutTable .cut-op option').length > 5"), "the tool form", 60000);
+    await js(`document.getElementById('tfCutAdd').click(); const r = [...document.querySelectorAll('#tfCutTable tr.cut-row')].pop();
+      r.querySelector('.cut-material').value = 'hardwood'; r.querySelector('.cut-op').value = 'contour'; r.querySelector('.cut-calc').click(); true`);
+    await waitFor(() => js("[...document.querySelectorAll('#tfCutTable tr.cut-row')].pop().querySelector('.cut-feed').value !== ''"), "the calculated row", 30000);
+    const row = await js("(() => { const r = [...document.querySelectorAll('#tfCutTable tr.cut-row')].pop(); const v = (k) => +r.querySelector('.cut-' + k).value; return { rpm: v('rpm'), feed: v('feed'), plunge: v('plunge'), depth: v('stepdown'), notes: document.getElementById('tfCalcNotes').textContent }; })()");
+    await js("document.getElementById('tfCancel').click(); true");
+    check("Calc in the tool library's form fills a cutting-data row: speed within the spindle's range, feed from the chip load, a slot's depth",
+      row.rpm > 0 && row.rpm <= 15000 && row.feed > 500 && row.feed <= 3000 && row.plunge > 0 && row.plunge < row.feed && Math.abs(row.depth - 3.18) < 0.02 && /rpm/.test(row.notes),
+      JSON.stringify(row));
+    // the plate's pocket op2, in aluminium: its feeds, then adaptive at a 10% stepover
+    await js(`document.querySelector('#tree .tree-op[data-op="op2"] [data-act="select"]').click(); true`);
+    await waitFor(() => js("!!document.getElementById('opCalcFeeds')"), "the pocket's form", 60000);
+    const feedOf = async () => {
+      await js("document.getElementById('opFeedsNotes').textContent = ''; document.getElementById('opCalcFeeds').click(); true");
+      await waitFor(() => js("document.getElementById('opFeedsNotes').textContent !== ''"), "the calculated feeds", 30000);
+      return js("({ feed: +document.getElementById('opForm').elements.feed.value, plunge: +document.getElementById('opForm').elements.plunge_feed.value, notes: document.getElementById('opFeedsNotes').textContent })");
+    };
+    const side = await feedOf();
+    await js("const f = document.getElementById('opForm'); f.elements.adaptive.checked = true; f.elements.stepover.value = '0.1'; true");
+    const thin = await feedOf();
+    check("Calculate feeds in an operation's form: from its tool, stepover and depth in the setup's material at the setup's speed; a thin adaptive cut feeds faster (chip thinning)",
+      side.feed > 0 && side.plunge > 0 && side.plunge < side.feed && thin.feed > 1.3 * side.feed && /chip thinning/.test(thin.notes),
+      `${JSON.stringify(side)} -> ${JSON.stringify(thin)}`);
+    await js("document.getElementById('opForm').reset?.(); true");
+  }
+
   // 8s2. (Mar) parting: a new operation type, placed by a click on the part (snapped to a
   // band's end when near it), typed or defaulted to the part's back; it plans with a time
   {

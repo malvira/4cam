@@ -7,6 +7,7 @@ const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 import { describeStock, stockRadius } from "./project.js";
+import { calcFeeds, feedsSummary } from "./feeds.js";
 
 export function setupTree({ engine, $, state, readJob, writeJob, showError, onChange, getThree, machineArg }) {
   // gen: bumped when the project is replaced, so editor work still awaiting the engine then
@@ -73,10 +74,60 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   /** A project tool as it is: inline, or looked up in its library (built-in or the
    *  person's): { number, kind, diameter, name }. */
   function toolInfo(x) {
-    if (!x.library) return { number: x.number, kind: x.kind, diameter: x.diameter ?? x.tip_diameter, name: x.description };
+    if (!x.library) return { number: x.number, kind: x.kind, diameter: x.diameter ?? x.tip_diameter, name: x.description, shape: x, flutes: x.flutes, flute_length: x.flute_length };
     const libs = [...(state.registry?.libraries || []), ...(window.__marcam.planArgs?.().libraries || [])];
     const t = libs.find((l) => l.id === x.library)?.tools.find((y) => y.id === x.tool);
-    return { number: x.number, kind: t?.shape?.kind, diameter: t?.shape?.diameter ?? t?.shape?.tip_diameter, name: t?.name || x.tool };
+    return { number: x.number, kind: t?.shape?.kind, diameter: t?.shape?.diameter ?? t?.shape?.tip_diameter, name: t?.name || x.tool, shape: t?.shape, flutes: t?.flutes, flute_length: t?.flute_length };
+  }
+  /** The operation form's feeds from the calculator: its tool, stepover and depth per pass,
+   *  in the setup's material at the setup's spindle speed. The fields are set, not applied. */
+  async function calcOpFeeds() {
+    const f = $("opForm");
+    const out = $("opFeedsNotes");
+    const op = opById(t.selected);
+    const s = setup();
+    if (!f || !op || !s) return;
+    const ty = typeOf(op.type);
+    const val = (k) => (f.elements[k] && f.elements[k].value !== "" ? +f.elements[k].value : undefined);
+    const n = val("tool") ?? op.tool;
+    const x = (t.doc?.tools || []).find((y) => y.number === n);
+    try {
+      if (!x) throw new Error(`T${n} is not in the project`);
+      const info = toolInfo(x);
+      if (!info.shape) throw new Error(`T${n} is not in its library`);
+      const d = info.diameter || 0;
+      // the stepover in mm (a fraction of the tool where the operation takes one)
+      const so = ["stepover", "stepover_mm", "step_x", "rough_step"].map((k) => [k, val(k)]).find(([, v]) => v > 0);
+      const unit = so && ty.params.find((p) => p.name === so[0])?.unit;
+      const stepover = so ? (String(unit || "").startsWith("mm") ? so[1] : so[1] * d) : undefined;
+      const stepdown = val("step_down") ?? val("rough_depth") ?? val("depth_per_rev");
+      const adaptive = !!f.elements.adaptive?.checked || f.elements.pattern?.value === "adaptive";
+      const m = machineArg?.();
+      const r = await calcFeeds(engine, {
+        material: s.material || "",
+        tool: info.shape,
+        flutes: info.flutes,
+        flute_length: info.flute_length,
+        op: op.type,
+        adaptive,
+        stepover,
+        stepdown,
+        rpm: s.spindle_rpm || undefined,
+        machine: typeof m === "string" || m?.id ? m : null,
+      });
+      const set = (k, v) => {
+        if (!f.elements[k]) return;
+        f.elements[k].value = v;
+        f.elements[k].dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      set("feed", op.type === "drill" ? r.plunge : r.feed);
+      set("rough_feed", r.feed);
+      set("finish_feed", Math.round(0.85 * r.feed));
+      set("plunge_feed", r.plunge);
+      if (out) out.textContent = feedsSummary(r);
+    } catch (e) {
+      if (out) out.textContent = e.message;
+    }
   }
   /** A project tool: "T3 · Spiral O Metal 3.175 (flat 3.175)", "— · ..." without a T number. */
   function toolLabel(x) {
@@ -435,7 +486,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     // face and axial selections bound rotary operations (X/A) and the 3D raster
     if (mode?.legacy) html += `<label>axial range (mm)<input name="__axial" value="${ax ? ax.x.join(", ") : ""}" placeholder="all"></label>`;
     const pending = (t.draft && t.draft.op.id === op.id) || (t.retype && t.retype.op.id === op.id);
-    html += `<div id="opErrors" class="error small hidden"></div><div class="row"><button type="submit" class="primary">Apply</button>${pending ? ' <button type="button" id="cancelDraft">Cancel</button>' : ""}</div></form>`;
+    const feedy = ty.params.some((p) => ["feed", "rough_feed", "finish_feed", "plunge_feed"].includes(p.name));
+    html += `<div id="opErrors" class="error small hidden"></div>${feedy ? '<div id="opFeedsNotes" class="small muted" aria-live="polite"></div>' : ""}<div class="row"><button type="submit" class="primary">Apply</button>${pending ? ' <button type="button" id="cancelDraft">Cancel</button>' : ""}${feedy ? ' <button type="button" id="opCalcFeeds" title="Calculate the feeds for this tool, its stepover and depth in the setup\'s material at the setup\'s spindle speed (chip load, chip thinning), within the machine\'s cap">Calculate feeds</button>' : ""}</div></form>`;
     ed.innerHTML = html;
     showUses(op);
   }
@@ -893,6 +945,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.id === "treeReplace") {
       $("replaceModelFile").click();
+      return;
+    }
+    if (el.id === "opCalcFeeds") {
+      await calcOpFeeds();
       return;
     }
     if (el.id === "cancelDraft") {

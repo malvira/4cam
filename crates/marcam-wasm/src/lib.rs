@@ -1550,6 +1550,43 @@ pub mod api {
 
     /// Defaults for a new operation: `opts` = {type, setup?, tool?, geometry?, machine?,
     /// libraries?}. Every parameter comes back filled.
+    /// Feeds and speeds ([`marcam::feeds`]): opts are a [`marcam::feeds::FeedsInput`] and
+    /// `machine` (an id or a profile) for its spindle range, power and feed cap. Returns
+    /// the values with `preset`, the row they make for the material and operation.
+    pub fn feeds_calc(opts: &str) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let machine = match &o["machine"] {
+            Value::String(id) => profiles::builtin_machine(id),
+            Value::Object(_) => serde_json::from_value(o["machine"].clone()).ok(),
+            _ => None,
+        };
+        let mut input: marcam::feeds::FeedsInput = match serde_json::from_value(o.clone()) {
+            Ok(i) => i,
+            Err(e) => return err(e),
+        };
+        if let Some(m) = &machine {
+            if let Some(sp) = m.spindle {
+                input.min_rpm = sp.min_rpm;
+                input.max_rpm = sp.max_rpm;
+                input.power_w = sp.power_w.unwrap_or(0.0);
+            }
+            if let Some(f) = m.max_feed {
+                // (new operations' feeds stay within three quarters of the cap)
+                input.feed_cap = 0.75 * f;
+            }
+        }
+        match marcam::feeds::calculate(&input) {
+            Ok(f) => {
+                let preset = marcam::feeds::preset(&f, &input.material, input.op.as_deref());
+                let mut v = serde_json::to_value(&f).unwrap_or(Value::Null);
+                v["preset"] = serde_json::to_value(preset).unwrap_or(Value::Null);
+                v
+            }
+            Err(e) => err(e),
+        }
+    }
+
     pub fn op_defaults(doc: &str, opts: &str, mesh: &[u8]) -> Value {
         let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
             .unwrap_or(Value::Null);
@@ -1723,6 +1760,7 @@ pub mod api {
             "wizard_knurl" => wizard_knurl(&d(a), &s(b), c),
             "body_project" => body_project(&s(a), b),
             "op_defaults" => op_defaults(&d(a), &s(b), c),
+            "feeds_calc" => feeds_calc(&s(a)),
             "set_material" => set_material(&d(a), &s(b)),
             "pickables" => pickables(&d(a), &s(b), c),
             "apply_picks" => apply_picks(&d(a), &s(b), c),
