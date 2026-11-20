@@ -29,14 +29,14 @@ pub fn chamfer(
     safe: f64,
     op: &Chamfer,
 ) -> Result<(), String> {
-    if !(op.width > 0.0) {
+    if op.width.is_nan() || op.width <= 0.0 {
         return Err("chamfer: the width must be more than 0".into());
     }
     if op.paths.is_empty() && op.holes.is_empty() {
         return Err("chamfer: give the outlines (paths) or the holes to chamfer".into());
     }
     let t = half_angle.dtan();
-    if !(t > 1e-3 && t < 1e3) {
+    if t.is_nan() || t <= 1e-3 || t >= 1e3 {
         return Err("chamfer: the V-bit's angle must be between 0 and 180 degrees".into());
     }
     let top = op.top.unwrap_or(stock.max[2]);
@@ -111,7 +111,7 @@ pub fn thread_mill(
     safe: f64,
     op: &ThreadMill,
 ) -> Result<(), String> {
-    if !(op.pitch > 0.0 && op.diameter > 0.0 && op.depth > 0.0) {
+    if [op.pitch, op.diameter, op.depth].iter().any(|v| v.is_nan() || *v <= 0.0) {
         return Err("thread mill: the pitch, diameter and depth must be more than 0".into());
     }
     if op.points.is_empty() {
@@ -162,7 +162,11 @@ pub fn thread_mill(
     // the thread's length, and half a pitch past each end
     let (z_lo, z_hi) = (top - op.depth - 0.5 * op.pitch, top + 0.5 * op.pitch);
     let turns = ((z_hi - z_lo) / op.pitch).ceil().max(1.0);
-    let seg = 36usize;
+    // steps fine enough that each straight move is within 2 microns of the circle (the post
+    // writes the helix as G2/G3 within its tolerance: see the planner)
+    let r_max = radii.iter().cloned().fold(0.0, f64::max);
+    let step = 2.0 * (1.0 - 0.002 / r_max.max(0.01)).max(-1.0).dacos();
+    let seg = ((tau() / step).ceil() as usize).max(36).div_ceil(2) * 2;
     let sign = if ccw { 1.0 } else { -1.0 };
     b.comment("--- thread milling ---");
     for &[cx, cy] in &op.points {

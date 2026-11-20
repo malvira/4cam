@@ -136,9 +136,16 @@ fn an_m6_thread_in_a_hole() {
     // counter-clockwise going up: right hand
     let turn = (a[0] - 30.0) * (b[1] - 20.0) - (a[1] - 20.0) * (b[0] - 30.0);
     assert!(turn > 0.0 && b[2] > a[2]);
-    // over a full turn, up one pitch
-    let n = 36;
-    assert!((on[first - 1 + n][2] - a[2] - 1.0).abs() < 1e-6);
+    // a pitch a turn: up pitch / 2 pi per radian
+    let ang = |p: &[f64; 3]| (p[1] - 20.0).atan2(p[0] - 30.0);
+    let mut d = ang(b) - ang(a);
+    if d < 0.0 {
+        d += std::f64::consts::TAU;
+    }
+    assert!(
+        ((b[2] - a[2]) / d - 1.0 / std::f64::consts::TAU).abs() < 1e-6,
+        "{a:?} {b:?}"
+    );
     // posted as G3 helices on the vise
     let m = marcam::profiles::builtin_machine("makera-carvera-4axis").unwrap();
     let g = post(&tps[0], &m.post);

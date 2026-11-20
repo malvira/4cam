@@ -403,3 +403,40 @@ fn indexed_a_side_face_sets_the_index_that_turns_it_up() {
     assert_eq!(v["index_a"], f(under, "index_a"));
     assert_eq!(v["depth"], 3.0);
 }
+
+#[test]
+fn threads_and_chamfers_take_the_brackets_holes() {
+    let p = pickables(
+        &bracket(),
+        Frame::Xyz {
+            index_a: 0.0,
+            sides: false,
+        },
+    );
+    let through: Vec<&Pickable> = of(&p, "hole")
+        .into_iter()
+        .filter(|h| h.data["through"] == true)
+        .collect();
+    // its 5 mm through holes: M6 x 1's tap drill, the whole hole
+    let (v, notes) = apply("thread_mill", &through, &cx(4.0)).unwrap();
+    assert_eq!(v["points"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        (v["diameter"].as_f64(), v["pitch"].as_f64()),
+        (Some(6.0), Some(1.0))
+    );
+    assert_eq!(v["depth"], 12.0);
+    assert!(notes.iter().any(|n| n.contains("M6")), "{notes:?}");
+    // a chamfer round the holes and a pocket's edge
+    let mut picks = through.clone();
+    let pocket = of(&p, "pocket");
+    picks.push(pocket[0]);
+    let (c, _) = apply("chamfer", &picks, &cx(6.0)).unwrap();
+    assert_eq!(c["holes"].as_array().unwrap().len(), 4);
+    assert_eq!(c["holes"][0][2], 5.0);
+    assert_eq!(c["side"], "inside");
+    assert_eq!(c["paths"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        accepts("chamfer"),
+        &["hole", "pocket", "outline", "edge_loop"]
+    );
+}

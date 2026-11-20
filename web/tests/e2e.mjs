@@ -507,7 +507,7 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = (await addTypes()).join(",");
   const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 16 && String(typesAll).split(",").length === 16, `${typesAll}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 18 && String(typesAll).split(",").length === 18, `${typesAll}`);
   const filled = [];
   for (const kind of String(typesAll).split(",")) {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
@@ -526,7 +526,7 @@ try {
     await treeAct(id, "delete");
     await settle();
   }
-  check("every operation type's new form is fully filled and applies cleanly", filled.length === 16 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
+  check("every operation type's new form is fully filled and applies cleanly", filled.length === 18 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 60000);
@@ -646,7 +646,7 @@ try {
   await settle();
   const plateMachine = await js("document.getElementById('machine').value");
   const plateTypes = (await addTypes()).join(",");
-  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,bore,contour,raster3d,waterline,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
+  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,chamfer,thread_mill,bore,contour,raster3d,waterline,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
   await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 60000);
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");

@@ -969,7 +969,8 @@ pub fn stock_top(p: &crate::project::Project, setup: &str) -> Option<f64> {
 /// The kinds an operation type takes, in order of preference (empty: picking does not apply).
 pub fn accepts(op_type: &str) -> &'static [&'static str] {
     match op_type {
-        "drill" | "bore" => &["hole"],
+        "drill" | "bore" | "thread_mill" => &["hole"],
+        "chamfer" => &["hole", "pocket", "outline", "edge_loop"],
         "pocket" => &["pocket", "flat_face"],
         "contour" => &["edge_loop", "outline"],
         "face" => &["flat_face", "side_face"],
@@ -1269,6 +1270,91 @@ pub fn apply(
                     notes.push("facing is bounded by one face: the first one picked".into());
                 }
             }
+        }
+        "chamfer" => {
+            // holes by their size; one outline (a pocket's edge, the part's outline, a loop)
+            let holes: Vec<Value> = picks
+                .iter()
+                .filter(|p| p.kind == "hole")
+                .map(|p| {
+                    let c = &p.data["center"];
+                    json!([c[0], c[1], round_um(f(p, "diameter"))])
+                })
+                .collect();
+            let loops: Vec<&&Pickable> = picks.iter().filter(|p| p.kind != "hole").collect();
+            if loops.len() > 1 {
+                notes.push(
+                    "a chamfer follows one outline (and any holes): the first one picked".into(),
+                );
+            }
+            let (paths, side) = match loops.first() {
+                Some(p) if p.kind == "pocket" => (json!([p.data["outline"]]), json!("inside")),
+                Some(p) if p.kind == "outline" => (json!([p.data["path"]]), json!("outside")),
+                Some(p) => (json!([p.data["path"]]), p.data["side"].clone()),
+                None => (json!([]), json!("outside")),
+            };
+            let top = picks
+                .iter()
+                .map(|p| {
+                    if p.kind == "edge_loop" {
+                        f(p, "z")
+                    } else {
+                        f(p, "top")
+                    }
+                })
+                .fold(f64::NEG_INFINITY, f64::max);
+            v.insert("paths".into(), paths);
+            v.insert("side".into(), side);
+            v.insert("holes".into(), Value::Array(holes));
+            v.insert("top".into(), json!(round_um(top)));
+        }
+        "thread_mill" => {
+            // a metric thread whose tap drill is the hole (its size less the pitch)
+            const METRIC: [(f64, f64); 10] = [
+                (3.0, 0.5),
+                (4.0, 0.7),
+                (5.0, 0.8),
+                (6.0, 1.0),
+                (8.0, 1.25),
+                (10.0, 1.5),
+                (12.0, 1.75),
+                (16.0, 2.0),
+                (20.0, 2.5),
+                (24.0, 3.0),
+            ];
+            let d = f(picks[0], "diameter");
+            let (m, pitch) = METRIC
+                .iter()
+                .copied()
+                .min_by(|a, b| ((a.0 - a.1) - d).abs().total_cmp(&((b.0 - b.1) - d).abs()))
+                .expect("a list");
+            let points: Vec<Value> = picks.iter().map(|p| p.data["center"].clone()).collect();
+            let top = picks
+                .iter()
+                .map(|p| f(p, "top"))
+                .fold(f64::NEG_INFINITY, f64::max);
+            // the whole hole if through, else a pitch short of its bottom
+            let depth = picks
+                .iter()
+                .map(|p| {
+                    top - f(p, "bottom")
+                        - if p.data["through"] == true {
+                            0.0
+                        } else {
+                            pitch
+                        }
+                })
+                .fold(f64::INFINITY, f64::min)
+                .max(pitch);
+            v.insert("points".into(), Value::Array(points));
+            v.insert("diameter".into(), json!(m));
+            v.insert("pitch".into(), json!(pitch));
+            v.insert("internal".into(), json!(true));
+            v.insert("top".into(), json!(round_um(top)));
+            v.insert("depth".into(), json!(round_um(depth)));
+            notes.push(format!(
+                "M{m} x {pitch} taken for the {d:.2} mm hole (its tap drill): change the size and pitch if it is another thread"
+            ));
         }
         "rotary_turning" => {
             let lo = picks

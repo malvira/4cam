@@ -929,7 +929,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                             .rev()
                             .find(|m| matches!(m, Move::Operation { .. }))
                         {
-                            *arcs = Some(1e-3);
+                            *arcs = Some(0.005);
                         }
                         strategy::edges::thread_mill(&mut b, r, sb, safe_r, o).map_err(err)?
                     }

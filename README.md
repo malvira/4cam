@@ -67,7 +67,9 @@ program.
   reaches a wall's foot at one angle per turn. If the job has
   no `part.mesh`, `rotary_finish` uses `part.profile`, revolved into a 720-facet mesh.
 - 3-axis (vise, or indexed on the bar): `face`, `pocket`, `drill`, `bore`, `contour`,
-  `raster3d`, `rough3d`, `engrave`, `vcarve`. A `contour` is cut `climb` (the default, or the
+  `raster3d`, `rough3d`, `waterline`, `engrave`, `vcarve`, `chamfer` (chamfer or deburr
+  outlines and holes with a V-bit) and `thread_mill` (threads in holes or on bosses on a
+  helix, right or left hand, as G2/G3 on a vise). A `contour` is cut `climb` (the default, or the
   machine profile's `cut_direction`) or `conventional`, and can leave tabs holding the part:
   `tabs` evenly round the outline, or placed by hand (`tab_at`, a click on the outline in the
   app: a fraction of the way round the outline as written, so it stays put when the operation
