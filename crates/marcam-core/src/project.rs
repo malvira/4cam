@@ -480,7 +480,10 @@ impl Project {
             if let Some(k) = s.kind.as_deref() {
                 let block = matches!(s.stock, StockDef::Box { .. });
                 match k {
-                    "vise" if !block => out.push(format!("{}: a vise setup needs box stock", s.id)),
+                    // (a block, or a bar lying in the vise along X)
+                    "vise" if matches!(s.stock, StockDef::FromPrevious { .. }) => out.push(
+                        format!("{}: a vise setup needs a block or a bar lying in it", s.id),
+                    ),
                     "rotary" | "indexed" if block => {
                         out.push(format!("{}: a {k} setup needs bar stock", s.id))
                     }
@@ -892,6 +895,13 @@ impl Project {
         }
         if let StockDef::Box { min, max } = setup.stock {
             v["stock_box"] = serde_json::json!({"min": min, "max": max});
+        } else if setup.stock.is_bar()
+            && (setup.kind.as_deref() == Some("vise") || setup.holding.kind == "vise")
+        {
+            // a bar lying in the vise along X: the block round it, Z0 at its top
+            let (sb, axis) = stock.lying();
+            v["stock_box"] = serde_json::json!({"min": sb.min, "max": sb.max});
+            v["stock_axis"] = serde_json::json!(axis);
         }
         self.number_tools(&mut v);
         profiles::resolve_job_tools(&mut v, libraries)?;

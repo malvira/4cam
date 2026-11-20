@@ -22,7 +22,7 @@ const COMMON = {
 };
 const BAR_SHAPES = ["round", "square", "rect", "hex"];
 
-export function setupDialog({ $, state, parseStl, readPart, partSummary, placePart, KINDS, stockSpecOf }) {
+export function setupDialog({ $, state, parseStl, readPart, partSummary, placePart, KINDS, stockSpecOf, lyingBar }) {
   const dlg = $("setupDialog");
   let cur = null; // { mode, preset, parsed, resolve }
 
@@ -88,20 +88,24 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
    *  the one chosen, the common sizes. */
   function stockLayout() {
     const k = kind();
-    const allowed = bar(k) ? BAR_SHAPES : ["block"];
+    // (a vise holds a block, or a bar lying along X)
+    const allowed = bar(k) ? BAR_SHAPES : ["block", ...BAR_SHAPES];
     for (const el of dlg.querySelectorAll(".sd-shape")) el.classList.toggle("hidden", !allowed.includes(el.dataset.shape));
     if (!allowed.includes(shape())) dlg.querySelector(`input[name="sdShape"][value="${allowed[0]}"]`).checked = true;
     const sh = shape();
     const given = stockMode() === "explicit";
     for (const l of $("sdMargins").querySelectorAll("label")) {
       const f = l.dataset.for;
-      l.classList.toggle("hidden", given || (f === "bar" ? sh === "block" : sh !== "block"));
+      // (a bar in a vise: no chuck)
+      const chuck = l.querySelector("#sdChuckFit");
+      l.classList.toggle("hidden", given || (f === "bar" ? sh === "block" || (chuck && !bar(k)) : sh !== "block"));
     }
     for (const l of $("sdDims").querySelectorAll("label")) {
       const fs = l.dataset.for.split(" ");
       const angle = l.querySelector("#sdAngle");
-      // (the angle turns a fitted bar too)
-      l.classList.toggle("hidden", !(fs.includes(sh) && (given || angle)));
+      const chuck = l.querySelector("#sdChuck");
+      // (the angle turns a fitted bar too; a bar in a vise has no chuck)
+      l.classList.toggle("hidden", !(fs.includes(sh) && (given || angle)) || (chuck && !bar(k)));
     }
     const list = COMMON[sh] || [];
     $("sdCommon").innerHTML = `<option value="">choose...</option>` + list.map((c, i) => `<option value="${i}">${c.label}</option>`).join("");
@@ -183,9 +187,10 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       const q = a === "y" ? [p[1], p[2], p[0]] : a === "z" ? [p[2], p[0], p[1]] : p;
       return [q[0] + place.translate[0], q[1] + place.translate[1], q[2] + place.translate[2]];
     };
-    // the view box (Y across, Z up)
+    // the view box (Y across, Z up); a bar lying in a vise: at its axis, its top at Z0
+    const off = st.shape !== "box" && st.min ? lyingBar(st).axis : [0, 0];
     let box;
-    if (st.shape === "box") box = [st.min[1], st.min[2], st.max[1], st.max[2]];
+    if (st.shape === "box" || st.min) box = [st.min[1], st.min[2], st.max[1], st.max[2]];
     else {
       const r = sh.shape === "round" ? st.radius : Math.max(...Array.from({ length: 72 }, (_, i) => sectionR(sh, (i * Math.PI) / 36)));
       box = [-r, -r, r, r];
@@ -217,7 +222,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       for (let i = 0; i <= 360; i++) {
         const phi = (i * Math.PI) / 180;
         const r = sectionR(sh, phi);
-        const y = r * Math.cos(phi), z = r * Math.sin(phi);
+        const y = r * Math.cos(phi) + off[0], z = r * Math.sin(phi) + off[1];
         if (i) ctx.lineTo(X(y), Y(z));
         else ctx.moveTo(X(y), Y(z));
       }
@@ -300,6 +305,9 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     };
     const st = place.stock;
     const R = bar(k) ? (st.radius ?? cornerR(stockSpecOf(st))) : 0;
+    // (a bar lying in a vise: seen as the block round it)
+    const lying = !bar(k) && st.shape !== "box" ? lyingBar(st).box : null;
+    if (lying) Object.assign(st, { min: lying.min, max: lying.max });
     endView(place, t);
     // the view box: stock and part
     const box = bar(k) ? [-st.length, -R, Math.max(0, place.translate[0] + 1), R] : [st.min[0], st.min[2], st.max[0], st.max[2] + 1];

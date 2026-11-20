@@ -99,7 +99,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   const colorOf = (op, i) => op.color || PALETTE[i % PALETTE.length];
   // a vise setup (box stock) takes the 3-axis types; a rotary setup takes everything, the
   // 3-axis types indexed to a fixed A (3+1)
-  const isBox = (s) => s?.stock?.shape === "box";
+  // a vise setup: a block, or a bar lying in the vise
+  const isBox = (s) => s?.stock?.shape === "box" || s?.kind === "vise" || s?.holding?.kind === "vise";
   // the setup's kind (rotary, indexed 3+1 or vise) decides which types fit; a bar without a
   // kind (older projects) takes everything
   const kindOfSetup = (s) => s?.kind ?? (isBox(s) ? "vise" : "rotary");
@@ -484,7 +485,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const span = Math.abs((op.y_range?.[1] ?? 0) - (op.y_range?.[0] ?? 0));
     const step = op.stepover > 0 ? op.stepover : 0;
     const rows = step ? Math.ceil(span / step) + 1 : 0;
-    const top = s.stock?.shape === "box" ? s.stock.max[2] : stockRadius(s.stock);
+    const top = s.stock?.shape === "box" ? s.stock.max[2] : isBox(s) ? 0 : stockRadius(s.stock);
     const depth = top - ((op.floor ?? 0) + (op.leave ?? 0));
     const levels = op.step_down > 0 ? Math.max(1, Math.ceil(depth / op.step_down - 1e-9)) : 1;
     const roughed = s.operations.some((o) => o.type === "rough3d" && o.enabled !== false);

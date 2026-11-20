@@ -749,7 +749,7 @@ pub mod api {
         sb: &StockBox,
         opts: &Value,
     ) -> Value {
-        let mut hm = sim3::Heightmap3::new(sb, cell_for(sb, opts));
+        let mut hm = sim3::Heightmap3::of_job(job, sb, cell_for(sb, opts));
         if hm.z.len() > sim::MAX_CELLS {
             return err(format!(
                 "simulation grid too fine: {} cells (limit {})",
@@ -870,7 +870,7 @@ pub mod api {
         job_json: &str,
         machine: &MachineProfile,
     ) -> Value {
-        let hm = sim3::Heightmap3::new(sb, cell_for(sb, opts));
+        let hm = sim3::Heightmap3::of_job(job, sb, cell_for(sb, opts));
         if hm.z.len() > sim::MAX_CELLS {
             return err(format!(
                 "simulation grid too fine: {} cells (limit {})",
@@ -879,6 +879,10 @@ pub mod api {
             ));
         }
         let grid = grid_xyz(&hm);
+        // a bar lying in the vise: each row's top to start from (the page's mirror too)
+        let rows: Option<Vec<f64>> = job
+            .stock_axis
+            .map(|_| (0..hm.ny).map(|j| hm.z[j * hm.nx]).collect());
         let step = (hm.cell * 0.5).min(0.1);
         let pb = sim3::Playback3::new(hm, tps, &cutters_of(job), step);
         let mut path = Vec::with_capacity(pb.len() * 7);
@@ -897,6 +901,7 @@ pub mod api {
             "kind": "xyz",
             "grid": grid,
             "stock_box": sb,
+            "stock_rows": rows,
             "segments": pb.len(),
             "program_starts": first_seg_of_program,
             "path": f32s(&path),
@@ -972,7 +977,7 @@ pub mod api {
             })
         };
         if let Some(sb) = job.stock_box {
-            let hm = sim3::Heightmap3::new(&sb, cell_for(&sb, &opts));
+            let hm = sim3::Heightmap3::of_job(&job, &sb, cell_for(&sb, &opts));
             if hm.z.len() > sim::MAX_CELLS {
                 return err("simulation grid too fine");
             }

@@ -16,6 +16,10 @@ pub struct Job {
     /// Box stock for 3-axis (vise) setups, in work coordinates (Z up).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_box: Option<StockBox>,
+    /// A bar lying in the vise along X (`stock` its section): its axis at (Y, Z), the block
+    /// `stock_box` round it (Z0 at its top). None: the block is the stock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_axis: Option<[f64; 2]>,
     /// Radial clearance above the stock for safe rapids (mm).
     #[serde(default = "default_clearance")]
     pub clearance: f64,
@@ -146,6 +150,57 @@ impl Section {
 }
 
 impl Stock {
+    /// The bar's outline about its axis, counter-clockwise from +Y: `n` points (y, z).
+    pub fn outline(&self, n: usize) -> Vec<[f64; 2]> {
+        (0..n)
+            .map(|k| {
+                let phi = k as f64 * std::f64::consts::TAU / n as f64;
+                let r = self.radius_at(phi);
+                [r * phi.cos(), r * phi.sin()]
+            })
+            .collect()
+    }
+
+    /// The bar lying in a vise along X from 0 to its length: the block round it (its low Y side
+    /// at 0, its top at Z0) and where its axis is (Y, Z).
+    pub fn lying(&self) -> (StockBox, [f64; 2]) {
+        let pts = self.outline(1440);
+        let (mut y0, mut y1, mut z0, mut z1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for [y, z] in &pts {
+            y0 = y0.min(*y);
+            y1 = y1.max(*y);
+            z0 = z0.min(*z);
+            z1 = z1.max(*z);
+        }
+        (
+            StockBox {
+                min: [0.0, 0.0, z0 - z1],
+                max: [self.length, y1 - y0, 0.0],
+            },
+            [-y0, -z1],
+        )
+    }
+
+    /// The top of the bar's section at `dy` from its axis (across, along Y); None beside it.
+    pub fn top_at(&self, dy: f64, outline: &[[f64; 2]]) -> Option<f64> {
+        let mut top: Option<f64> = None;
+        for k in 0..outline.len() {
+            let [ya, za] = outline[k];
+            let [yb, zb] = outline[(k + 1) % outline.len()];
+            let (lo, hi) = (ya.min(yb), ya.max(yb));
+            if dy < lo || dy > hi {
+                continue;
+            }
+            let z = if (yb - ya).abs() < 1e-12 {
+                za.max(zb)
+            } else {
+                za + (zb - za) * (dy - ya) / (yb - ya)
+            };
+            top = Some(top.map_or(z, |t: f64| t.max(z)));
+        }
+        top
+    }
+
     /// Distance from the axis to the bar's surface at angle `phi` (radians).
     pub fn radius_at(&self, phi: f64) -> f64 {
         self.section

@@ -204,3 +204,63 @@ fn the_shapes_round_trip_through_the_project_file() {
         assert!(close(job.stock.radius, want.radius));
     }
 }
+
+#[test]
+fn a_bar_lying_in_a_vise_is_a_block_round_it_with_its_top_from_the_section() {
+    // a round bar Ø20 x 50 lying along X: the block 50 x 20 x 20, Z0 at its top, the axis at
+    // (10, -10)
+    let round = Stock {
+        radius: 10.0,
+        length: 50.0,
+        section: None,
+    };
+    let (sb, axis) = round.lying();
+    assert!(
+        close(sb.max[0], 50.0)
+            && (sb.max[1] - 20.0).abs() < 1e-3
+            && (sb.min[2] + 20.0).abs() < 1e-3
+    );
+    assert!(
+        (axis[0] - 10.0).abs() < 1e-3 && (axis[1] + 10.0).abs() < 1e-3,
+        "{axis:?}"
+    );
+    // a hex 20 across flats, a flat on top: 20 high, 23.09 wide (corners at the sides)
+    let hex = Stock::of_section(
+        Section::Polygon {
+            sides: 6,
+            across_flats: 20.0,
+            angle: 0.0,
+        },
+        50.0,
+    );
+    let (hb, hax) = hex.lying();
+    assert!(
+        (hb.min[2] + 20.0).abs() < 1e-3 && (hb.max[1] - 40.0 / 3f64.sqrt()).abs() < 1e-2,
+        "{hb:?}"
+    );
+    assert!((hax[1] + 10.0).abs() < 1e-3);
+    // the heightmap starts at the bar's top: 0 over the axis, lower towards the sides
+    let mut job = marcam::Job {
+        stock: round.clone(),
+        stock_box: Some(sb),
+        stock_axis: Some(axis),
+        ..serde_json::from_str(r#"{"schema_version":"0.1","stock":{"radius":10,"length":50},"part":{},"tools":[],"programs":[],"spindle_rpm":10000,"clearance":3}"#).unwrap()
+    };
+    job.clearance = 3.0;
+    let hm = marcam::sim3::Heightmap3::of_job(&job, &sb, 0.5);
+    let row = |y: f64| hm.z[((y / 0.5) as usize) * hm.nx];
+    assert!(row(10.0).abs() < 0.02, "over the axis: {}", row(10.0));
+    // off the axis: the circle's top, sqrt(100 - dy²) - 10, at each row's centre
+    for j in 0..hm.ny {
+        let (_, y) = hm.centre(0, j);
+        let dy = y - 10.0;
+        if dy.abs() < 9.5 {
+            let want = (100.0 - dy * dy).sqrt() - 10.0;
+            assert!(
+                (hm.z[j * hm.nx] - want).abs() < 0.05,
+                "row {j} at {y}: {} vs {want}",
+                hm.z[j * hm.nx]
+            );
+        }
+    }
+}

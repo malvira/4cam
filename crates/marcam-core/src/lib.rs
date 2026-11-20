@@ -186,7 +186,7 @@ fn rest_map(
         segs.extend(sim3::segments_of3(moves, p as u16));
     }
     let work = sim3::work_estimate3(cell, sb.min[2], sb.max[2], &segs, &cutter_of, cell);
-    let mut hm = sim3::Heightmap3::new(sb, cell);
+    let mut hm = sim3::Heightmap3::of_job(job, sb, cell);
     let disc = (c.radius() / cell).ceil().powi(2) * 4.0;
     if !budget::spend((work + (hm.nx * hm.ny) as f64 * disc) as u64) {
         return Err(format!(
@@ -1374,7 +1374,7 @@ pub fn collision_check(
             .collect());
     }
     if let Some(sb) = &job.stock_box {
-        let mut hm = sim3::Heightmap3::new(sb, res.cell_for(sb));
+        let mut hm = sim3::Heightmap3::of_job(job, sb, res.cell_for(sb));
         for tp in tps {
             let (_, rep) =
                 collision::simulate_block(&mut hm, tp, &cutters, &bodies, step, sb.max[2]);

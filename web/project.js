@@ -158,6 +158,23 @@ function fitBar(shape, pts, margin, angle) {
   return shape === "square" ? { side: af, angle: angle || 0 } : { across_flats: af, angle: angle || 0 };
 }
 
+/** A bar lying in a vise along X (as the engine's Stock::lying): its outline's extents and
+ *  where its axis is (Y, Z) with its low Y side at 0 and its top at Z0. */
+export function lyingBar(st) {
+  const sp = stockSpecOf(st);
+  let y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (let k = 0; k < 1440; k++) {
+    const phi = (k * 2 * Math.PI) / 1440;
+    const r = sp.shape === "round" ? st.radius : sectionRadius(sp.shape, sp.dims, phi);
+    const y = r * Math.cos(phi), z = r * Math.sin(phi);
+    y0 = Math.min(y0, y);
+    y1 = Math.max(y1, y);
+    z0 = Math.min(z0, z);
+    z1 = Math.max(z1, z);
+  }
+  return { axis: [-y0, -z1], box: { min: [0, 0, z0 - z1], max: [st.length, y1 - y0, 0] } };
+}
+
 /** The project's stock for a given stock spec (no part to place: a block's sizes, a bar's). */
 export function stockOfSpec(kind, spec) {
   if (spec.dims) {
@@ -252,6 +269,30 @@ export function placePart(tris, opts = {}) {
   if (!spec && opts.explicit) {
     const ex = opts.explicit;
     spec = vise ? { shape: "block", mode: "given", dims: { x: ex.bx, y: ex.by, z: ex.bz } } : { shape: "round", mode: "given", dims: { radius: ex.dia / 2 }, length: ex.len };
+  }
+  if (vise && spec?.shape && spec.shape !== "block") {
+    // a bar lying along X: the part centred in its section, its front at the bar's end plus
+    // the X margin
+    const cy = (lo[1] + hi[1]) / 2, cz = (lo[2] + hi[2]) / 2;
+    const mx = spec.margins?.xl ?? 2;
+    let dims, length;
+    if (spec.mode === "given") {
+      dims = spec.dims;
+      length = spec.length;
+    } else {
+      const pts = [];
+      const step = Math.max(1, Math.floor(tris.length / 3 / 200000));
+      for (let i = 0; i < tris.length; i += 3 * step) {
+        const q = mapAxis([tris[i], tris[i + 1], tris[i + 2]], ax);
+        pts.push([q[1] - cy, q[2] - cz]);
+      }
+      dims = fitBar(spec.shape, pts, spec.margin ?? opts.margin ?? 0.5, spec.dims?.angle ?? 0);
+      length = Math.ceil(size[0] + 2 * mx);
+    }
+    const stock = barStock(spec.shape, dims, length);
+    const { axis } = lyingBar(stock);
+    const translate = [Math.max(0, (length - size[0]) / 2) - lo[0], axis[0] - cy, axis[1] - cz];
+    return { axis: ax, translate, stock, size };
   }
   if (vise) {
     const top = opts.origin ?? 0.5;
@@ -371,7 +412,7 @@ export function setupProject(ctx) {
   const { $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, resetProject, machineArg, currentMachine } = ctx;
   const p = { name: "untitled", dirty: false, fileName: null, pending: null };
   state.project = p;
-  const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS, stockSpecOf });
+  const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS, stockSpecOf, lyingBar });
 
   function show() {
     $("projectName").textContent = p.name;
@@ -887,7 +928,7 @@ export function setupProject(ctx) {
     const size = [0, 1, 2].map((k) => (hi[k] - lo[k]).toFixed(2)).join(" x ");
     const st = s.stock;
     const kind = kindOf(s);
-    const where = kind === "vise" ? `in the vise (${KINDS.vise}), block ${r3(st.max[0] - st.min[0])} x ${r3(st.max[1] - st.min[1])} x ${r3(st.max[2] - st.min[2])} mm` : `on the rotary axis (${KINDS[kind]}, front at X0), ${describeStock(st)}`;
+    const where = kind === "vise" ? `in the vise (${KINDS.vise}), ${describeStock(st)}${st.shape !== "box" ? " lying along X" : ""}` : `on the rotary axis (${KINDS[kind]}, front at X0), ${describeStock(st)}`;
     return `${size} mm, ${where}`;
   }
 

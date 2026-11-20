@@ -462,7 +462,9 @@ try {
     return js("({ lines: window.__marcam.state.result.programs.map(p => p.lines), knurl: (window.__marcam.state.result.programs.find(p => p.name === 'knob_2_knurl') || {}).gcode || '' })");
   };
   const treeAct = (op, act) => js(`document.querySelector('#tree .tree-op[data-op="${op}"] [data-act="${act}"]').click(); true`);
-  const settle = () => waitFor(() => js("!!window.__marcam.state.tree.doc && document.body.dataset.state !== 'busy'"), "tree", 30000).then(() => sleep(400));
+  const settle = () => waitFor(() => js("!!window.__marcam.state.tree.doc && document.body.dataset.state !== 'busy'"), "tree", 60000).then(() => sleep(400)).catch(async (e) => {
+    throw new Error(`${e.message}: ${await js("JSON.stringify({ doc: !!window.__marcam.state.tree.doc, state: document.body.dataset.state, status: document.getElementById('status').textContent, error: document.getElementById('error').textContent, dialog: document.getElementById('setupDialog').open })")}`);
+  });
   await treeAct("op3", "enable");
   await settle();
   const off = await gen();
@@ -2664,6 +2666,17 @@ try {
     await apply();
     const block = await stockNow();
     const blockModel = await js("JSON.parse(document.getElementById('job').value).models.find((m) => m.kind === 'mesh').translate");
+    // a hex bar lying in the vise along X, 20 across flats, 70 long: the block round it for
+    // the view and the engine (Z0 at its top), planned
+    await openEdit();
+    await pick("sdShape", "hex");
+    await pick("sdStock", "explicit");
+    const viseBarFields = await shown();
+    for (const [id, v] of Object.entries({ sdAf: 20, sdAngle: 0, sdLen: 70 })) await set(id, v);
+    await apply();
+    await settle();
+    const viseBar = { st: await stockNow(), bounds: await js("window.__marcam.state.three.bounds"), problems: await js("window.__marcam.state.tree.problems.join('; ')"), kind: await js("JSON.parse(document.getElementById('job').value).setups[0].kind") };
+    await shot("30_stock_vise_hex");
     await js("window.confirm = window.__confirm0; true");
     check("stock: every shape with all its sizes (labelled, with units), given, fitted, in inches, from a common size; written to the project and its file; drawn at the bar's corners",
       Object.values(bars).filter((b) => b.st).every((b) => b.ok) && bars.square.fieldsShown.includes("sdSide") && bars.rect.fieldsShown.includes("sdW") && bars.rect.fieldsShown.includes("sdH") &&
@@ -2672,9 +2685,10 @@ try {
       Math.abs(inch.radius - 12.7) < 1e-6 && Math.abs(inch.length - 50.8) < 1e-6 && Math.abs(commonSt.across_flats - 19.05) < 1e-6 && Math.abs(+common - 19.05) < 1e-3 &&
       fitted.shape === "hex" && fitted.across_flats >= 20.5 && fitted.across_flats <= 22 &&
       /shape = "hex"/.test(toml) && /across_flats/.test(toml) &&
-      blockOnly === "block" && ["sdMxl", "sdMxh", "sdMyl", "sdMyh", "sdMzb"].every((id) => blockFit.includes(id)) && ["sdBx", "sdBy", "sdBz", "sdPx", "sdPy"].every((id) => blockFields.includes(id)) &&
-      block.shape === "box" && block.max[0] - block.min[0] === 70 && block.max[1] - block.min[1] === 50 && block.max[2] - block.min[2] === 12,
-      `${JSON.stringify(bars)} inch ${JSON.stringify(inch)} common ${common} ${JSON.stringify(commonSt)} fitted ${JSON.stringify(fitted)} toml ${String(toml).split(String.fromCharCode(10)).filter((l) => /stock|shape|across/.test(l)).join(" | ").slice(0, 200)} block ${blockOnly} ${blockFit} ${blockFields} ${JSON.stringify(block)} part at ${blockModel}`);
+      blockOnly === "block,round,square,rect,hex" && ["sdMxl", "sdMxh", "sdMyl", "sdMyh", "sdMzb"].every((id) => blockFit.includes(id)) && ["sdBx", "sdBy", "sdBz", "sdPx", "sdPy"].every((id) => blockFields.includes(id)) &&
+      block.shape === "box" && block.max[0] - block.min[0] === 70 && block.max[1] - block.min[1] === 50 && block.max[2] - block.min[2] === 12 &&
+      viseBar.st.shape === "hex" && viseBar.st.across_flats === 20 && viseBar.kind === "vise" && !viseBarFields.includes("sdChuck") && Math.abs(viseBar.bounds.xmax - 70) < 1e-6 && !/needs/.test(viseBar.problems),
+      `${JSON.stringify(bars)} inch ${JSON.stringify(inch)} common ${common} ${JSON.stringify(commonSt)} fitted ${JSON.stringify(fitted)} toml ${String(toml).split(String.fromCharCode(10)).filter((l) => /stock|shape|across/.test(l)).join(" | ").slice(0, 200)} block ${blockOnly} ${blockFit} ${blockFields} ${JSON.stringify(block)} part at ${blockModel} vise bar ${JSON.stringify(viseBar)} ${viseBarFields}`);
   }
 
   // 8st2. (Mar) no form field silently lost: every operation type's form shows each of its

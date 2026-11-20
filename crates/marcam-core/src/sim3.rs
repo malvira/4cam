@@ -44,6 +44,26 @@ impl Heightmap3 {
         }
     }
 
+    /// The job's stock as it comes: the block, or a bar lying in the vise (each row at the
+    /// bar's top there, nothing beside it).
+    pub fn of_job(job: &crate::Job, stock: &StockBox, cell: f64) -> Heightmap3 {
+        let mut hm = Heightmap3::new(stock, cell);
+        if let Some([yc, zc]) = job.stock_axis {
+            let outline = job.stock.outline(1440);
+            for j in 0..hm.ny {
+                let (_, y) = hm.centre(0, j);
+                let top = job
+                    .stock
+                    .top_at(y - yc, &outline)
+                    .map_or(hm.bottom, |t| (t + zc).max(hm.bottom));
+                for i in 0..hm.nx {
+                    hm.z[j * hm.nx + i] = top;
+                }
+            }
+        }
+        hm
+    }
+
     /// Top of the cell containing (x, y) (clamped to the block).
     pub fn at(&self, x: f64, y: f64) -> f64 {
         let i = ((x - self.x0) / self.cell).max(0.0) as usize;

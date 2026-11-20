@@ -949,6 +949,12 @@ pub fn setup_part(
 pub fn stock_top(p: &crate::project::Project, setup: &str) -> Option<f64> {
     use crate::project::StockDef;
     let s = p.setups.iter().find(|s| s.id == setup)?;
+    // a bar lying in a vise: its top is Z0, as a block's
+    if !matches!(s.stock, StockDef::Box { .. })
+        && (s.kind.as_deref() == Some("vise") || s.holding.kind == "vise")
+    {
+        return Some(0.0);
+    }
     Some(match s.stock {
         StockDef::Box { max, .. } => max[2],
         StockDef::Cylinder { radius, .. } | StockDef::FromPrevious { radius, .. } => radius,

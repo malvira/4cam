@@ -878,6 +878,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.r = new Float32Array(n).fill(m.xyz ? result.stock_box.max[2] : result.stock_radius);
       // (a square, hex or rectangular bar: its radius at each angle)
       if (!m.xyz && result.stock_ring) for (let i = 0; i < result.grid.nx; i++) m.r.set(result.stock_ring, i * result.grid.na);
+      // (a bar lying in the vise: each row from the bar's top there)
+      if (m.xyz && result.stock_rows) result.stock_rows.forEach((z, j) => m.r.fill(z, j * result.grid.nx, (j + 1) * result.grid.nx));
       m.op = new Uint16Array(n);
       m.stride = strideFor(DISPLAY_MAX);
       // the stock on the GPU when there is one and the engine offers the job to it

@@ -44,11 +44,12 @@ fn the_project_check_names_what_does_not_fit() {
             .any(|e| e.contains("rotary_turning does not fit a indexed setup")),
         "{problems:?}"
     );
+    // a vise holds a block, or a bar lying in it: the knob's bar is fine
     p.setups[0].kind = Some("vise".into());
-    assert!(p
+    assert!(!p
         .check_operations()
         .iter()
-        .any(|e| e.contains("a vise setup needs box stock")));
+        .any(|e| e.contains("a vise setup needs")));
     p.setups[0].kind = Some("lathe".into());
     assert!(p
         .check_operations()

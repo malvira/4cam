@@ -7,7 +7,7 @@ import { addViewCube } from "./viewcube.js";
 import { setupToolDialogs } from "./tooldialog.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
-import { setupProject } from "./project.js";
+import { lyingBar, setupProject } from "./project.js";
 import { color, colorNum, colorRgb, COLOR_DEFAULTS, COLOR_LABELS, onColorsChange, resetColors, setColor } from "./colors.js";
 
 // Settings saved before the rename (4cam -> marcam) carry over once: "4cam.x" -> "marcam.x".
@@ -1407,10 +1407,20 @@ async function drawModel() {
   }
   // the stock: the setup's block or bar (a 0.1 job's bar)
   // (a light tint with its edges drawn: see meshes.js stockObject)
-  const st = v2 ? setup?.stock : doc.stock ? { shape: "cylinder", ...doc.stock } : null;
+  const st0 = v2 ? setup?.stock : doc.stock ? { shape: "cylinder", ...doc.stock } : null;
+  // a bar lying in a vise: drawn along X at its axis, the block round it for the view
+  const viseBar = v2 && st0 && st0.shape !== "box" && (setup?.kind === "vise" || setup?.holding?.kind === "vise") ? lyingBar(st0) : null;
+  const st = viseBar ? { shape: "box", ...viseBar.box } : st0;
   const sb = st?.shape === "box" ? st : null;
   let fitKey = null;
-  if (sb) {
+  if (viseBar) {
+    const corners = barCorners(st0);
+    const geo = corners ? prismGeometry(THREE, corners, 0, st0.length) : toGeometry(THREE, cylinder(st0.radius, 0, st0.length, 96));
+    geo.translate(0, viseBar.axis[0], viseBar.axis[1]);
+    stockNew.push(stockObject(THREE, geo));
+    fitKey = JSON.stringify(sb);
+    v.bounds = { xmin: sb.min[0], xmax: sb.max[0], R: Math.max(sb.max[1] - sb.min[1], sb.max[2] - sb.min[2]) / 2 };
+  } else if (sb) {
     const size = [0, 1, 2].map((k) => sb.max[k] - sb.min[k]);
     const box = stockObject(THREE, new THREE.BoxGeometry(...size));
     box.position.set(...[0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2));
