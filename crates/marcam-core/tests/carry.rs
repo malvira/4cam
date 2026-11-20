@@ -204,3 +204,45 @@ fn the_knob_re_chucked_end_for_end_starts_from_the_turned_bar() {
     let tps = marcam::plan(&js[1].1).unwrap();
     assert!(!tps.is_empty());
 }
+
+/// A rough of the knob after it was turned (setup 2 carrying the turned bar): where the bar is
+/// turned down already it finds nothing to cut, so it cuts far less than on a fresh bar.
+#[test]
+fn rotary_roughing_of_a_carried_bar_cuts_only_what_is_left() {
+    let text =
+        std::fs::read_to_string(root().join("examples/knob/knob_two_setups.marcam.toml")).unwrap();
+    let (p, _) = Project::from_json_any(&text).unwrap();
+    let mut v = serde_json::to_value(&p).unwrap();
+    let defaults = |job: &Value| -> Value {
+        let libs = marcam::profiles::builtin_libraries();
+        let (p, _) = Project::from_json_any(&job.to_string()).unwrap();
+        p.op_defaults("rotary_rough", "setup2", None, &[], &libs, None, &|_| None)
+            .unwrap()
+    };
+    let mut op = defaults(&v);
+    op["id"] = json!("rr");
+    v["setups"][1]["operations"] = json!([op]);
+    v["setups"][1]["outputs"] = json!([{"name": "rough", "title": "rough", "operations": ["rr"]}]);
+    let dir = root().join("examples/knob");
+    let mut js = jobs(&v, &dir);
+    let fresh = js[1].1.clone();
+    let meshes = |j: &Job| marcam::load_mesh(j, &dir).ok().flatten();
+    carry_stock(&mut js, &meshes, None).unwrap();
+    let cut = |tps: &[marcam::Toolpath]| {
+        tps.iter()
+            .flat_map(|t| &t.moves)
+            .filter(|m| matches!(m, marcam::Move::Cut { .. }))
+            .count()
+    };
+    let carried = marcam::plan(&js[1].1).unwrap();
+    let all = marcam::plan(&fresh).unwrap();
+    assert!(cut(&all) > 100, "{}", cut(&all));
+    assert!(
+        cut(&carried) * 4 < cut(&all),
+        "{} vs {}",
+        cut(&carried),
+        cut(&all)
+    );
+    let g = marcam::gouge_check(&js[1].1, &carried, None).unwrap();
+    assert!(g.iter().all(|r| r.max_depth < 0.02), "{g:?}");
+}

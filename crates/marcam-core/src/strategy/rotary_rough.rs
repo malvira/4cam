@@ -27,13 +27,16 @@ fn intervals(mask: &[bool], xs: &[f64]) -> Vec<(f64, f64)> {
     out
 }
 
-/// Returns the lowest tip radius used.
+/// Returns the lowest tip radius used. `stock_at` gives the bar's largest radius at an X when
+/// it is not round from end to end (a bar carried from an earlier setup, turned down in
+/// places): a level is cut only along X where the bar stands above it.
 pub fn rotary_rough(
     b: &mut Builder,
     dc: &DropCutter,
     stock_r: f64,
     safe_r: f64,
     op: &RotaryRough,
+    stock_at: Option<&dyn Fn(f64) -> f64>,
 ) -> Result<f64, String> {
     if op.step_down <= 0.0 || op.step_x <= 0.0 || op.sample_deg <= 0.0 {
         return Err("step_down, step_x and sample_deg must be > 0".into());
@@ -62,6 +65,11 @@ pub fn rotary_rough(
         })
         .collect();
     let z_min = need.iter().copied().fold(f64::INFINITY, f64::min);
+    // the bar's largest radius at each x (round from end to end: the stock's)
+    let top: Vec<f64> = xs
+        .iter()
+        .map(|&x| stock_at.map_or(stock_r, |f| f(x)))
+        .collect();
 
     let mut levels = Vec::new();
     let mut level = stock_r - op.step_down;
@@ -79,7 +87,12 @@ pub fn rotary_rough(
         if crate::budget::over() {
             break;
         }
-        let mask: Vec<bool> = need.iter().map(|&z| z < level - 1e-6).collect();
+        // material to remove at this level: the part below it, the bar above it
+        let mask: Vec<bool> = need
+            .iter()
+            .zip(&top)
+            .map(|(&z, &t)| z < level - 1e-6 && t > level + 1e-6)
+            .collect();
         for (mut xa, mut xb) in intervals(&mask, &xs) {
             if direction < 0.0 {
                 std::mem::swap(&mut xa, &mut xb);

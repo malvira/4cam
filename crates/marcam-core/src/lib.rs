@@ -754,8 +754,40 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             (Operation::RotaryRough(o), _) => {
                 let mesh = ctx.surface(&prog.name)?;
                 let dc = DropCutter::new(mesh, cutter.expect("set above"));
-                let r_min = strategy::rotary_rough(&mut b, &dc, job.stock.radius, safe_r, o)
-                    .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
+                // a bar carried from an earlier setup: where it is turned down already
+                let column = job.carried.as_deref().and_then(|c| match c {
+                    carry::Carried::Bar(m) => Some(m),
+                    _ => None,
+                });
+                let tops: Option<Vec<f64>> = column.map(|m| {
+                    (0..m.grid.nx)
+                        .map(|i| {
+                            m.r[i * m.grid.na..(i + 1) * m.grid.na]
+                                .iter()
+                                .fold(0.0f32, |a, &b| a.max(b)) as f64
+                        })
+                        .collect()
+                });
+                let stock_at = |x: f64| match (column, &tops) {
+                    (Some(m), Some(t)) => {
+                        let i = ((x - m.grid.x0) / m.grid.dx - 0.5).round();
+                        if i < 0.0 || i as usize >= m.grid.nx {
+                            job.stock.radius
+                        } else {
+                            t[i as usize]
+                        }
+                    }
+                    _ => job.stock.radius,
+                };
+                let r_min = strategy::rotary_rough(
+                    &mut b,
+                    &dc,
+                    job.stock.radius,
+                    safe_r,
+                    o,
+                    column.map(|_| &stock_at as &dyn Fn(f64) -> f64),
+                )
+                .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
             }
             (Operation::Engrave(_) | Operation::Vcarve(_), shape) => {
