@@ -5,9 +5,15 @@
 # skips unless SOLIDCRAFT_CLI is set).
 name: CI
 
+# On main (each push), pull requests, every three hours and on demand. A run under way is
+# never cancelled: a newer push waits behind it (GitHub keeps only the newest waiting), so the
+# full suite always finishes on a recent main. The fast suite (fast.yml) gates the merges.
 on:
   push:
+    branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 */3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +21,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   check:
