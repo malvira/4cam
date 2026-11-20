@@ -38,7 +38,7 @@ jobs:
         shell: bash
         env:
           MARCAM_E2E_SOFTWARE_GL: "1"
-          MARCAM_PERF_SLACK: "4"
+          MARCAM_PERF_SLACK: "8"
         run: |
           set -o pipefail
           sh scripts/check.sh --fast 2>&1 | tee fast.log

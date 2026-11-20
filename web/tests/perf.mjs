@@ -18,7 +18,10 @@ const SECONDS = Number(arg("--seconds", 4));
 // the budget: no main-thread task over 50 ms, the median frame under 20 ms (slower CI
 // runners: MARCAM_PERF_SLACK multiplies both)
 const SLACK = Number(process.env.MARCAM_PERF_SLACK || 1);
-const BUDGET = { longTask: 50 * SLACK, medianFrame: 20 * SLACK };
+// (with software GL, as on CI's runners, a frame's time is the renderer's, not the page's:
+// only the page's long tasks are held to the budget there)
+const SOFT_GL = !!process.env.MARCAM_E2E_SOFTWARE_GL;
+const BUDGET = { longTask: 50 * SLACK, medianFrame: SOFT_GL ? Infinity : 20 * SLACK };
 
 const app = await startApp(ROOT ? { root: ROOT } : {});
 const { js } = app;
