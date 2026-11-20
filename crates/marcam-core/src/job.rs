@@ -543,6 +543,10 @@ pub struct Pocket {
     pub stepover: f64,
     pub feed: f64,
     pub plunge_feed: f64,
+    /// Ramp in (a rectangle): down to each level along the first pass, back and forth, at
+    /// this angle (degrees below the horizontal) instead of plunging; 0: plunge.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub ramp: f64,
     /// Smoothing tolerance (mm): fewer, smoother moves within it (see
     /// [`crate::smoothing`]); None: the type's default; 0: off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -673,6 +677,17 @@ pub struct Contour {
     /// Each tab's height above the bottom of the cut (mm).
     #[serde(default = "default_tab_height")]
     pub tab_height: f64,
+    /// Lead-in: a quarter arc of this radius (mm) from the waste side onto the contour,
+    /// tangent to it, instead of plunging on it; 0: none.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub lead_in: f64,
+    /// Lead-out: a quarter arc of this radius (mm) off the contour to the waste side; 0: none.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub lead_out: f64,
+}
+
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
 }
 
 fn is_zero_u32(v: &u32) -> bool {

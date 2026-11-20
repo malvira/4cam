@@ -205,8 +205,9 @@ pub fn input_schema(t: &ops::OperationType) -> Value {
 }
 
 /// Operation fields the plugin does not offer: marcam's defaults apply (tabs placed by hand,
-/// their size and a contour's direction are set in the app or a project; climb by default).
-pub const LEFT_AT_DEFAULT: [&str; 7] = [
+/// their size, a contour's direction and leads, a pocket's ramp are set in the app or a
+/// project; climb, no leads, plunging by default).
+pub const LEFT_AT_DEFAULT: [&str; 10] = [
     "ramp_angle",
     "smoothing",
     "regions",
@@ -214,6 +215,9 @@ pub const LEFT_AT_DEFAULT: [&str; 7] = [
     "tab_width",
     "tab_height",
     "direction",
+    "lead_in",
+    "lead_out",
+    "ramp",
 ];
 
 /// The package manifest (`plugin.json`), generated from the operation registry.

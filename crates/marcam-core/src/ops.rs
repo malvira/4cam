@@ -324,6 +324,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("top", "number", "mm", "Top of the pocket (default: stock top).").opt(Value::Null),
                 p("step_down", "number", "mm", "Depth per level.").min(0.01),
                 p("stepover", "number", "", "Stepover as a fraction of the tool diameter (shaped pockets: at most 0.7, so the loops' corners leave nothing).").min(0.05).max(1.0),
+                p("ramp", "number", "deg", "A rectangle: down to each level back and forth along the first pass at this angle below the horizontal, instead of plunging (0: plunge).").opt(json!(0.0)).min(0.0).max(45.0),
                 feed(),
                 plunge(),
                 smoothing(),
@@ -400,6 +401,8 @@ pub fn registry() -> Vec<OperationType> {
                 p("tab_at", "numbers", "", "Tabs placed by hand (a click on the outline in the 3D view): each a fraction of the way round the outline as written, so it stays put when replanned or the model is replaced.").opt(json!([])),
                 p("tab_width", "number", "mm", "Length of each tab along the outline.").opt(json!(4.0)).min(0.1),
                 p("tab_height", "number", "mm", "Height of each tab above the bottom of the cut.").opt(json!(1.0)).min(0.05),
+                p("lead_in", "number", "mm", "Lead-in: a quarter arc of this radius from the waste side onto the contour, tangent to it, instead of plunging on it (0: none; new operations: the tool's radius).").opt(json!(0.0)).min(0.0),
+                p("lead_out", "number", "mm", "Lead-out: a quarter arc of this radius off the contour to the waste side (0: none).").opt(json!(0.0)).min(0.0),
                 feed(),
                 plunge(),
                 smoothing(),
@@ -1042,6 +1045,8 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                     v.insert("depth".into(), json!(nice((0.3 * hz).max(0.5), 0.05)));
                     v.insert("step_down".into(), json!(depth));
                     v.insert("stepover".into(), json!(0.5));
+                    // ramped in, not plunged
+                    v.insert("ramp".into(), json!(3.0));
                 }
                 "drill" => {
                     v.insert("points".into(), json!([[nice(mx, 0.01), nice(my, 0.01)]]));
@@ -1074,6 +1079,9 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                         .and_then(|m| m.cut_direction.clone())
                         .unwrap_or_else(|| "climb".into());
                     v.insert("direction".into(), json!(dir));
+                    // in and out along arcs the tool's radius
+                    v.insert("lead_in".into(), json!(nice(d / 2.0, 0.05)));
+                    v.insert("lead_out".into(), json!(nice(d / 2.0, 0.05)));
                 }
                 _ => {
                     // over the part mesh, or the block

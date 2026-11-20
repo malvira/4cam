@@ -63,6 +63,7 @@ pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> 
             stepover: op.stepover,
             feed: op.feed,
             plunge_feed: op.plunge_feed,
+            ramp: 0.0,
             smoothing: None,
             regions: Vec::new(),
         };
@@ -121,16 +122,24 @@ pub fn pocket(
         if crate::budget::over() {
             break;
         }
-        // ramp in along X at the plunge feed, clear, then one finishing lap of the walls
-        enter(
-            b,
-            safe,
-            x0,
-            y0,
-            z + op.step_down.max(0.5),
-            z,
-            op.plunge_feed,
-        );
+        // in: down along X, back and forth at the ramp's angle (or straight down at the
+        // plunge feed), clear, then one finishing lap of the walls
+        let z_start = z + op.step_down.max(0.5);
+        if op.ramp > 0.0 && x1 - x0 > 1e-6 {
+            ramp_in(
+                b,
+                safe,
+                [x0, y0],
+                [x1, y0],
+                z_start,
+                z,
+                op.ramp,
+                op.feed,
+                op.plunge_feed,
+            );
+        } else {
+            enter(b, safe, x0, y0, z_start, z, op.plunge_feed);
+        }
         zigzag(b, [x0, x1, y0, y1], z, op.stepover * d, op.feed);
         for (x, y) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)] {
             b.line3(x, y, z, UP, op.feed);
@@ -138,6 +147,51 @@ pub fn pocket(
         leave(b, safe);
     }
     Ok(())
+}
+
+/// Down from `z_start` to `z` along the line from `a` to `b` and back, at `angle` degrees below
+/// the horizontal (fed so the tip falls no faster than `plunge`), ending at `a` at depth.
+#[allow(clippy::too_many_arguments)]
+fn ramp_in(
+    bld: &mut Builder,
+    safe: f64,
+    a: [f64; 2],
+    b: [f64; 2],
+    z_start: f64,
+    z: f64,
+    angle: f64,
+    feed: f64,
+    plunge: f64,
+) {
+    bld.rapid3(None, None, Some(safe));
+    bld.rapid3(Some(a[0]), Some(a[1]), None);
+    bld.rapid3(None, None, Some(z_start));
+    let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+    let drop = len * angle.to_radians().tan().max(1e-3);
+    let mut at = a;
+    let mut zz = z_start;
+    let mut guard = 0;
+    while zz > z + 1e-9 && guard < 10_000 {
+        let to = if at == a { b } else { a };
+        let next = (zz - drop).max(z);
+        // (the last leg partway, where it reaches the depth)
+        let frac = if zz - next < drop {
+            (zz - next) / drop
+        } else {
+            1.0
+        };
+        let p = [
+            at[0] + (to[0] - at[0]) * frac,
+            at[1] + (to[1] - at[1]) * frac,
+        ];
+        let f = descent_feed([at[0], at[1], zz], [p[0], p[1], next], feed, plunge, 0.0);
+        bld.line3(p[0], p[1], next, UP, f);
+        at = if frac < 1.0 { p } else { to };
+        zz = next;
+        guard += 1;
+    }
+    // back to the start, at depth
+    bld.line3(a[0], a[1], z, UP, feed);
 }
 
 /// Largest spacing between a shaped pocket's offset loops, in tool diameters (see
@@ -386,6 +440,25 @@ pub fn contour(
     if (area > 0.0) != want_ccw {
         path.reverse();
     }
+    // with leads: start in the middle of the longest edge, so the arcs lie along a straight
+    // wall (from a corner, the lead-in's start would be past the next wall)
+    if op.lead_in > 0.0 || op.lead_out > 0.0 {
+        let n = path.len();
+        let k = (0..n)
+            .max_by(|&i, &j| {
+                let l = |i: usize| {
+                    let (a, b) = (path[i], path[(i + 1) % n]);
+                    (b[0] - a[0]).hypot(b[1] - a[1])
+                };
+                l(i).total_cmp(&l(j))
+            })
+            .unwrap_or(0);
+        let (a, b) = (path[k], path[(k + 1) % n]);
+        let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+        let mut rotated = vec![mid];
+        rotated.extend((1..=n).map(|i| path[(k + i) % n]));
+        path = rotated;
+    }
     let top = op.top.unwrap_or(stock.max[2]);
     let bottom = top - op.depth;
     // tabs: the last levels go over them, at the tab's top, for the tab's length plus the tool
@@ -403,18 +476,84 @@ pub fn contour(
     } else {
         "--- contour (with tabs) ---"
     });
+    // the leads: quarter arcs on the waste side (away from the part: outside an outline,
+    // inside a hole), tangent to the contour where it starts and ends
+    let ccw = (0..path.len())
+        .map(|i| {
+            let (a, b) = (path[i], path[(i + 1) % path.len()]);
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum::<f64>()
+        > 0.0;
+    let waste_left = (op.side == "inside") == ccw;
+    let unit = |a: [f64; 2], b: [f64; 2]| {
+        let l = (b[0] - a[0]).hypot(b[1] - a[1]).max(1e-12);
+        [(b[0] - a[0]) / l, (b[1] - a[1]) / l]
+    };
+    let side = |t: [f64; 2]| {
+        if waste_left {
+            [-t[1], t[0]]
+        } else {
+            [t[1], -t[0]]
+        }
+    };
+    let p0 = path[0];
+    let t_in = unit(p0, path[1]);
+    let t_out = unit(path[path.len() - 1], p0);
+    const ARC: usize = 8;
+    let arc_in: Vec<[f64; 2]> = if op.lead_in > 0.0 {
+        let (n, r) = (side(t_in), op.lead_in);
+        let c = [p0[0] + n[0] * r, p0[1] + n[1] * r];
+        (0..=ARC)
+            .map(|k| {
+                let th = std::f64::consts::FRAC_PI_2 * k as f64 / ARC as f64;
+                let (cs, sn) = (th.cos(), th.sin());
+                [
+                    c[0] - r * (cs * t_in[0] + sn * n[0]),
+                    c[1] - r * (cs * t_in[1] + sn * n[1]),
+                ]
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let arc_out: Vec<[f64; 2]> = if op.lead_out > 0.0 {
+        let (n, r) = (side(t_out), op.lead_out);
+        let c = [p0[0] + n[0] * r, p0[1] + n[1] * r];
+        (1..=ARC)
+            .map(|k| {
+                let th = std::f64::consts::FRAC_PI_2 * k as f64 / ARC as f64;
+                let (cs, sn) = (th.cos(), th.sin());
+                [
+                    c[0] + r * (-cs * n[0] + sn * t_out[0]),
+                    c[1] + r * (-cs * n[1] + sn * t_out[1]),
+                ]
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     for z in zs {
         if crate::budget::over() {
             break;
         }
-        let [x, y] = path[0];
+        // down beside the contour (on the waste side) and in along the arc, or onto it
+        let [x, y] = arc_in.first().copied().unwrap_or(p0);
         enter(b, safe, x, y, z + op.step_down.max(0.5), z, op.plunge_feed);
+        for q in arc_in.iter().skip(1) {
+            b.line3(q[0], q[1], z, UP, op.feed);
+        }
         if z >= tab_top - 1e-9 || tabs.is_empty() {
             for p in path.iter().skip(1).chain(std::iter::once(&path[0])) {
                 b.line3(p[0], p[1], z, UP, op.feed);
             }
         } else {
             contour_with_tabs(b, &path, &tabs, z, tab_top, op);
+        }
+        // off along the arc (at the tab's top if it ended over one)
+        let zo = b.p3.map_or(z, |p| p[2]);
+        for q in &arc_out {
+            b.line3(q[0], q[1], zo, UP, op.feed);
         }
         leave(b, safe);
     }
