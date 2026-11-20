@@ -43,7 +43,11 @@ function startWorker(which = "main") {
     simCallDone(p.cmd);
     ok ? p.resolve({ result, ms }) : p.reject(new Error(error));
   };
-  w.onerror = (ev) => setStatus(`Engine failed to start: ${ev.message || "see console"}`, "error");
+  w.onerror = (ev) => {
+    // (kept for diagnostics: a worker that dies leaves its calls unanswered)
+    (window.__marcam.workerErrors ||= []).push(`${which}: ${ev.message || "error"}`);
+    setStatus(`Engine failed to start: ${ev.message || "see console"}`, "error");
+  };
   workers[which] = w;
 }
 startWorker("main");
@@ -124,7 +128,7 @@ function engine(cmd, ...args) {
   simCallStart(cmd);
   const which = SIM_WORKER.has(cmd) ? "sim" : "main";
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject, cmd, worker: which });
+    pending.set(id, { resolve, reject, cmd, worker: which, t0: performance.now() });
     workers[which].postMessage({ id, cmd, args });
   });
 }
@@ -140,7 +144,9 @@ const state = {
   tab: 0,
   three: null, // lazily loaded three.js view
 };
-window.__marcam = { state, engine, calls, cancelEngine, simRing };
+/** The engine calls not answered yet: command, worker and seconds waited (for diagnostics). */
+const inFlight = () => [...pending.values()].map((p) => ({ cmd: p.cmd, worker: p.worker, s: Math.round((performance.now() - p.t0) / 100) / 10 }));
+window.__marcam = { state, engine, calls, cancelEngine, simRing, inFlight };
 
 function setStatus(text, mode = "") {
   $("status").textContent = text;

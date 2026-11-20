@@ -198,7 +198,7 @@ async function waitDone(what, timeoutMs) {
   try {
     return await waitFor(async () => { const s = await state(); if (s === "error") throw new Error(await js("document.getElementById('error').textContent")); return s === "done"; }, what, timeoutMs);
   } catch (e) {
-    const why = await js("JSON.stringify({ state: document.body.dataset.state, status: document.getElementById('status').textContent, disabled: document.getElementById('generate').disabled, lock: window.__marcam.simLock?.busy, idle: window.__marcam.planIdle?.(), machining: document.body.dataset.machining })").catch(() => "?");
+    const why = await js("JSON.stringify({ state: document.body.dataset.state, status: document.getElementById('status').textContent, disabled: document.getElementById('generate').disabled, lock: window.__marcam.simLock?.busy, idle: window.__marcam.planIdle?.(), machining: document.body.dataset.machining, inFlight: window.__marcam.inFlight?.(), workerErrors: window.__marcam.workerErrors || [] })").catch(() => "?");
     throw new Error(`${e.message}: ${why}`);
   }
 }

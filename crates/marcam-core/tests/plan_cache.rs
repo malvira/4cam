@@ -116,3 +116,37 @@ fn cached_plans_are_the_same_as_fresh_ones_and_only_edits_are_planned() {
         );
     }
 }
+
+/// An operation refused as too fine to plan is refused again from the cache, at once: the
+/// budget counts work, not time, so the same inputs give the same refusal (the browser plans
+/// a project when it opens and again on Generate).
+#[test]
+fn a_refusal_is_cached_too() {
+    let (_, job, mesh, _) = examples()
+        .into_iter()
+        .find(|(n, ..)| n.starts_with("plate.marcam.toml"))
+        .unwrap();
+    let fine = with(&job, |v| {
+        for p in v["programs"].as_array_mut().unwrap() {
+            for o in p["operations"].as_array_mut().unwrap() {
+                if o["type"] == "raster3d" {
+                    o["sample"] = 0.002.into();
+                    o["stepover"] = 0.002.into();
+                }
+            }
+        }
+    });
+    let mut cache = PlanCache::new();
+    let t0 = std::time::Instant::now();
+    let first = plan_with_mesh_cached(&fine, mesh.as_ref(), &mut cache)
+        .unwrap_err()
+        .to_string();
+    let t1 = t0.elapsed();
+    assert!(first.contains("too fine to plan"), "{first}");
+    let t2 = std::time::Instant::now();
+    let again = plan_with_mesh_cached(&fine, mesh.as_ref(), &mut cache)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(again, first);
+    assert!(t2.elapsed() * 5 < t1, "{:?} then {:?}", t1, t2.elapsed());
+}

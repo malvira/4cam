@@ -237,6 +237,9 @@ struct CachedOp {
     exit: (Option<f64>, Option<f64>, f64, Option<[f64; 3]>),
     /// What it warned about.
     warnings: Vec<String>,
+    /// Refused as too fine to plan ([`too_fine`]): the same inputs are refused again at once
+    /// (the budget counts work, not time, so the outcome is the same).
+    refused: Option<String>,
 }
 
 impl PlanCache {
@@ -460,6 +463,26 @@ pub fn is_surface_op(op: &Operation) -> bool {
     matches!(op, Operation::Engrave(_) | Operation::Vcarve(_))
 }
 
+/// Keep refusal `e` of the operation with cache key `key`: the same inputs are refused again
+/// without planning them. Returns `e`.
+fn refuse(cache: Option<&mut PlanCache>, key: Option<u64>, e: Error) -> Error {
+    if let (Some(cache), Some(key)) = (cache, key) {
+        if cache.map.len() >= PlanCache::MAX_OPS {
+            cache.map.clear();
+        }
+        cache.map.insert(
+            key,
+            CachedOp {
+                moves: Vec::new(),
+                exit: (None, None, 0.0, None),
+                warnings: Vec::new(),
+                refused: Some(e.to_string()),
+            },
+        );
+    }
+    e
+}
+
 /// The error for an operation past its planning budget ([`budget`]).
 fn too_fine(program: &str, op: &Operation) -> Error {
     Error::Invalid(format!(
@@ -624,6 +647,9 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
         if let (Some(cache), Some(key)) = (ctx.cache.as_deref_mut(), key) {
             if let Some(hit) = cache.map.get(&key) {
                 cache.hits += 1;
+                if let Some(why) = &hit.refused {
+                    return Err(Error::Invalid(why.clone()));
+                }
                 let mut moves = hit.moves.clone();
                 if let Some(Move::Operation { id, .. }) = moves.first_mut() {
                     *id = *next_op;
@@ -954,7 +980,11 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 }
                 // (past the budget: failing, nothing to smooth)
                 if budget::over() {
-                    return Err(too_fine(&prog.name, op));
+                    return Err(refuse(
+                        ctx.cache.as_deref_mut(),
+                        key,
+                        too_fine(&prog.name, op),
+                    ));
                 }
                 // smoothed in the machine frame, before any conversion to general moves
                 if smooth_tol > 0.0 {
@@ -977,7 +1007,11 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             _ => unreachable!("tool shape validated above"),
         }
         if budget::over() {
-            return Err(too_fine(&prog.name, op));
+            return Err(refuse(
+                ctx.cache.as_deref_mut(),
+                key,
+                too_fine(&prog.name, op),
+            ));
         }
         // a number that is not one (a strategy dividing by a zero radius, say) is stopped
         // here, with the operation named, before anything downstream sizes work by it
@@ -1004,6 +1038,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     moves: b.moves[cache_from..].to_vec(),
                     exit: (b.x, b.r, b.a, b.p3),
                     warnings: b.warnings[warn_from..].to_vec(),
+                    refused: None,
                 },
             );
         }
