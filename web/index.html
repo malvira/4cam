@@ -298,6 +298,19 @@
       <div><label>Material <input id="sdMaterial" list="sdMaterials" placeholder="not set" autocomplete="off" size="16"></label>
         <span class="small muted">picks the tools' cutting data for it (feeds, depths, stepovers)</span></div>
       <datalist id="sdMaterials"></datalist>
+      <details id="sdPostBox" class="sd-post"><summary>G-code output</summary>
+        <div class="sd-dims">
+          <label title="The work coordinate system the programs run in (written after the machine's start lines)">Work offset <select id="sdWork" aria-label="Work offset">
+            <option value="">as the machine has it</option>
+            <option>G54</option><option>G55</option><option>G56</option><option>G57</option><option>G58</option><option>G59</option>
+            <option>G59.1</option><option>G59.2</option><option>G59.3</option>
+          </select></label>
+          <label><input type="checkbox" id="sdLineNums"> number the lines (N10, N20...)</label>
+          <label><input type="checkbox" id="sdNoComments"> no comments</label>
+        </div>
+        <label class="sd-lines">Start lines (after the machine's; {tool}, {rpm}, {safe} filled in) <textarea id="sdHeader" rows="2" spellcheck="false" aria-label="Lines written at the start"></textarea></label>
+        <label class="sd-lines">End lines (before the machine's) <textarea id="sdFooter" rows="2" spellcheck="false" aria-label="Lines written at the end"></textarea></label>
+      </details>
     </fieldset>
     <div id="sdWarn" class="error hidden" role="alert"></div>
     <div class="row sd-buttons">

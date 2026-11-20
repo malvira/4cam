@@ -181,6 +181,15 @@ pub fn post_lines(
         out.push(format!("({c})"));
     }
     out.extend(machine.preamble.iter().cloned());
+    // the setup's own: its work offset, its header lines
+    let opts = tp.post.clone().unwrap_or_default();
+    let tool0 = tp.tool.as_ref().map_or(0, |t| t.0);
+    if let Some(w) = &opts.work_offset {
+        out.push(w.clone());
+    }
+    for line in &opts.header {
+        out.push(fill(line, tool0, 0, &safe));
+    }
     for note in &tp.notes {
         out.push(format!("({note})"));
     }
@@ -211,9 +220,57 @@ pub fn post_lines(
                 id,
                 kind,
                 arcs: fit,
+                cycle,
             } => {
                 marks.push((*id, kind.clone(), out.len()));
                 arc_tol = *fit;
+                if let Some(c) = cycle {
+                    if machine.canned_cycles && machine.axes.is_identity() {
+                        // the holes as one drilling cycle, from the safe height and back to
+                        // it (G98); the planned moves are what it does
+                        if s.z.is_none_or(|z| (z - c.safe).abs() > 1e-9) {
+                            out.push(format!("G0 {}", word(2, c.safe)));
+                        }
+                        let inverse = machine.feed_mode == FeedMode::InverseTime;
+                        if inverse {
+                            // (canned cycles take units per minute)
+                            out.push("G94".into());
+                        }
+                        let g = if c.peck.is_some() { "G83" } else { "G81" };
+                        let q = c.peck.map(|q| format!(" Q{}", num(q))).unwrap_or_default();
+                        for p in &c.points {
+                            out.push(format!(
+                                "G98 {g} {} {} {} R{}{q} F{:.0}",
+                                word(0, p[0]),
+                                word(1, p[1]),
+                                word(2, c.bottom),
+                                num(c.r),
+                                c.feed
+                            ));
+                        }
+                        out.push("G80".into());
+                        if inverse {
+                            out.push("G93".into());
+                        }
+                        if let Some(p) = c.points.last() {
+                            s.x = Some(p[0]);
+                            s.y = Some(p[1]);
+                        }
+                        s.z = Some(c.safe);
+                        // its moves: written by the cycle
+                        skip = tp.moves[mi + 1..]
+                            .iter()
+                            .take_while(|m| {
+                                !matches!(m, Move::Operation { .. } | Move::ToolChange { .. })
+                            })
+                            .count();
+                    } else {
+                        out.push(
+                            "(drilling: written as moves; this machine's post has no canned cycles)"
+                                .into(),
+                        );
+                    }
+                }
             }
             Move::Pose { tip, axis, feed } => {
                 let a = match crate::kinematics::solve_a(*axis, s.a) {
@@ -489,10 +546,60 @@ pub fn post_lines(
     }
     before.push(out.len());
     let tool = tp.tool.as_ref().map_or(0, |t| t.0);
+    for line in &opts.footer {
+        out.push(fill(line, tool, 0, &safe));
+    }
     for line in &machine.postamble {
         out.push(fill(line, tool, 0, &safe));
+    }
+    // without comments, numbered: the lines kept, and where each old line went
+    if opts.no_comments || opts.line_numbers {
+        let mut kept = Vec::with_capacity(out.len());
+        // (the number of lines kept before each old line)
+        let mut to_new = Vec::with_capacity(out.len() + 1);
+        for line in out {
+            to_new.push(kept.len());
+            let line = if opts.no_comments {
+                strip_comments(&line)
+            } else {
+                line
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            kept.push(line);
+        }
+        to_new.push(kept.len());
+        if opts.line_numbers {
+            for (i, l) in kept.iter_mut().enumerate() {
+                *l = format!("N{} {l}", 10 * (i + 1));
+            }
+        }
+        for m in &mut marks {
+            m.2 = to_new[m.2.min(to_new.len() - 1)];
+        }
+        for b in &mut before {
+            *b = to_new[(*b).min(to_new.len() - 1)];
+        }
+        out = kept;
     }
     let mut text = out.join("\n");
     text.push('\n');
     (text, marks, before[1..].to_vec())
+}
+
+/// A G-code line without its comments (`(...)` and from `;` on); lines of their own go.
+fn strip_comments(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut depth = 0;
+    for c in line.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            ';' if depth == 0 => break,
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }

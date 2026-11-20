@@ -468,6 +468,15 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         setMm("sdBz", d.z);
         setMm("sdLen", sp.length);
       }
+      // the setup's G-code options
+      const po = preset.post || {};
+      $("sdWork").value = po.work_offset ?? "";
+      $("sdLineNums").checked = !!po.line_numbers;
+      $("sdNoComments").checked = !!po.no_comments;
+      $("sdHeader").value = (po.header || []).join("\n");
+      $("sdFooter").value = (po.footer || []).join("\n");
+      $("sdPostBox").open = !!(po.work_offset || po.line_numbers || po.no_comments || po.header?.length || po.footer?.length);
+      cur.presetPost = JSON.stringify(po);
       setMm("sdChuck", preset.chuck);
       setMm("sdJaws", preset.jaws);
       setMm("sdChuckFit", preset.chuck);
@@ -501,7 +510,17 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         $("sdWarn").classList.remove("hidden");
         return;
       }
+      // G-code options: only what is set
+      const post = {};
+      if ($("sdWork").value) post.work_offset = $("sdWork").value;
+      const linesOf = (id) => $(id).value.split("\n").map((l) => l.trim()).filter(Boolean);
+      if (linesOf("sdHeader").length) post.header = linesOf("sdHeader");
+      if (linesOf("sdFooter").length) post.footer = linesOf("sdFooter");
+      if ($("sdLineNums").checked) post.line_numbers = true;
+      if ($("sdNoComments").checked) post.no_comments = true;
       const cfg = {
+        post,
+        postChanged: JSON.stringify(post) !== c.presetPost,
         mode: c.mode,
         name: c.mode === "new" ? $("sdName").value.trim() || "untitled" : undefined,
         setupName: c.mode === "new" ? undefined : $("sdName").value.trim() || undefined,

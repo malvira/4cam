@@ -427,9 +427,24 @@ fn path_pocket(
     Ok(())
 }
 
-pub fn drill(b: &mut Builder, stock: &StockBox, safe: f64, op: &Drill) {
+/// Drill `op`'s holes, pecking. With `canned`, the operation's marker also carries them as a
+/// drilling cycle, for a post that writes canned cycles (the moves stay: the simulation and
+/// every other check use them).
+pub fn drill(b: &mut Builder, stock: &StockBox, safe: f64, op: &Drill, canned: bool) {
     let top = op.top.unwrap_or(stock.max[2]);
     let bottom = top - op.depth;
+    if canned && !op.points.is_empty() {
+        if let Some(crate::Move::Operation { cycle, .. }) = b.moves.last_mut() {
+            *cycle = Some(Box::new(crate::toolpath::DrillCycle {
+                points: op.points.clone(),
+                bottom,
+                r: top + op.retract,
+                peck: (op.peck > 1e-9 && op.peck < op.depth - 1e-9).then_some(op.peck),
+                feed: op.feed,
+                safe,
+            }));
+        }
+    }
     b.comment("--- drilling ---");
     for &[x, y] in &op.points {
         b.rapid3(None, None, Some(safe));

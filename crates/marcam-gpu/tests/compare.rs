@@ -175,6 +175,7 @@ fn gpu_reports_the_rapids_that_cut_like_the_cpu() {
         origin_comment: None,
         plunge_limit: None,
         ramp_angle: None,
+        post: None,
     };
     let g = sim::Grid::new(-20.0, 0.0, 0.1, 240);
     let cutter = |_| Some(marcam::dropcutter::Cutter::Flat { radius: 1.5 });

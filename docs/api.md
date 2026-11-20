@@ -38,6 +38,18 @@ below; JSON reads too). It holds:
   `length` are the previous setup's unless given. `carry::carry_stock` works it out for a
   project's jobs; `marcam run`, the web app, `marcam mcp` and the plugins do it.
 
+  G-code options per setup: `"post": {"work_offset": "G55", "header": ["M8"], "footer":
+  ["M9"], "line_numbers": true, "no_comments": true}`. The work offset (`G54`..`G59`,
+  `G59.1`..`G59.3`, `G54.1 P<n>`) and the header lines come after the machine's preamble,
+  the footer before its postamble (`{tool}`, `{rpm}`, `{safe}` filled in); line numbers are
+  `N10`, `N20`, ...; without comments, `(...)` and `;` comments go. A drill operation with
+  `"canned": true` (a vise setup) is written as one drilling cycle (`G98 G83 ... R Q F`, or
+  `G81` when it does not peck, then `G80`) on a machine whose post has
+  `"canned_cycles": true` (LinuxCNC's), switching from inverse-time feeds to G94 around it;
+  elsewhere as its moves, with a comment saying so. The toolpath keeps the moves, so the
+  simulation and the checks are the same; the verifier and the G-code time estimate read
+  the cycles as the moves they make.
+
 0.1 jobs upgrade automatically. Machine profiles and tool libraries are separate JSON files
 (`docs/profiles.md`).
 

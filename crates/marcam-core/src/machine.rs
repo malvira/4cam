@@ -71,6 +71,10 @@ pub struct Machine {
     pub dwell: Option<String>,
     #[serde(default)]
     pub postamble: Vec<String>,
+    /// The controller runs drilling canned cycles (G81, G83, G80, G98): a drill operation that
+    /// asks for one is written so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub canned_cycles: bool,
     /// How the toolpath's X, Y, Z and A become this machine's words, from its kinematics
     /// (filled in when a profile is loaded; identity for the usual XYZ + A about +X).
     #[serde(default, skip_serializing_if = "AxisMap::is_identity")]

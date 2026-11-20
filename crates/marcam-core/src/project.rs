@@ -334,6 +334,9 @@ pub struct Setup {
     pub spindle_rpm: u32,
     pub operations: Vec<ProjectOp>,
     pub outputs: Vec<Output>,
+    /// Its G-code options: work offset, header and footer lines, line numbers, comments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<job::PostOptions>,
 }
 
 impl Project {
@@ -427,6 +430,7 @@ impl Project {
                 spindle_rpm: job.spindle_rpm,
                 operations,
                 outputs,
+                post: None,
             }],
         }
     }
@@ -1061,6 +1065,11 @@ impl Project {
         }
         if let Some(c) = &frame.carry {
             v["carry"] = serde_json::to_value(c).map_err(|e| e.to_string())?;
+        }
+        if let Some(p) = &setup.post {
+            p.check()
+                .map_err(|e| format!("setup {:?}: {e}", setup.id))?;
+            v["post"] = serde_json::to_value(p).map_err(|e| e.to_string())?;
         }
         // the vise's jaws: the depth they grip
         if let Some(sb) = v

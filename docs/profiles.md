@@ -75,6 +75,7 @@ if a machine has none.
 | `surface_radius_pad` | `surface_speed` only: mm the controller adds to that distance (stock Carvera firmware: 15, i.e. 30 mm on the diameter; community firmware 2.1.0c: 0). |
 | `decimals` | Number of decimals in axis words. |
 | `origin_comment`, `preamble`, `reset_rotary`, `tool_change`, `spindle_on`, `dwell`, `postamble` | Lines of G-code. They may contain `{tool}`, `{rpm}` and `{safe}`. |
+| `canned_cycles` | `true`: the controller runs G81/G83 drilling cycles (G80, G98), so a drill operation asking for one is written so (LinuxCNC's profile has it; the Makera ones do not). Default `false`. |
 
 **Validation.** A profile is checked when it loads. The error names the field, for example
 `axis X: min -10 must be below max -50` or `axis letters repeat`.

@@ -1608,6 +1608,7 @@ fn fusion_machine(v: &Value, stem: &str) -> Result<Import, String> {
             surface_radius_pad: 0.0,
             decimals: 3,
             origin_comment: None,
+            canned_cycles: false,
             preamble: vec!["G21 G90 G94".into(), "G17".into()],
             reset_rotary: Some("G92 A0".into()),
             tool_change: "M6 T{tool}".into(),

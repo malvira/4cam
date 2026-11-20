@@ -251,6 +251,10 @@ details.menu[open] > summary { border-color: var(--accent); }
 .sd-stockmode { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 6px; }
 .sd-dims { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 4px 12px; margin-bottom: 6px; }
 .sd-dims label { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 13px; }
+.sd-post { margin-top: 8px; }
+.sd-post summary { cursor: pointer; font-size: 13px; }
+.sd-lines { display: flex; flex-direction: column; gap: 2px; font-size: 13px; margin-bottom: 6px; }
+.sd-lines textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; box-sizing: border-box; }
 .sd-dims input { width: 80px; }
 .sd-dims .hidden { display: none; }
 #sdStockSet { position: relative; }

@@ -63,6 +63,7 @@ fn toolpath(b: Builder) -> Toolpath {
         origin_comment: None,
         plunge_limit: None,
         ramp_angle: None,
+        post: None,
     }
 }
 

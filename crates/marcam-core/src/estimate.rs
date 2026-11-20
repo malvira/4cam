@@ -161,8 +161,8 @@ pub fn estimate_gcode(text: &str, dy: &Dynamics) -> Estimate {
             est.notes.push(s.to_string());
         }
     };
-    for (li, line) in text.lines().enumerate() {
-        let w = words(line);
+    for (li, line) in crate::verify::expand_cycles(text) {
+        let w = words(&line);
         if w.is_empty() {
             continue;
         }

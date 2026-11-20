@@ -2204,6 +2204,33 @@ try {
       `${JSON.stringify(s2.stock)}; ${JSON.stringify(frame.stock_box)}; turn ${frame.mesh?.turn}; tabs ${v.tabs}`);
   }
 
+  // 8s1c. the setup's G-code options: work offset, start and end lines, line numbers (Edit
+  // setup: nothing replanned, the G-code written again)
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate's dome mesh", 60000);
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate generated", 240000);
+    await js("document.getElementById('treeEditSetup').click(); true");
+    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 60000);
+    await js(`document.getElementById('sdPostBox').open = true; document.getElementById('sdWork').value = 'G55';
+      document.getElementById('sdHeader').value = 'M8'; document.getElementById('sdFooter').value = 'M9'; document.getElementById('sdLineNums').checked = true; true`);
+    await shot("33a_gcode_options");
+    await js("document.getElementById('sdOk').click(); true");
+    await waitFor(() => js("!document.getElementById('setupDialog').open && !!JSON.parse(document.getElementById('job').value).setups[0].post"), "the options saved", 60000);
+    await settle();
+    await clickGenerate();
+    await waitDone("generation with the options", 240000);
+    const g = await js("window.__marcam.state.result.programs[0].gcode");
+    const lines = g.trim().split(String.fromCharCode(10));
+    const post = JSON.parse(await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].post)"));
+    check("the setup's G-code options: work offset, start and end lines, numbered lines",
+      JSON.stringify(post) === JSON.stringify({ work_offset: "G55", header: ["M8"], footer: ["M9"], line_numbers: true }) &&
+      lines.every((l, i) => l.startsWith(`N${10 * (i + 1)} `)) && lines.some((l) => / G55$/.test(l)) && lines.some((l) => / M8$/.test(l)) && lines.some((l) => / M9$/.test(l)),
+      `${JSON.stringify(post)}; ${lines.slice(0, 6).join(" | ")}`);
+  }
+
   // 8s2. (Mar) parting: a new operation type, placed by a click on the part (snapped to a
   // band's end when near it), typed or defaulted to the part's back; it plans with a time
   {

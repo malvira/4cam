@@ -94,6 +94,97 @@ pub(crate) fn words(line: &str) -> Vec<(char, f64)> {
     out
 }
 
+/// G-code with its drilling canned cycles (G81, G83 with G98 or G99, ended by G80 or another
+/// motion) written out as the moves they make, each line with the index of the line it came
+/// from. Other lines are as they are.
+pub(crate) fn expand_cycles(text: &str) -> Vec<(usize, std::borrow::Cow<'_, str>)> {
+    use std::borrow::Cow;
+    if !text.contains("G81") && !text.contains("G83") {
+        return text
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (i, Cow::Borrowed(l)))
+            .collect();
+    }
+    let f3 = |v: f64| format!("{v:.4}");
+    let mut out = Vec::new();
+    // the cycle in force: (83 or 81, Z, R, Q, F), the return to the initial level (G98)
+    let mut cycle: Option<(u32, f64, f64, f64, f64)> = None;
+    let mut initial_level = true;
+    let mut z_now: Option<f64> = None;
+    let mut initial: f64 = 0.0;
+    for (i, line) in text.lines().enumerate() {
+        let w = words(line);
+        let g: Vec<u32> = w
+            .iter()
+            .filter(|(c, _)| *c == 'G')
+            .map(|(_, v)| (v * 10.0).round() as u32)
+            .collect();
+        let val = |c: char| w.iter().find(|(k, _)| *k == c).map(|(_, v)| *v);
+        if g.contains(&980) {
+            initial_level = true;
+        }
+        if g.contains(&990) {
+            initial_level = false;
+        }
+        let starts = g.iter().find(|&&x| x == 810 || x == 830).copied();
+        if g.contains(&800) || g.iter().any(|&x| x <= 30) {
+            cycle = None;
+        }
+        if let Some(s) = starts {
+            if cycle.is_none() {
+                initial = z_now.unwrap_or(0.0);
+            }
+            let prev = cycle.unwrap_or((s / 10, 0.0, 0.0, 0.0, 0.0));
+            cycle = Some((
+                s / 10,
+                val('Z').unwrap_or(prev.1),
+                val('R').unwrap_or(prev.2),
+                val('Q').unwrap_or(prev.3),
+                val('F').unwrap_or(prev.4),
+            ));
+        }
+        let hole =
+            cycle.is_some() && (starts.is_some() || val('X').is_some() || val('Y').is_some());
+        if !hole {
+            if let Some(z) = val('Z') {
+                z_now = Some(z);
+            }
+            out.push((i, Cow::Borrowed(line)));
+            continue;
+        }
+        let (kind, bottom, r, q, f) = cycle.expect("in a cycle");
+        let mut xy = String::new();
+        if let Some(x) = val('X') {
+            xy += &format!(" X{}", f3(x));
+        }
+        if let Some(y) = val('Y') {
+            xy += &format!(" Y{}", f3(y));
+        }
+        let back = if initial_level { initial.max(r) } else { r };
+        let mut push = |s: String| out.push((i, Cow::Owned(s)));
+        push(format!("G0{xy}"));
+        push(format!("G0 Z{}", f3(r)));
+        if kind == 83 && q > 0.0 {
+            let mut depth = r;
+            while depth > bottom + 1e-9 {
+                let next = (depth - q).max(bottom);
+                push(format!("G1 Z{} F{f}", f3(next)));
+                push(format!("G0 Z{}", f3(r)));
+                if next > bottom + 1e-9 {
+                    push(format!("G0 Z{}", f3(next + 0.2)));
+                }
+                depth = next;
+            }
+        } else {
+            push(format!("G1 Z{} F{f}", f3(bottom)));
+        }
+        push(format!("G0 Z{}", f3(back)));
+        z_now = Some(back);
+    }
+    out
+}
+
 /// Check G-code text; returns the issues found (empty means clean).
 pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
     let mut issues = Vec::new();
@@ -101,8 +192,11 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
     let mut y: Option<f64> = None;
     let mut motion = None::<u32>;
     let mut feed = None::<f64>;
-    for (idx, line) in text.lines().enumerate() {
-        let w = words(line);
+    // F as the program reads it: the machine's way, or units per minute after G94 (canned
+    // cycles), inverse time after G93
+    let mut mode = limits.feed_mode;
+    for (idx, line) in expand_cycles(text) {
+        let w = words(&line);
         let mut nx = None;
         let mut ny = None;
         let mut nz = None;
@@ -116,6 +210,10 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                     match g {
                         0..=3 => motion = Some(g),
                         92 => g92 = true,
+                        93 => mode = FeedMode::InverseTime,
+                        94 if limits.feed_mode == FeedMode::InverseTime => {
+                            mode = FeedMode::DegreesAsLength
+                        }
                         _ => {}
                     }
                 }
@@ -186,7 +284,7 @@ pub fn verify(text: &str, limits: &Limits) -> Vec<Issue> {
                         }
                         let radius = (y0.dhypot(z0) + y1.dhypot(z1)) / 2.0;
                         let len = crate::machine::feed_length(
-                            limits.feed_mode,
+                            mode,
                             limits.surface_radius_pad,
                             [dx, y1 - y0, dz, ta - a],
                             radius,

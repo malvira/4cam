@@ -789,6 +789,8 @@ export function setupProject(ctx) {
     }
     if (cfg.machine) s.machine = cfg.machine;
     if (cfg.setupName) s.name = cfg.setupName;
+    if (cfg.post && Object.keys(cfg.post).length) s.post = cfg.post;
+    else if (cfg.post) delete s.post;
     s.holding = { kind: kind === "vise" ? "vise" : "rotary_chuck", tailstock: kind !== "vise" && !!cfg.tailstock };
     const model = ownModel(doc, s);
     if (cfg.carry) {
@@ -1058,7 +1060,7 @@ export function setupProject(ctx) {
     const axis = kind === "vise" ? Object.entries(UP_AXIS).find(([, v]) => v === (m?.axis ?? "x"))?.[0] ?? "z" : m?.axis ?? "x";
     const cfg = await dialog.open("edit", {
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
-      stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null, previewTris,
+      stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null, previewTris, post: s.post,
       canCarry: doc.setups.indexOf(s) > 0,
     });
     if (!cfg) return false;
@@ -1075,12 +1077,17 @@ export function setupProject(ctx) {
       }
       const s1 = doc.setups.find((x) => x.id === s.id);
       if (cfg.setupName) s1.name = cfg.setupName;
+      // its G-code options (nothing planned changes: the G-code is written again)
+      if (cfg.postChanged) {
+        if (Object.keys(cfg.post).length) s1.post = cfg.post;
+        else delete s1.post;
+      }
       // the jaws' grip (nothing moves: the warnings change)
       if (kind === "vise") {
         if (cfg.jaws != null) s1.holding = { ...s1.holding, jaws: r3(cfg.jaws) };
         else if (s1.holding) delete s1.holding.jaws;
       }
-      const what = (cfg.material ?? null) !== (s.material ?? null) ? `material ${cfg.material ?? "not set"}` : "renamed";
+      const what = (cfg.material ?? null) !== (s.material ?? null) ? `material ${cfg.material ?? "not set"}` : cfg.postChanged ? "G-code options" : "renamed";
       await commitSetupChange(doc, { removed: [], added: [] }, { label: `Setup "${s1.name || s1.id}": ${what}.`, job: before });
       if (changed.length) setStatus(`Material ${cfg.material ?? "not set"}: ${changed.length} cutting value${changed.length > 1 ? "s" : ""} updated (typed ones kept). Generate to plan it again`, "ready");
       return { removed: [], added: [], recomputed: [], material: changed };

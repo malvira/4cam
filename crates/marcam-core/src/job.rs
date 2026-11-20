@@ -35,10 +35,60 @@ pub struct Job {
     /// The stock is what the previous setup left (simulated), turned and moved as this says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub carry: Option<Carry>,
+    /// How the G-code is written beyond the machine's post: work offset, header and footer
+    /// lines, line numbers, comments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<PostOptions>,
     /// That stock, once worked out ([`crate::carry::carry_stock`]; not saved): what planning
     /// and the simulation start from.
     #[serde(skip)]
     pub carried: Option<std::sync::Arc<crate::carry::Carried>>,
+}
+
+/// A setup's own G-code options, on top of the machine's post.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct PostOptions {
+    /// The work offset the program runs in (`G54` .. `G59`, `G59.1` .. `G59.3`, `G54.1 P1`
+    /// ..), written after the preamble; None: the controller's current one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_offset: Option<String>,
+    /// Lines written after the preamble (and the work offset), and before the postamble;
+    /// `{tool}`, `{rpm}` and `{safe}` filled in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footer: Vec<String>,
+    /// Number the lines (N10, N20, ...).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub line_numbers: bool,
+    /// Leave out the comments (a controller that dislikes them).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_comments: bool,
+}
+
+impl PostOptions {
+    /// What is wrong with them, if anything.
+    pub fn check(&self) -> Result<(), String> {
+        if let Some(w) = &self.work_offset {
+            let ok = matches!(
+                w.as_str(),
+                "G54" | "G55" | "G56" | "G57" | "G58" | "G59" | "G59.1" | "G59.2" | "G59.3"
+            ) || w.strip_prefix("G54.1 P").is_some_and(|n| {
+                !n.is_empty() && n.len() <= 3 && n.bytes().all(|c| c.is_ascii_digit())
+            });
+            if !ok {
+                return Err(format!(
+                    "work offset {w:?}: G54 to G59, G59.1 to G59.3, or G54.1 P1 and up"
+                ));
+            }
+        }
+        for l in self.header.iter().chain(&self.footer) {
+            if l.contains('\n') || l.contains('\r') {
+                return Err("a header or footer line holds a line break: one line each".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Stock carried over from the previous setup: its setup, and how a point there maps to this
@@ -668,6 +718,10 @@ pub struct Pocket {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Drill {
     pub tool: u32,
+    /// Written as a canned cycle (G81, or G83 with pecks) on a machine whose post has them
+    /// (a vise setup); else the moves as planned.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub canned: bool,
     /// Rotary setups: the A angle (deg) the part is indexed to before this 3-axis
     /// operation (indexed 3+1). Vise setups: must be 0.
     #[serde(default)]

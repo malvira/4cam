@@ -105,6 +105,7 @@ fn pose_program(moves: Vec<marcam::Move>) -> marcam::Toolpath {
         origin_comment: None,
         plunge_limit: None,
         ramp_angle: None,
+        post: None,
     }
 }
 

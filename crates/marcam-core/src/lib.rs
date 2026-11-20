@@ -850,7 +850,14 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     }
                     Operation::Face(o) => t3::face(&mut b, d, sb, safe_r, o).map_err(err)?,
                     Operation::Pocket(o) => t3::pocket(&mut b, d, sb, safe_r, o).map_err(err)?,
-                    Operation::Drill(o) => t3::drill(&mut b, sb, safe_r, o),
+                    // (a canned cycle: on a vise, the drill along Z)
+                    Operation::Drill(o) => t3::drill(
+                        &mut b,
+                        sb,
+                        safe_r,
+                        o,
+                        o.canned && job.stock_box.is_some() && o.index_a == 0.0,
+                    ),
                     Operation::Bore(o) => {
                         strategy::bore::bore(&mut b, d, sb, safe_r, o).map_err(err)?
                     }
@@ -1089,6 +1096,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
         reset_a: prog.reset_a,
         safe_r,
         moves: b.moves,
+        post: job.post.clone(),
         origin_comment: three.then(|| {
             "Zero: the setup's work coordinates, Z up (Z0 = top of the stock)".to_string()
         }),

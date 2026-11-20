@@ -73,6 +73,7 @@
     "name": "LinuxCNC 4-axis (XYZA), inverse-time feeds",
     "feed_mode": "inverse_time",
     "decimals": 3,
+    "canned_cycles": true,
     "origin_comment": "Zero: X0 front face, Y0/Z0 rotation axis, A rotates about X",
     "preamble": [
       "G21 G90 G17",

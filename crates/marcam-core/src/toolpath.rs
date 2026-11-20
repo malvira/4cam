@@ -44,6 +44,9 @@ pub enum Move {
         /// Its circles may be written as G2/G3 arcs, within this many mm (boring).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         arcs: Option<f64>,
+        /// Its moves may be written as one drilling cycle (a machine with canned cycles).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cycle: Option<Box<DrillCycle>>,
     },
     /// Load a tool and start the spindle.
     ToolChange { tool: u32, rpm: u32 },
@@ -103,6 +106,19 @@ impl Move {
     }
 }
 
+/// Holes drilled as a canned cycle: G81 (no `peck`) or G83, from the R plane `r` to `bottom`
+/// at `feed`, returning to the safe height between holes (G98).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DrillCycle {
+    pub points: Vec<[f64; 2]>,
+    pub bottom: f64,
+    pub r: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peck: Option<f64>,
+    pub feed: f64,
+    pub safe: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Toolpath {
     pub name: String,
@@ -125,6 +141,9 @@ pub struct Toolpath {
     /// angle of the program's operations (None: every descent keeps to the plunge feed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_angle: Option<f64>,
+    /// The setup's G-code options (work offset, header and footer, line numbers, comments).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<crate::job::PostOptions>,
 }
 
 /// Whether a descent of `drop` mm over `across` mm of travel (along the surface, not down) is
@@ -189,6 +208,7 @@ impl Builder {
             id,
             kind: kind.to_string(),
             arcs: None,
+            cycle: None,
         });
     }
 

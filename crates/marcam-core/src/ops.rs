@@ -350,6 +350,7 @@ pub fn registry() -> Vec<OperationType> {
                 p("top", "number", "mm", "Top (default: stock top).").opt(Value::Null),
                 p("peck", "number", "mm", "Depth per peck.").min(0.01),
                 p("retract", "number", "mm", "Clearance above the top between pecks.").min(0.0),
+                p("canned", "boolean", "", "Write the holes as a drilling canned cycle (G81, or G83 with pecks; R at the retract height) on a machine whose post has them, in a vise setup; else as the moves.").opt(json!(false)),
                 feed(),
             ],
             tool_shapes: &["flat"],
