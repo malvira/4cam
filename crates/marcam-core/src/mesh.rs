@@ -140,6 +140,26 @@ impl Mesh {
         self
     }
 
+    /// [`Mesh::oriented`] with a half `turn` between the axis mapping and the translation (a
+    /// turn that flips the part over keeps its triangles facing out).
+    pub fn oriented_turned(self, axis: Axis, turn: crate::job::Turn, translate: Vec3) -> Mesh {
+        if turn.is_none() {
+            return self.oriented(axis, translate);
+        }
+        let mut m = self.oriented(axis, [0.0; 3]);
+        for t in &mut m.triangles {
+            for p in t.iter_mut() {
+                let q = turn.apply(*p);
+                *p = [
+                    q[0] + translate[0],
+                    q[1] + translate[1],
+                    q[2] + translate[2],
+                ];
+            }
+        }
+        m
+    }
+
     /// The mesh turned by `a_deg` about +X (right-handed): where the part sits in machine
     /// coordinates with the rotary axis at A = `a_deg`.
     pub fn rotated_x(&self, a_deg: f64) -> Mesh {

@@ -32,6 +32,36 @@ pub struct Job {
     pub tools: Vec<Tool>,
     pub spindle_rpm: u32,
     pub programs: Vec<Program>,
+    /// The stock is what the previous setup left (simulated), turned and moved as this says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry: Option<Carry>,
+    /// That stock, once worked out ([`crate::carry::carry_stock`]; not saved): what planning
+    /// and the simulation start from.
+    #[serde(skip)]
+    pub carried: Option<std::sync::Arc<crate::carry::Carried>>,
+}
+
+/// Stock carried over from the previous setup: its setup, and how a point there maps to this
+/// setup's work coordinates (`turn` it, then add `shift`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Carry {
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Turn::is_none")]
+    pub turn: Turn,
+    #[serde(default)]
+    pub shift: [f64; 3],
+}
+
+impl Carry {
+    /// A point of the previous setup in this one.
+    pub fn map(&self, p: [f64; 3]) -> [f64; 3] {
+        let q = self.turn.apply(p);
+        [
+            q[0] + self.shift[0],
+            q[1] + self.shift[1],
+            q[2] + self.shift[2],
+        ]
+    }
 }
 
 fn default_clearance() -> f64 {
@@ -224,6 +254,60 @@ pub struct Part {
     pub mesh: Option<MeshSource>,
 }
 
+/// A half turn of the part (or stock) between setups: a flip about X or Y (the other side up),
+/// or a turn about Z (end for end in the vise). Turns compose: two flips about X and Y are a
+/// turn about Z.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Turn {
+    #[default]
+    None,
+    /// 180 degrees about X: Y and Z change sign.
+    X180,
+    /// 180 degrees about Y: X and Z change sign.
+    Y180,
+    /// 180 degrees about Z: X and Y change sign.
+    Z180,
+}
+
+impl Turn {
+    pub fn is_none(&self) -> bool {
+        *self == Turn::None
+    }
+
+    /// The signs it gives X, Y and Z.
+    pub fn signs(self) -> [f64; 3] {
+        match self {
+            Turn::None => [1.0, 1.0, 1.0],
+            Turn::X180 => [1.0, -1.0, -1.0],
+            Turn::Y180 => [-1.0, 1.0, -1.0],
+            Turn::Z180 => [-1.0, -1.0, 1.0],
+        }
+    }
+
+    /// The point turned.
+    pub fn apply(self, p: [f64; 3]) -> [f64; 3] {
+        let s = self.signs();
+        [s[0] * p[0], s[1] * p[1], s[2] * p[2]]
+    }
+
+    /// `self` after `first`.
+    pub fn after(self, first: Turn) -> Turn {
+        let (a, b) = (self.signs(), first.signs());
+        match [a[0] * b[0], a[1] * b[1], a[2] * b[2]] {
+            [x, y, _] if x > 0.0 && y > 0.0 => Turn::None,
+            [x, _, _] if x > 0.0 => Turn::X180,
+            [_, y, _] if y > 0.0 => Turn::Y180,
+            _ => Turn::Z180,
+        }
+    }
+
+    /// Whether it turns the part over (its top to the bottom).
+    pub fn flips(self) -> bool {
+        matches!(self, Turn::X180 | Turn::Y180)
+    }
+}
+
 /// Where the part mesh comes from and how it sits on the rotary axis.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeshSource {
@@ -232,7 +316,10 @@ pub struct MeshSource {
     /// Mesh axis that becomes the rotary X axis.
     #[serde(default)]
     pub axis: crate::mesh::Axis,
-    /// Translation applied after the axis mapping (mm).
+    /// Turned after the axis mapping (a setup that turns the part over or end for end).
+    #[serde(default, skip_serializing_if = "Turn::is_none")]
+    pub turn: Turn,
+    /// Translation applied after the axis mapping and the turn (mm).
     #[serde(default)]
     pub translate: [f64; 3],
     /// The file is a grayscale image (PNG or PGM) to build a relief from, not a mesh.
@@ -248,7 +335,7 @@ impl MeshSource {
             Some(r) => crate::relief::relief_mesh(&crate::relief::decode_gray(bytes)?, r),
             None => crate::Mesh::from_bytes(bytes)?,
         };
-        Ok(m.oriented(self.axis, self.translate))
+        Ok(m.oriented_turned(self.axis, self.turn, self.translate))
     }
 
     /// [`MeshSource::mesh`] from the file, relative to `dir`.

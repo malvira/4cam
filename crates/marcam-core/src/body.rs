@@ -186,6 +186,7 @@ pub fn body_project(
     let mut source = MeshSource {
         file: file.clone(),
         axis,
+        turn: Default::default(),
         translate: [0.0; 3],
         image: None,
     };

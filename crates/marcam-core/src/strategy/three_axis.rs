@@ -1083,9 +1083,59 @@ pub struct RestMap {
     pub nx: usize,
     pub ny: usize,
     pub top: Vec<f64>,
+    /// The lowest bottom of the material under the tool (a block turned over: what an earlier
+    /// side cut is gone below it); None: the block's bottom everywhere.
+    pub bot: Option<Vec<f64>>,
 }
 
 impl RestMap {
+    /// [`RestMap::new`], with each cell's bottom (`bottoms`, a block carried over from an
+    /// earlier setup: its other side's cuts).
+    pub fn with_bottoms(
+        hm: &crate::sim3::Heightmap3,
+        radius: f64,
+        bottoms: Option<&[f64]>,
+    ) -> RestMap {
+        let mut m = RestMap::new(hm, radius);
+        if let Some(b) = bottoms {
+            let (nx, ny, cell) = (hm.nx, hm.ny, hm.cell);
+            let k = (radius / cell).ceil() as isize;
+            let mut low = vec![f64::INFINITY; nx * ny];
+            for j in 0..ny as isize {
+                for i in 0..nx as isize {
+                    let mut v = f64::INFINITY;
+                    for dj in -k..=k {
+                        for di in -k..=k {
+                            let (a, c) = (i + di, j + dj);
+                            if a < 0 || c < 0 || a >= nx as isize || c >= ny as isize {
+                                continue;
+                            }
+                            let ci = c as usize * nx + a as usize;
+                            // (a cell cut through holds nothing)
+                            if hm.z[ci] > b[ci] {
+                                v = v.min(b[ci]);
+                            }
+                        }
+                    }
+                    low[j as usize * nx + i as usize] = v;
+                }
+            }
+            m.bot = Some(low);
+        }
+        m
+    }
+
+    /// The lowest the material goes under the tool centred at (x, y) (minus infinity: down to
+    /// the block's bottom).
+    pub fn bottom_at(&self, x: f64, y: f64) -> f64 {
+        let Some(b) = &self.bot else {
+            return f64::NEG_INFINITY;
+        };
+        let i = (((x - self.x0) / self.cell).max(0.0) as usize).min(self.nx - 1);
+        let j = (((y - self.y0) / self.cell).max(0.0) as usize).min(self.ny - 1);
+        b[j * self.nx + i]
+    }
+
     /// From the block left (`hm`) and the rest tool's radius.
     pub fn new(hm: &crate::sim3::Heightmap3, radius: f64) -> RestMap {
         let (nx, ny, cell) = (hm.nx, hm.ny, hm.cell);
@@ -1124,6 +1174,7 @@ impl RestMap {
             nx,
             ny,
             top,
+            bot: None,
         }
     }
 
@@ -1264,7 +1315,11 @@ pub fn raster3d_on(
                 // go as deep
                 let inside = |p: [f64; 2]| {
                     sel.is_none_or(|s| on_sel(dc, s, p[0], p[1]))
-                        && rest.is_none_or(|r| r.at(p[0], p[1]) > z_of(p[0], p[1]) + REST_MIN)
+                        && rest.is_none_or(|r| {
+                            r.at(p[0], p[1]) > z_of(p[0], p[1]) + REST_MIN
+                                // (and not all of it below this level's layer)
+                                && r.bottom_at(p[0], p[1]) < level + op.step_down
+                        })
                         && bigger.is_none_or(|g| g.cuts(p[0], p[1]))
                 };
                 masked_row(
@@ -1906,11 +1961,14 @@ fn adaptive_pocket(
 /// stepover's width) wherever it can stand without cutting into the part (plus what is
 /// left for the finish), coming down a helix (or plunging) where nothing is open, linking at
 /// depth across what it has cleared. `stock_top` is the material's top at a point (the stock,
-/// or what the operations before left).
+/// or what the operations before left), `stock_bottom` its bottom (a block carried over from
+/// an earlier setup: cut from its other side).
+#[allow(clippy::too_many_arguments)]
 pub fn adaptive_rough(
     b: &mut Builder,
     dc: &DropCutter3,
     stock_top: &dyn Fn(f64, f64) -> f64,
+    stock_bottom: &dyn Fn(f64, f64) -> f64,
     stock: &StockBox,
     safe: f64,
     op: &Raster3d,
@@ -1941,6 +1999,7 @@ pub fn adaptive_rough(
     // the tool's lowest over each point (inside the range), and the material's top
     let mut surf = vec![f64::INFINITY; n];
     let mut top_at = vec![f64::NEG_INFINITY; n];
+    let mut bot_at = vec![f64::NEG_INFINITY; n];
     for c in 0..n {
         if c % g.nx == 0 && crate::budget::over() {
             return Ok(());
@@ -1959,6 +2018,7 @@ pub fn adaptive_rough(
         }
         if inside_block {
             top_at[c] = stock_top(p[0], p[1]);
+            bot_at[c] = stock_bottom(p[0], p[1]);
         }
     }
     let top = top_at
@@ -1986,7 +2046,13 @@ pub fn adaptive_rough(
             break;
         }
         let allowed: Vec<bool> = surf.iter().map(|&s| s <= z + 1e-9).collect();
-        let stock_here: Vec<bool> = top_at.iter().map(|&t| t > z + 1e-6).collect();
+        // (material in this level's layer: above it and not all of it below)
+        let layer = op.step_down.max(d * 0.05);
+        let stock_here: Vec<bool> = top_at
+            .iter()
+            .zip(&bot_at)
+            .map(|(&t, &u)| t > z + 1e-6 && u < z + layer)
+            .collect();
         let cl = clear_level(g, &allowed, &stock_here, &mut open, params, None);
         plunges += cl.plunges;
         emit_adaptive(

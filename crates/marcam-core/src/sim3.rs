@@ -47,6 +47,10 @@ impl Heightmap3 {
     /// The job's stock as it comes: the block, or a bar lying in the vise (each row at the
     /// bar's top there, nothing beside it).
     pub fn of_job(job: &crate::Job, stock: &StockBox, cell: f64) -> Heightmap3 {
+        // what the setup before left, when it carries its stock over
+        if let Some(h) = job.carried.as_ref().and_then(|c| c.heightmap(stock, cell)) {
+            return h;
+        }
         let mut hm = Heightmap3::new(stock, cell);
         if let Some([yc, zc]) = job.stock_axis {
             let outline = job.stock.outline(1440);

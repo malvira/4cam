@@ -67,6 +67,15 @@ pub struct RadialMap {
 impl RadialMap {
     /// The bar as it comes: each cell at the stock's radius at its angle (a square, hex or
     /// rectangular bar is not round).
+    /// The job's bar as it comes: [`RadialMap::of_stock`], or what the setup before left when
+    /// it carries its stock over.
+    pub fn of_job(grid: Grid, job: &crate::Job) -> RadialMap {
+        job.carried
+            .as_ref()
+            .and_then(|c| c.radial(grid, &job.stock))
+            .unwrap_or_else(|| RadialMap::of_stock(grid, &job.stock))
+    }
+
     pub fn of_stock(grid: Grid, stock: &crate::job::Stock) -> RadialMap {
         let mut m = RadialMap::filled(grid, stock.radius);
         if stock.section.is_some() {

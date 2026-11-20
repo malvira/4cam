@@ -104,6 +104,19 @@ impl Default for Holding {
     }
 }
 
+/// A setup's part, stock and carry in its own work coordinates ([`Project::setup_frame`]).
+struct SetupFrame {
+    part: serde_json::Map<String, Value>,
+    stock: Stock,
+    stock_box: Option<job::StockBox>,
+    stock_axis: Option<[f64; 2]>,
+    carry: Option<job::Carry>,
+}
+
+fn is_zero3(v: &[f64; 3]) -> bool {
+    *v == [0.0; 3]
+}
+
 /// Stock shape. A setup with `from_previous` starts from the previous setup's result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "shape", rename_all = "snake_case")]
@@ -112,10 +125,19 @@ pub enum StockDef {
         radius: f64,
         length: f64,
     },
-    /// The stock left by the previous setup (simulated); its outer radius is used for planning.
+    /// The stock left by the previous setup (simulated), turned (`turn`: flipped over, or end
+    /// for end) and moved: re-zeroed where it was (its X and Y lowest corner, and its top for
+    /// a block, where they were), then by `offset`. The part turns and moves with it. A bar's
+    /// `radius` and `length` are the previous setup's when zero.
     FromPrevious {
+        #[serde(default)]
         radius: f64,
+        #[serde(default)]
         length: f64,
+        #[serde(default, skip_serializing_if = "job::Turn::is_none")]
+        turn: job::Turn,
+        #[serde(default, skip_serializing_if = "is_zero3")]
+        offset: [f64; 3],
     },
     /// Rectangular block in a vise (3-axis), corners in work coordinates (Z up).
     Box {
@@ -152,13 +174,12 @@ pub enum StockDef {
 impl StockDef {
     pub fn cylinder(&self) -> Stock {
         match *self {
-            StockDef::Cylinder { radius, length } | StockDef::FromPrevious { radius, length } => {
-                Stock {
-                    radius,
-                    length,
-                    section: None,
-                }
-            }
+            StockDef::Cylinder { radius, length }
+            | StockDef::FromPrevious { radius, length, .. } => Stock {
+                radius,
+                length,
+                section: None,
+            },
             StockDef::Square {
                 side,
                 length,
@@ -484,12 +505,21 @@ impl Project {
         let mut out = Vec::new();
         for s in &self.setups {
             if let Some(k) = s.kind.as_deref() {
-                let block = matches!(s.stock, StockDef::Box { .. });
+                // (stock from the previous setup: a block if that was in a vise)
+                let carried = matches!(s.stock, StockDef::FromPrevious { .. });
+                let block = match s.stock {
+                    StockDef::Box { .. } => true,
+                    StockDef::FromPrevious { .. } => {
+                        self.setup_frame(s).is_ok_and(|f| f.stock_box.is_some())
+                    }
+                    _ => false,
+                };
                 match k {
                     // (a block, or a bar lying in the vise along X)
-                    "vise" if matches!(s.stock, StockDef::FromPrevious { .. }) => out.push(
-                        format!("{}: a vise setup needs a block or a bar lying in it", s.id),
-                    ),
+                    "vise" if carried && !block => out.push(format!(
+                        "{}: a vise setup can take the stock of a previous vise setup, not of a rotary one",
+                        s.id
+                    )),
                     "rotary" | "indexed" if block => {
                         out.push(format!("{}: a {k} setup needs bar stock", s.id))
                     }
@@ -843,7 +873,107 @@ impl Project {
         Ok(job)
     }
 
-    fn setup_job_raw(&self, setup: &Setup, libraries: &[ToolLibrary]) -> Result<Job, String> {
+    /// Setup `setup`'s part, stock and carry in its own work coordinates: its own, or (stock
+    /// from the previous setup) the previous one's turned and moved.
+    fn setup_frame(&self, setup: &Setup) -> Result<SetupFrame, String> {
+        let k = self.setups.iter().position(|s| s.id == setup.id);
+        if let (
+            StockDef::FromPrevious {
+                radius,
+                length,
+                turn,
+                offset,
+            },
+            Some(k),
+        ) = (&setup.stock, k)
+        {
+            if k == 0 {
+                return Err(format!(
+                    "setup {:?}: the first setup cannot take its stock from a previous one",
+                    setup.id
+                ));
+            }
+            let prev_setup = &self.setups[k - 1];
+            let prev = self.setup_frame(prev_setup)?;
+            let (turn, offset) = (*turn, *offset);
+            // the previous stock's box: a block's, or a bar's on the axis (front at X0)
+            let pb = prev.stock_box.unwrap_or(job::StockBox {
+                min: [-prev.stock.length, -prev.stock.radius, -prev.stock.radius],
+                max: [0.0, prev.stock.radius, prev.stock.radius],
+            });
+            let corners: Vec<[f64; 3]> = (0..8)
+                .map(|i| {
+                    turn.apply([
+                        if i & 1 == 0 { pb.min[0] } else { pb.max[0] },
+                        if i & 2 == 0 { pb.min[1] } else { pb.max[1] },
+                        if i & 4 == 0 { pb.min[2] } else { pb.max[2] },
+                    ])
+                })
+                .collect();
+            let lo = |a: usize| corners.iter().map(|c| c[a]).fold(f64::INFINITY, f64::min);
+            let hi = |a: usize| {
+                corners
+                    .iter()
+                    .map(|c| c[a])
+                    .fold(f64::NEG_INFINITY, f64::max)
+            };
+            // re-zeroed: X (and a block's Y) from its lowest corner as before, a block's top
+            // where it was; a bar stays on the axis
+            let block = prev.stock_box.is_some();
+            let s = [
+                pb.min[0] - lo(0),
+                if block { pb.min[1] - lo(1) } else { 0.0 },
+                if block { pb.max[2] - hi(2) } else { 0.0 },
+            ];
+            let t = [s[0] + offset[0], s[1] + offset[1], s[2] + offset[2]];
+            let carry = job::Carry {
+                from: prev_setup.id.clone(),
+                turn,
+                shift: t,
+            };
+            let stock_box = prev.stock_box.map(|_| job::StockBox {
+                min: [lo(0) + t[0], lo(1) + t[1], lo(2) + t[2]],
+                max: [hi(0) + t[0], hi(1) + t[1], hi(2) + t[2]],
+            });
+            let stock_axis = prev.stock_axis.map(|[y, z]| {
+                let q = carry.map([0.0, y, z]);
+                [q[1], q[2]]
+            });
+            let mut stock = prev.stock.clone();
+            if *radius > 0.0 {
+                stock.radius = *radius;
+            }
+            if *length > 0.0 {
+                stock.length = *length;
+            }
+            // the part, turned and moved the same
+            let mut part = prev.part.clone();
+            if let Some(m) = part.get_mut("mesh") {
+                let mut src: job::MeshSource =
+                    serde_json::from_value(m.clone()).map_err(|e| e.to_string())?;
+                src.turn = turn.after(src.turn);
+                src.translate = carry.map(src.translate);
+                *m = serde_json::to_value(src).map_err(|e| e.to_string())?;
+            }
+            if let Some(pr) = part.get_mut("profile") {
+                let mut p: job::Profile =
+                    serde_json::from_value(pr.clone()).map_err(|e| e.to_string())?;
+                let sx = turn.signs()[0];
+                p.points = p.points.iter().map(|q| [sx * q[0] + t[0], q[1]]).collect();
+                if sx < 0.0 {
+                    p.points.reverse();
+                    p.beyond_front = None;
+                }
+                *pr = serde_json::to_value(p).map_err(|e| e.to_string())?;
+            }
+            return Ok(SetupFrame {
+                part,
+                stock,
+                stock_box,
+                stock_axis,
+                carry: Some(carry),
+            });
+        }
         let mut part = serde_json::Map::new();
         for id in &setup.part {
             let m = self
@@ -866,6 +996,30 @@ impl Project {
                 }
             }
         }
+        let stock = setup.stock.cylinder();
+        let (mut stock_box, mut stock_axis) = (None, None);
+        if let StockDef::Box { min, max } = setup.stock {
+            stock_box = Some(job::StockBox { min, max });
+        } else if setup.stock.is_bar()
+            && (setup.kind.as_deref() == Some("vise") || setup.holding.kind == "vise")
+        {
+            // a bar lying in the vise along X: the block round it, Z0 at its top
+            let (sb, axis) = stock.lying();
+            stock_box = Some(sb);
+            stock_axis = Some(axis);
+        }
+        Ok(SetupFrame {
+            part,
+            stock,
+            stock_box,
+            stock_axis,
+            carry: None,
+        })
+    }
+
+    fn setup_job_raw(&self, setup: &Setup, libraries: &[ToolLibrary]) -> Result<Job, String> {
+        let frame = self.setup_frame(setup)?;
+        let part = frame.part;
         let programs: Vec<Value> = setup
             .outputs
             .iter()
@@ -886,7 +1040,7 @@ impl Project {
                 }))
             })
             .collect();
-        let stock = setup.stock.cylinder();
+        let stock = frame.stock;
         let mut v = serde_json::json!({
             "schema_version": job::SCHEMA_VERSION,
             "stock": stock,
@@ -899,15 +1053,14 @@ impl Project {
         if let Some(m) = &setup.machine {
             v["machine"] = Value::String(m.clone());
         }
-        if let StockDef::Box { min, max } = setup.stock {
-            v["stock_box"] = serde_json::json!({"min": min, "max": max});
-        } else if setup.stock.is_bar()
-            && (setup.kind.as_deref() == Some("vise") || setup.holding.kind == "vise")
-        {
-            // a bar lying in the vise along X: the block round it, Z0 at its top
-            let (sb, axis) = stock.lying();
+        if let Some(sb) = frame.stock_box {
             v["stock_box"] = serde_json::json!({"min": sb.min, "max": sb.max});
+        }
+        if let Some(axis) = frame.stock_axis {
             v["stock_axis"] = serde_json::json!(axis);
+        }
+        if let Some(c) = &frame.carry {
+            v["carry"] = serde_json::to_value(c).map_err(|e| e.to_string())?;
         }
         // the vise's jaws: the depth they grip
         if let Some(sb) = v
@@ -915,11 +1068,14 @@ impl Project {
             .and_then(|b| serde_json::from_value::<job::StockBox>(b.clone()).ok())
         {
             let h = sb.max[2] - sb.min[2];
-            let grip = setup.holding.jaws.unwrap_or(if setup.stock.is_bar() {
-                0.4 * h
-            } else {
-                (h / 3.0).min(3.0)
-            });
+            let grip = setup
+                .holding
+                .jaws
+                .unwrap_or(if v.get("stock_axis").is_some() {
+                    0.4 * h
+                } else {
+                    (h / 3.0).min(3.0)
+                });
             v["jaws"] = serde_json::json!(grip.clamp(0.0, h));
         }
         self.number_tools(&mut v);
@@ -1219,6 +1375,8 @@ mod tests {
         s2.stock = StockDef::FromPrevious {
             radius: 12.5,
             length: 100.0,
+            turn: job::Turn::None,
+            offset: [0.0; 3],
         };
         s2.operations.remove(0);
         s2.outputs.remove(0);

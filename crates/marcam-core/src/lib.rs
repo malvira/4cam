@@ -6,6 +6,7 @@
 pub mod archive;
 pub mod body;
 pub mod budget;
+pub mod carry;
 pub mod collision;
 pub mod det;
 pub mod dropcutter;
@@ -183,7 +184,13 @@ fn rest_map(
     c: &Cutter,
 ) -> Result<strategy::three_axis::RestMap, String> {
     let hm = rest_heightmap(job, prior, before, sb, c)?;
-    Ok(strategy::three_axis::RestMap::new(&hm, c.radius()))
+    // (a block carried over: its other side's cuts too)
+    let bottoms = job.carried.as_ref().map(|k| k.bottoms(&hm));
+    Ok(strategy::three_axis::RestMap::with_bottoms(
+        &hm,
+        c.radius(),
+        bottoms.as_deref(),
+    ))
 }
 
 /// What the moves before (the earlier programs', and this one's so far) leave of the stock.
@@ -296,7 +303,9 @@ fn job_key(job: &Job, mesh: Option<&Mesh>) -> u64 {
         &job.tools,
     ))
     .unwrap_or_default();
-    hash_of(&(bits, rest, env!("CARGO_PKG_VERSION")))
+    // (the stock carried from the setup before)
+    let carried = job.carried.as_ref().map(|c| c.key());
+    hash_of(&(bits, rest, carried, env!("CARGO_PKG_VERSION")))
 }
 
 impl Ctx<'_> {
@@ -858,8 +867,11 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                                 "adaptive roughing needs a 3-axis vise setup".to_string()
                             ));
                         }
-                        // rest roughing: only where the moves before it left material
-                        let rest = if o.rest && !adaptive {
+                        // rest roughing: only where the moves before it left material (and
+                        // in a setup whose stock the one before left: always)
+                        let carried_rough =
+                            three && job.carried.is_some() && matches!(op, Operation::Rough3d(_));
+                        let rest = if (o.rest || carried_rough) && !adaptive {
                             if !matches!(op, Operation::Rough3d(_)) {
                                 return Err(err("rest is for 3D roughing only".to_string()));
                             }
@@ -914,7 +926,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         if adaptive {
                             // the material's top: the stock, or what the moves before left
                             let c = cutter.expect("set above");
-                            let hm = if o.rest {
+                            let hm = if o.rest || carried_rough {
                                 rest_heightmap(job, &ctx.prior, &b.moves, sb, &c).map_err(err)?
                             } else {
                                 sim3::Heightmap3::of_job(
@@ -923,8 +935,28 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                                     (c.radius() / 8.0).clamp(0.02, 0.25),
                                 )
                             };
-                            t3::adaptive_rough(&mut b, &dc, &|x, y| hm.at(x, y), sb, safe_r, o)
-                                .map_err(err)?
+                            // (a block carried over: its other side's cuts below)
+                            let bots = job.carried.as_ref().map(|k| k.bottoms(&hm));
+                            let bottom = |x: f64, y: f64| match &bots {
+                                Some(bs) => {
+                                    let i =
+                                        (((x - hm.x0) / hm.cell).max(0.0) as usize).min(hm.nx - 1);
+                                    let j =
+                                        (((y - hm.y0) / hm.cell).max(0.0) as usize).min(hm.ny - 1);
+                                    bs[j * hm.nx + i]
+                                }
+                                None => f64::NEG_INFINITY,
+                            };
+                            t3::adaptive_rough(
+                                &mut b,
+                                &dc,
+                                &|x, y| hm.at(x, y),
+                                &bottom,
+                                sb,
+                                safe_r,
+                                o,
+                            )
+                            .map_err(err)?
                         } else if matches!(op, Operation::Waterline(_)) {
                             t3::waterline(&mut b, &dc, sb, safe_r, o).map_err(err)?
                         } else if o.faces.is_empty() {
@@ -1141,7 +1173,7 @@ fn plan_cached(
     let rest = job.programs.iter().any(|p| {
         p.operations
             .iter()
-            .any(|o| matches!(o, Operation::Rough3d(r) if r.rest))
+            .any(|o| matches!(o, Operation::Rough3d(r) if r.rest || job.carried.is_some()))
     });
     let mut next_op = 0;
     let mut tps: Vec<Toolpath> = Vec::new();
@@ -1489,7 +1521,7 @@ pub fn simulate_job(
         )));
     }
     let part = part_fn(grid);
-    let mut stock = sim::RadialMap::of_stock(grid, &job.stock);
+    let mut stock = sim::RadialMap::of_job(grid, job);
     let cutters = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
     let intended = intended_tags(job, tps);
     let bodies = |t: u32| job.tool(t).map(collision::ToolBody::of);
@@ -1571,7 +1603,7 @@ pub fn collision_check(
                 "stock too long for the collision check".into(),
             ));
         }
-        let mut stock = sim::RadialMap::of_stock(grid, &job.stock);
+        let mut stock = sim::RadialMap::of_job(grid, job);
         let bar = (job.stock.radius, -len, 0.0);
         for (k, tp) in tps.iter().enumerate() {
             // the last program's stock is not needed after its last move that can touch

@@ -459,7 +459,7 @@ pub mod api {
             Err(e) => return err(e),
         };
         // replay to capture the stock after each program
-        let mut stock = sim::RadialMap::of_stock(res.stock.grid, &job.stock);
+        let mut stock = sim::RadialMap::of_job(res.stock.grid, &job);
         let cutters = |t: u32| {
             job.tool(t)
                 .and_then(|d| marcam::cutter_for(t, d.shape).ok())
@@ -1032,7 +1032,7 @@ pub mod api {
             Ok(i) => i,
             Err(e) => return err(e),
         };
-        let start = sim::RadialMap::of_stock(grid, &job.stock);
+        let start = sim::RadialMap::of_job(grid, &job);
         let keys = marcam::gpu_input::rotary_keys(&start);
         let x_range = match (mesh.as_ref().and_then(|m| m.bounds()), &job.part.profile) {
             (Some((lo, hi)), _) => (lo[0], hi[0]),
@@ -1230,7 +1230,7 @@ pub mod api {
                 .and_then(|d| marcam::cutter_for(t, d.shape).ok())
         };
         let pb = sim::Playback::new(
-            sim::RadialMap::of_stock(grid, &job.stock),
+            sim::RadialMap::of_job(grid, &job),
             &tps,
             &cutters,
             (dx * 2.0).min(0.1),
