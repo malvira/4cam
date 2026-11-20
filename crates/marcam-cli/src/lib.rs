@@ -6,6 +6,7 @@ use marcam::{
 };
 use std::io::Write;
 
+mod mcp;
 mod profiles_cmd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -515,6 +516,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "convert" => cmd_convert(&parse(rest, &["out", "json?", "bundle"])?),
         "replace-model" => cmd_replace_model(&parse(rest, &["out", "json?"])?),
         "ops" => cmd_ops(rest),
+        "mcp" => mcp::serve(rest),
         "faces" => cmd_faces(&parse(rest, &["model", "crease"])?),
         "wizard" => {
             let (name, more) = rest

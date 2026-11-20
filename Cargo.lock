@@ -704,6 +704,7 @@ version = "0.1.0"
 dependencies = [
  "marcam-core",
  "marcam-gpu",
+ "marcam-wasm",
  "serde_json",
  "ureq",
 ]

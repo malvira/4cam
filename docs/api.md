@@ -195,6 +195,8 @@ The CLI covers the same features:
 
 ## Adapters
 
+- MCP: `marcam mcp` serves the engine to agents over the Model Context Protocol (stdio).
+  See `docs/mcp.md`.
 - SolidCraft: `adapters/solidcraft` is a SolidCraft command plugin: `plan` runs any marcam
   operation on a body and writes G-code to a granted folder, `describe` lists the operations
   and their fields, `plan-project` plans a whole project from a folder. See

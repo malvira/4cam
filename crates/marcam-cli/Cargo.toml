@@ -28,6 +28,8 @@ path = "src/alias.rs"
 
 [dependencies]
 marcam-core = { version = "0.1.0", path = "../marcam-core" }
+# `marcam mcp`: the engine calls the web app makes, natively
+marcam-wasm = { version = "0.1.0", path = "../marcam-wasm" }
 serde_json = "1"
 ureq = "3"
 marcam-gpu = { version = "0.1.0", path = "../marcam-gpu", optional = true }

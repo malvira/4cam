@@ -146,6 +146,13 @@ Jobs can use library tools:
 
 See [docs/profiles.md](docs/profiles.md).
 
+## For agents (MCP)
+
+`marcam mcp --allow <folder>` serves marcam to agents over the Model Context Protocol
+(Claude Desktop, Claude Code): describe the operations, open and plan projects (the G-code
+`marcam run` writes), simulate, feeds and speeds, pickable features, replacing the model.
+Files only inside the folders allowed. See [docs/mcp.md](docs/mcp.md).
+
 ## Web app
 
 Build the engine and serve the repository. Either command does both:
