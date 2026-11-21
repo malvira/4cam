@@ -90,7 +90,8 @@ const INSTALL = `(() => {
     if (s === v.scene && window.__monkey.recording) {
       const c = census();
       const au = audit();
-      frames.push({ part: c.part, path: c.path, tools: c.tools, audit: au, census: au.length ? JSON.stringify({ c, open: M.machining.state.open, swapping: !!M.machining.state.swapping, session: !!M.machining.state.session, editing: !!M.machining.state.editing }) : null });
+      const ms = M.machining.state;
+      frames.push({ part: c.part, path: c.path, tools: c.tools, audit: au, census: au.length || !c.path ? JSON.stringify({ c, open: ms.open, swapping: !!ms.swapping, session: !!ms.session, editing: !!ms.editing, expanded: !!ms.expanded, pos: ms.pos, paths: ms.view.paths, range: ms.paths?.cut.map((l) => l.geometry.drawRange.count + '/' + l.visible).join(' ') }) : null });
     }
     return r0(s, cam);
   };
@@ -294,7 +295,7 @@ try {
         const lostPart = p0 && p1 && frames.some((f) => !f[0]);
         const lostPath = t0f && t1f && before.view === after.view && frames.some((f) => !f[1]) && !playing && !may.has("pos");
         if (lostPart && !may.has("view")) fail(seed, i, `${a.name}: the part vanished in ${frames.filter((f) => !f[0]).length} of ${frames.length} frames`);
-        if (lostPath) fail(seed, i, `${a.name}: the toolpaths vanished in ${frames.filter((f) => !f[1]).length} of ${frames.length} frames`);
+        if (lostPath) fail(seed, i, `${a.name}: the toolpaths vanished in ${frames.filter((f) => !f[1]).length} of ${frames.length} frames ${await js("window.__monkey.frames.find((f) => !f.path)?.census")}`);
         const bad = frames.filter((f) => f[3]).map((f) => f[3]);
         if (bad.length) fail(seed, i, `${a.name}: ${bad.length} of ${frames.length} frames drawn against the toggles (${[...new Set(bad)].join(" | ")}) ${await js("window.__monkey.frames.find((f) => f.census)?.census")}`);
       }

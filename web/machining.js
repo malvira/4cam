@@ -190,6 +190,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
    *  it is on. */
   async function expand() {
     m.expanded = true;
+    // (at once: the final stock steps aside for the part while the playback is made again)
+    showFinalStock();
+    applyLayers();
     document.body.dataset.playback = "open";
     renderToggles();
     if (view.stock && m.session && !m.stock) {
@@ -207,6 +210,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function collapse() {
     if (m.playing) $("simPlay").click();
     m.expanded = false;
+    showFinalStock();
+    applyLayers();
     document.body.dataset.playback = "";
     $("simControls").classList.add("hidden");
     renderToggles();
