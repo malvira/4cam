@@ -803,8 +803,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         if (m.pos === before || m.pos < want) break;
       }
     } catch (e) {
-      // cancelled (the playback went with the engine's worker): nothing more to show
-      if (e.message !== "cancelled" && e.message !== "superseded") throw e;
+      // cancelled, or a newer plan (the playback went with the engine's worker, and a seek
+      // still on its way found the new worker without one): nothing more to show here, the
+      // playback made again goes to the place asked for
+      if (!["cancelled", "superseded", "replanning"].includes(e.message) && !/no playback open/.test(e.message)) throw e;
     } finally {
       m.busy = false;
     }
@@ -1168,8 +1170,6 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // the vise's jaws go with the part and the stock, a playback open or not
     if (v?.groups?.jaws) v.groups.jaws.visible = view.part || view.stock;
     if (!m.open || !v || v.failed || !v.groups.work) return;
-    // (a new playback being built: the old one shown as it is meanwhile)
-    if (m.swapping || !m.session) return;
     // (a test's chosen layers, View hooks: they stand until it clears them)
     if (state.viewShow) {
       if (v.groups.machining) v.groups.machining.visible = false;
@@ -1178,9 +1178,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const t = state.tree;
     const editing = !!(t && (t.picking || t.draft || t.tabMode));
     // the part and stock as they are (the playback steps aside), and back after (each
-    // frame: other views set these too)
+    // frame: other views set these too; while a new playback is built as well)
     m.editing = editing;
     showMachining(!editing);
+    // (a new playback being built: the old one shown as it is meanwhile)
+    if (m.swapping || !m.session) return;
     // at rest the part stands at A0 (the whole toolpath drawn on it); playing, it turns
     if (!editing) v.groups.work.rotation.x = m.expanded ? m.angle || 0 : 0;
     if (v.groups.toolModel) v.groups.toolModel.visible = !editing && !!m.expanded && view.tool;

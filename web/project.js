@@ -737,6 +737,11 @@ export function setupProject(ctx) {
     for (let k = 1; ; k++) if (!used.has(`op${k}`)) return `op${k}`;
   };
 
+  /** Starter operations are added only when asked for (Mar: a new project starts with none;
+   *  the person adds them): `settings.starters`, or "marcam.starters" = "1" in the browser's
+   *  storage (the tests that import parts and plan them ask for them that way). */
+  const settings = { starters: (() => { try { return localStorage.getItem("marcam.starters") === "1"; } catch { return false; } })() };
+
   /** A setup's starter operations (roughing, then finishing), every field from the engine. */
   async function addStarters(doc, s) {
     const base = `${slug(doc.name)}${doc.setups.length > 1 ? `_${slug(s.id)}` : ""}`;
@@ -848,7 +853,7 @@ export function setupProject(ctx) {
     const ids = new Set(s.operations.map((o) => o.id));
     for (const o of s.outputs) o.operations = o.operations.filter((id) => ids.has(id));
     s.outputs = s.outputs.filter((o) => o.operations.length);
-    const added = s.operations.length ? [] : await addStarters(doc, s);
+    const added = s.operations.length || !settings.starters ? [] : await addStarters(doc, s);
     return { removed, added, recomputed };
   }
 
@@ -926,10 +931,15 @@ export function setupProject(ctx) {
     const notes = [];
     if (report?.removed?.length) notes.push(`removed (they do not fit this setup): ${report.removed.join(", ")}`);
     if (report?.added?.length) notes.push(`added: ${report.added.join(", ")}`);
-    if (planNow) {
+    if (planNow && doc.setups.some((s) => s.operations.some((o) => o.enabled !== false))) {
       clearResults("");
       await refreshAll();
       await generate();
+    } else if (planNow) {
+      // (nothing to plan yet: the person adds the operations)
+      clearResults("");
+      await refreshAll();
+      setStatus("Add operations in the project tree, then Generate", "ready");
     } else {
       // the results (if any) stay, marked out of date, until Generate
       await refreshAll();
@@ -1098,7 +1108,7 @@ export function setupProject(ctx) {
     const ps = probe.setups.find((x) => x.id === s.id);
     const types = state.tree?.types?.length ? state.tree.types : (await engine("opTypes")).result;
     const going = ps.operations.filter((op) => !fitsKind(types.find((t) => t.kind === op.type) ?? { machine_needs: [] }, cfg.kind)).map((op) => `${op.id} (${op.type})`);
-    if (going.length && !window.confirm(`Changing "${s.name || s.id}" to ${KINDS[cfg.kind]} removes ${going.join(", ")}: they do not fit that setup. Starter operations are added if none are left. Go on? (You can undo it.)`)) {
+    if (going.length && !window.confirm(`Changing "${s.name || s.id}" to ${KINDS[cfg.kind]} removes ${going.join(", ")}: they do not fit that setup.${settings.starters ? " Starter operations are added if none are left." : ""} Go on? (You can undo it.)`)) {
       setStatus("Setup unchanged", "ready");
       return false;
     }
@@ -1188,5 +1198,5 @@ export function setupProject(ctx) {
     if (f) await replaceModel(f);
   });
 
-  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, redo, dropUndo, keepUndo, nameEdit, resetHistory, meshSet, history: h, dialog, state: p };
+  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, redo, dropUndo, keepUndo, nameEdit, resetHistory, meshSet, history: h, dialog, state: p, settings };
 }

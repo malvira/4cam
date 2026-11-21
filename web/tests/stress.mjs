@@ -779,6 +779,9 @@ let failed = false;
 try {
   await S("Page.navigate", { url });
   await waitFor(() => js("document.body.dataset.state === 'ready'"), "the engine", 60000);
+  // (written with an import's starter operations: asked for, as a caller may; Mar: the app
+  // itself starts a new project with none)
+  await js("localStorage.setItem('marcam.starters', '1'); window.__marcam.project.settings.starters = true; true");
   if (ONLY !== "monkey") {
     for (const [name, steps] of Object.entries(SCENARIOS).filter(([n]) => n.includes(MATCH))) {
       try {

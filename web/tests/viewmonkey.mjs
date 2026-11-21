@@ -120,7 +120,7 @@ const SNAP = `(() => {
   };
 })()`;
 
-const BUSY = "!(window.__marcam.planIdle() && document.body.dataset.state !== 'busy' && !window.__marcam.machining.state.autoOpening && !window.__marcam.machining.state.busy && !window.__marcam.machining.state.swapping && !window.__marcam.simLock.busy && !window.__marcam.viewCube?.busy?.() && !window.__marcam.inFlight().some((c) => c.worker === 'main'))";
+const BUSY = "!(window.__marcam.planIdle() && document.body.dataset.state !== 'busy' && !window.__marcam.machining.state.autoOpening && !window.__marcam.machining.state.busy && !window.__marcam.machining.state.swapping && !window.__marcam.simLock.busy && !window.__marcam.viewCube?.busy?.() && !window.__marcam.inFlight().some((c) => c.worker === 'main') && !window.__marcam.resimPending?.())";
 
 // ---------------------------------------------------------------- the actions
 // Each: what it may change (cam, view, selected, pos, project, form, hidden), and how.
@@ -176,6 +176,12 @@ function actions(r, app) {
     } },
     { name: "apply", w: 1, may: ["project", "form", "selected", "pos", "hidden"], run: async () => (await click("document.querySelector('#opForm button[type=submit]')")) || null },
     { name: "cancel", w: 1, may: ["form", "selected"], run: async () => (await click("document.getElementById('cancelDraft')")) || null },
+    { name: "resolution", w: 1, may: ["controls"], run: async () => {
+      // another simulation resolution: the stock simulated again at it (Mar), nothing planned
+      const want = r.pick(["coarse", "normal", "fine"]);
+      await js(`(() => { const s = document.getElementById('simRes'); s.value = '${want}'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+      return want;
+    } },
     { name: "generate", w: 1, may: ["pos"], run: async () => { await click("document.getElementById('generate')"); } },
   ];
 }
@@ -260,12 +266,17 @@ try {
       if (!may.has("pos") && !playing && after.open && before.open && after.pos !== Math.min(before.pos, after.segments ?? before.pos)) fail(seed, i, `${a.name}: the playhead moved ${before.pos} -> ${after.pos} (of ${after.segments})`);
       if (!may.has("project") && before.project !== after.project) fail(seed, i, `${a.name}: the project changed`);
       // (the panels that show the project follow it: changed with it, by an edit)
-      if (!may.has("project") && before.controls !== after.controls) fail(seed, i, `${a.name}: a setting changed by itself: ${diff(before.controls, after.controls)}`);
+      if (!may.has("project") && !may.has("controls") && before.controls !== after.controls) fail(seed, i, `${a.name}: a setting changed by itself: ${diff(before.controls, after.controls)}`);
       if (!may.has("form") && before.formOp && before.formOp === after.formOp && before.form !== after.form) fail(seed, i, `${a.name}: the form's values changed: ${diff(before.form, after.form)}`);
       if (a.name === "type" && what && before.formOp && after.formOp === before.formOp && !after.form?.includes(what.replace(/^(\w+)=/, "$1="))) {
         // (the value typed stays in its field, a plan landing or not)
         const [k, v] = what.split("=");
         if (!after.form?.split("|").some((x) => x.startsWith(`${k}=`) && Math.abs(parseFloat(x.slice(k.length + 1)) - parseFloat(v)) < 1e-9)) fail(seed, i, `type: the value typed (${what}) is not in its field: ${after.form?.split("|").find((x) => x.startsWith(`${k}=`))}`);
+      }
+      // a resolution chosen: the simulated stock (when there is one, or it is shown) is at it
+      if (a.name === "resolution" && what) {
+        const sim = await js("(() => { const M = window.__marcam; return { has: !!M.state.sim, shown: !!M.machining.state.view.stock, key: M.state.simKey || null, stale: !!M.state.stale, result: !!M.state.result }; })()");
+        if (sim.result && !sim.stale && (sim.has || sim.shown) && !(sim.key && JSON.parse(sim.key)[0].res === what)) fail(seed, i, `resolution ${what}: the stock was not simulated again at it (${sim.key})`);
       }
       // no flicker: the part and the toolpaths in every frame when on before and after
       const frames = await js("window.__monkey.frames.map((f) => [f.part ? 1 : 0, f.path ? 1 : 0, f.tools, f.audit.join(';')])");

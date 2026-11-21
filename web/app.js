@@ -453,82 +453,13 @@ function clearResults(msg, actions = ["import", "open"]) {
   drawModel();
 }
 
-/** Everything that shows the project, again: quick settings, tools, the tree, the grid. */
+/** Everything that shows the project, again: tools, the tree, the grid. */
 async function refreshAll() {
-  renderQuick();
   renderTools();
   await window.__marcam.tree?.refresh();
   updateSimResInfo();
   updateGenerateButton();
   await drawModel();
-}
-
-/** Quick fields for the common parameters; they write straight into the JSON. */
-function renderQuick() {
-  const box = $("quick");
-  box.innerHTML = "";
-  let job;
-  try {
-    job = readJob();
-  } catch {
-    box.textContent = "(fix the JSON to edit settings here)";
-    return;
-  }
-  const add = (group, label, path, step = "any") => {
-    let obj = job;
-    for (const k of path.slice(0, -1)) obj = obj?.[k];
-    const key = path[path.length - 1];
-    if (obj == null || typeof obj[key] !== "number") return;
-    if (group && box.dataset.lastGroup !== group) {
-      const g = document.createElement("div");
-      g.className = "group";
-      g.textContent = group;
-      box.appendChild(g);
-      box.dataset.lastGroup = group;
-    }
-    const id = `q_${path.join("_")}`;
-    const l = document.createElement("label");
-    l.htmlFor = id;
-    l.textContent = label;
-    const inp = document.createElement("input");
-    inp.type = "number";
-    inp.id = id;
-    inp.step = step;
-    inp.value = obj[key];
-    inp.addEventListener("change", () => {
-      const v = parseFloat(inp.value);
-      if (!Number.isFinite(v)) return;
-      const j = readJob();
-      let o = j;
-      for (const k of path.slice(0, -1)) o = o?.[k];
-      // the project changed shape since this was drawn (a 0.1 job saved as 0.2 on its first
-      // edit): the field is not there any more, so the panel is drawn again
-      if (o == null || typeof o[key] !== "number") return renderQuick();
-      o[key] = v;
-      writeJob(j);
-    });
-    box.append(l, inp);
-  };
-  box.dataset.lastGroup = "";
-  add("Stock", "radius (mm)", ["stock", "radius"]);
-  add("Stock", "length (mm)", ["stock", "length"]);
-  add("Stock", "clearance (mm)", ["clearance"]);
-  add("Stock", "spindle (rpm)", ["spindle_rpm"], "1");
-  (job.tools || []).forEach((t, i) => {
-    const g = `T${t.number} ${t.kind}`;
-    add(g, "diameter (mm)", ["tools", i, "diameter"]);
-    add(g, "angle (deg)", ["tools", i, "angle"]);
-  });
-  (job.programs || []).forEach((p, i) =>
-    (p.operations || []).forEach((op, k) => {
-      const g = `${p.name}: ${op.type}`;
-      for (const key of Object.keys(op)) {
-        if (/feed|step|depth|allowance/.test(key) && typeof op[key] === "number") {
-          add(g, key.replace(/_/g, " "), ["programs", i, "operations", k, key]);
-        }
-      }
-    }),
-  );
 }
 
 async function loadExample(name) {
@@ -580,7 +511,6 @@ async function loadExampleInto(name) {
   const loaded = readJob();
   const jm = loaded.machine ?? loaded.setups?.[0]?.machine;
   if (jm) renderMachines(jm);
-  renderQuick();
   renderTools();
   if (window.__marcam.project) {
     window.__marcam.project.state.fileName = null;
@@ -652,7 +582,7 @@ async function generate(opts = {}) {
     showError(
       hasPart(job)
         ? "Nothing to generate: the project has no enabled operation. Add one in the project tree (or use a detected feature), or enable one."
-        : "Nothing to generate yet: import an STL (it adds a starter roughing and finishing) or add an operation in the project tree.",
+        : "Nothing to generate yet: import an STL and add an operation in the project tree.",
     );
     return;
   }
@@ -849,8 +779,28 @@ for (const id of ["simRes", "simDx", "simDeg", "simCell", "simGpu"]) {
   $(id).addEventListener("change", () => {
     saveSimRes();
     updateSimResInfo();
+    resimulateSoon();
   });
 }
+/** Another resolution (Mar: "the simulation should regenerate"): the stock simulated again at
+ *  it in the background, nothing planned; the one shown stays until the new one is in, and a
+ *  playback with the stock opens again at the same place. */
+let resRunTimer = 0, resimPending = false;
+function resimulateSoon() {
+  clearTimeout(resRunTimer);
+  resimPending = true;
+  resRunTimer = setTimeout(async () => {
+    try {
+      if (!state.result || state.stale) return;
+      const mach = window.__marcam.machining;
+      if (state.sim || mach?.state?.view?.stock) await simLock.run("batch", () => simulateQuiet(), { quiet: true });
+      if (mach?.state?.open && mach.state.expanded && mach.state.stock) await mach.open({ auto: true });
+    } finally {
+      resimPending = false;
+    }
+  }, 300);
+}
+window.__marcam.resimPending = () => resimPending;
 loadSimRes();
 
 /** One simulation at a time (the batch one, a playback opening: see machining.js): the next
@@ -970,8 +920,8 @@ async function simulateLocked(opts = {}) {
     const hits = result.stocks.reduce((n, st) => n + (st.collisions?.count || 0), 0);
     if (s && (s.rapid_hits || s.gouge_cells || hits)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s), ${hits} holder/shank collision(s)`);
   } catch (e) {
-    if (e.message === "superseded") {
-      // (the project went: its simulation with it)
+    if (e.message === "superseded" || e.message === "replanning") {
+      // (the project went, or a newer plan: its simulation with it)
     } else if (e.message === "cancelled") {
       if (!opts.quiet) setStatus("Simulation cancelled", "done");
     } else if (opts.quiet) {
@@ -1278,7 +1228,7 @@ function openColors() {
   }
   const fill = () => {
     const bgDefault = getComputedStyle(document.body).getPropertyValue("--panel").trim() || "#1e2430";
-    dlg.innerHTML = `<h3>Colours</h3><div class="muted small">Kept in this browser.</div><table class="tn-table">${Object.keys(COLOR_DEFAULTS)
+    dlg.innerHTML = `<h3>Colours</h3><div class="muted small">Kept in this browser.</div><table class="tn-table">${Object.keys(COLOR_DEFAULTS).filter((k) => k in COLOR_LABELS)
       .map((k) => {
         const v = color(k) || (/^#[0-9a-f]{6}$/i.test(bgDefault) ? bgDefault : "#1e2430");
         return `<tr><td>${COLOR_LABELS[k]}</td><td><input type="color" data-color="${k}" value="${v}" aria-label="${COLOR_LABELS[k]}"></td><td><button type="button" data-reset="${k}" aria-label="${COLOR_LABELS[k]}: default">default</button></td></tr>`;
@@ -1494,7 +1444,11 @@ async function drawModel() {
     const top = sb.min[2] + grip, low = sb.min[2] - 4;
     const len = sb.max[0] - sb.min[0] + 20, thick = 8;
     for (const y of [sb.min[1] - thick / 2, sb.max[1] + thick / 2]) {
-      const jaw = stockObject(THREE, new THREE.BoxGeometry(len, thick, top - low), 0.12);
+      // (steel, not the stock's colour: Mar)
+      const geo = new THREE.BoxGeometry(len, thick, top - low);
+      const jaw = new THREE.Group();
+      jaw.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: colorNum("fixture"), metalness: 0.55, roughness: 0.5 })));
+      jaw.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25), new THREE.LineBasicMaterial({ color: colorNum("fixtureEdge") })));
       jaw.position.set((sb.min[0] + sb.max[0]) / 2, y, (top + low) / 2);
       jaw.userData.jaw = true;
       groups.jaws.add(jaw);
@@ -1617,7 +1571,9 @@ function legacyLayers() {
   // (an operation's live preview: while it is being made, not after)
   if (groups.draft) groups.draft.visible = paths && !!state.tree?.draft;
   // the playback shown (not stepped aside for picking or a new operation): it draws them
-  if (m?.open && !m.editing && groups.machining?.visible) for (const k of ["part", "stock", "sim", "path", "tool"]) groups[k].visible = false;
+  const t = state.tree;
+  const editing = !!(t && (t.picking || t.draft || t.tabMode));
+  if (m?.open && !editing && groups.machining?.visible) for (const k of ["part", "stock", "sim", "path", "tool"]) groups[k].visible = false;
 }
 window.__marcam.legacyLayers = legacyLayers;
 
@@ -1725,7 +1681,6 @@ $("summary").addEventListener("click", (ev) => {
 $("generate").addEventListener("click", generate);
 $("simulate").addEventListener("click", simulate);
 $("download").addEventListener("click", download);
-$("job").addEventListener("change", renderQuick);
 $("machine").addEventListener("change", () => {
   const custom = $("machine").value === "custom";
   $("machineJson").classList.toggle("hidden", !custom);
@@ -1946,7 +1901,6 @@ function useTool(i, target) {
     if (k >= 0) job.tools[k] = jt;
     else job.tools.push(jt);
     writeJob(job);
-    renderQuick();
     renderTools();
     $("importInfo").textContent = `T${number} is now ${t.name}`;
   } catch (e) {
@@ -2193,7 +2147,7 @@ new ResizeObserver(() => drawSide()).observe($("side"));
 window.__marcam.tree = setupTree({
   engine, $, state, readJob, writeJob, showError, getThree,
   machineArg: () => (typeof machineArg() === "string" && machineArg() !== "custom" ? machineArg() : null),
-  onChange: () => { renderQuick(); renderTools(); },
+  onChange: () => { renderTools(); },
 });
 $("job").addEventListener("change", () => window.__marcam.tree.refresh());
 

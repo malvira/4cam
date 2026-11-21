@@ -12,6 +12,10 @@ export const COLOR_DEFAULTS = {
   tool: "#e5b94e",
   draft: "#f59e0b",
   background: "",
+  // the vise's jaws and other work holding: steel, unlike the stock (Mar); not in the
+  // Colours dialog (no label)
+  fixture: "#5c636c",
+  fixtureEdge: "#3b4047",
 };
 
 export const COLOR_LABELS = {

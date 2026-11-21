@@ -16,6 +16,9 @@ function check(name, ok, detail = "") {
 
 const app = await startApp();
 const { js } = app;
+// (written with an import's starter operations: asked for, as a caller may; Mar: the app
+// itself starts a new project with none)
+await js("localStorage.setItem('marcam.starters', '1'); window.__marcam.project.settings.starters = true; true");
 let failed = false;
 try {
   const stepRequests = () => app.requests().filter((u) => /marcam_step\.wasm/.test(u)).length;
