@@ -1153,7 +1153,21 @@ export function setupProject(ctx) {
     }
     const kind = kindOf(s);
     const axis = kind === "vise" ? Object.entries(UP_AXIS).find(([, v]) => v === (m?.axis ?? "x"))?.[0] ?? "z" : m?.axis ?? "x";
+    // the stock's and the part's boxes, as the setup has them (the work zero's presets)
+    let stockBox = null, partBox = null;
+    try {
+      const { result: fr } = await engine("setupFrame", doc, { setup: s.id });
+      stockBox = fr.stock_box ?? null;
+      if (m && window.__marcam.meshFor(m.file)) {
+        const { result: mt } = await engine("meshTriangles", doc, { setup: s.id, max_triangles: 20000 }, state.mesh);
+        const t = mt.triangles;
+        const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        for (let i = 0; i < t.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], t[i + k]); hi[k] = Math.max(hi[k], t[i + k]); }
+        if (lo[0] <= hi[0]) partBox = { min: lo, max: hi };
+      }
+    } catch {}
     const cfg = await dialog.open("edit", {
+      stockBox, partBox,
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
       stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && window.__marcam.meshFor(m.file)), tris: m && window.__marcam.meshFor(m.file) ? parseStl(window.__marcam.meshFor(m.file)).tris : null, previewTris, post: s.post,
       canCarry: doc.setups.indexOf(s) > 0, setupId: s.id, rotate: m?.rotate,

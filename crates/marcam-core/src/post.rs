@@ -143,6 +143,52 @@ fn fit_arc(p0: [f64; 3], moves: &[Move], tol: f64) -> Option<Arc> {
     best
 }
 
+/// The toolpath with its work zero at `o` (in its own coordinates): every work XYZ position
+/// less `o` (its rapids, cuts, poses and drilling cycles, and the safe height). The rotary
+/// moves (X along the axis, the radius) are not moved: a rotary setup's zero is the bar's
+/// front on its axis.
+pub fn shift_work_zero(tp: &Toolpath, o: [f64; 3]) -> Toolpath {
+    let mut t = tp.clone();
+    for m in &mut t.moves {
+        match m {
+            Move::Rapid3 { x, y, z } => {
+                *x = x.map(|v| v - o[0]);
+                *y = y.map(|v| v - o[1]);
+                *z = z.map(|v| v - o[2]);
+            }
+            Move::Line3 { x, y, z, .. } => {
+                *x -= o[0];
+                *y -= o[1];
+                *z -= o[2];
+            }
+            Move::Pose { tip, .. } => {
+                for k in 0..3 {
+                    tip[k] -= o[k];
+                }
+            }
+            Move::Operation { cycle: Some(c), .. } => {
+                for p in &mut c.points {
+                    p[0] -= o[0];
+                    p[1] -= o[1];
+                }
+                c.bottom -= o[2];
+                c.r -= o[2];
+                c.safe -= o[2];
+            }
+            _ => {}
+        }
+    }
+    t.safe_r -= o[2];
+    t.notes.insert(
+        0,
+        format!(
+            "Work zero: X{:.3} Y{:.3} Z{:.3} from the setup's (the stock's low X and Y corner, its top)",
+            o[0], o[1], o[2]
+        ),
+    );
+    t
+}
+
 pub fn post(tp: &Toolpath, machine: &Machine) -> String {
     post_marked(tp, machine).0
 }
@@ -160,6 +206,15 @@ pub fn post_lines(
     tp: &Toolpath,
     machine: &Machine,
 ) -> (String, Vec<(u32, String, usize)>, Vec<usize>) {
+    // the work zero moved (a vise setup's WCS): its numbers written from there
+    let shifted;
+    let tp = match tp.post.as_ref().map(|p| p.origin) {
+        Some(o) if o != [0.0; 3] => {
+            shifted = shift_work_zero(tp, o);
+            &shifted
+        }
+        _ => tp,
+    };
     let mut marks = Vec::new();
     let mut before = Vec::with_capacity(tp.moves.len() + 1);
     let d = machine.decimals;

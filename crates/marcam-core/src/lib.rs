@@ -1334,7 +1334,8 @@ pub fn limits_for(tp: &Toolpath, machine: &Machine) -> Limits {
         .fold(tp.plunge_limit.unwrap_or(f64::INFINITY), f64::min);
     Limits {
         plunge_feed: if plunge.is_finite() { plunge } else { 60.0 },
-        safe_r: tp.safe_r,
+        // (its G-code's numbers: from the work zero, see post::shift_work_zero)
+        safe_r: tp.safe_r - tp.post.as_ref().map_or(0.0, |p| p.origin[2]),
         feed_mode: machine.feed_mode,
         surface_radius_pad: machine.surface_radius_pad,
         ramp_angle: tp.ramp_angle.unwrap_or(0.0),

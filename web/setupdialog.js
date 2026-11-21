@@ -311,6 +311,11 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
 
   /** Labels and fields that depend on the setup type. */
   function layout(fromKindChange) {
+    // (a rotary setup's work zero: the bar's front on its axis)
+    const vise = kind() === "vise";
+    $("sdZeroRow").classList.toggle("hidden", !vise);
+    $("sdZeroXYZ").classList.toggle("hidden", !vise);
+    $("sdZeroNote").classList.toggle("hidden", vise);
     const k = kind();
     $("sdAxisLabel").textContent = bar(k) ? "Part axis along X" : "Up (towards the tool)";
     $("sdOriginLabel").textContent = bar(k) ? "Front at X0, then shift" : "Top below Z0 by";
@@ -537,6 +542,11 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       // the setup's G-code options
       const po = preset.post || {};
       $("sdWork").value = po.work_offset ?? "";
+      // the work zero: a vise setup's, from its stock or part (their boxes from the caller)
+      const z0 = po.origin ?? [0, 0, 0];
+      ["sdZeroX", "sdZeroY", "sdZeroZ"].forEach((id, i) => ($(id).value = String(z0[i])));
+      cur.boxes = { stock: preset.stockBox ?? null, part: preset.partBox ?? null };
+      $("sdZeroAt").value = zeroPreset(z0) ?? "custom";
       $("sdLineNums").checked = !!po.line_numbers;
       $("sdNoComments").checked = !!po.no_comments;
       $("sdHeader").value = (po.header || []).join("\n");
@@ -610,6 +620,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       // G-code options: only what is set
       const post = {};
       if ($("sdWork").value) post.work_offset = $("sdWork").value;
+      const zero = ["sdZeroX", "sdZeroY", "sdZeroZ"].map((id) => +$(id).value || 0);
+      if (k === "vise" && zero.some((v) => v)) post.origin = zero;
       const linesOf = (id) => $(id).value.split("\n").map((l) => l.trim()).filter(Boolean);
       if (linesOf("sdHeader").length) post.header = linesOf("sdHeader");
       if (linesOf("sdFooter").length) post.footer = linesOf("sdFooter");
@@ -693,6 +705,32 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     if (t.type === "number") preview();
   });
   $("sdFit").addEventListener("click", () => fitTo());
+  /** The work zero a preset puts (in the setup's coordinates), or null (no box for it). */
+  function zeroOf(p) {
+    const b = p.startsWith("part") ? cur?.boxes?.part : cur?.boxes?.stock;
+    if (!b) return null;
+    const [lo, hi] = [b.min, b.max];
+    const z = p.startsWith("bottom") ? lo[2] : hi[2];
+    const at = p.split("-")[1];
+    const x = at === "c" ? (lo[0] + hi[0]) / 2 : at === "lr" || at === "ur" ? hi[0] : lo[0];
+    const y = at === "c" ? (lo[1] + hi[1]) / 2 : at === "ul" || at === "ur" ? hi[1] : lo[1];
+    return [x, y, z].map((v) => Math.round(v * 1000) / 1000);
+  }
+  /** The preset a zero is, if one. */
+  function zeroPreset(z) {
+    for (const o of $("sdZeroAt").options) {
+      if (o.value === "custom") continue;
+      const q = zeroOf(o.value);
+      if (q && q.every((v, i) => Math.abs(v - z[i]) < 1e-6)) return o.value;
+    }
+    // (none given: the usual)
+    return z.every((v) => !v) ? "top-ll" : null;
+  }
+  $("sdZeroAt").addEventListener("change", () => {
+    const q = zeroOf($("sdZeroAt").value);
+    if (q) ["sdZeroX", "sdZeroY", "sdZeroZ"].forEach((id, i) => ($(id).value = String(q[i])));
+  });
+  for (const id of ["sdZeroX", "sdZeroY", "sdZeroZ"]) $(id).addEventListener("input", () => ($("sdZeroAt").value = zeroPreset(["sdZeroX", "sdZeroY", "sdZeroZ"].map((x) => +$(x).value || 0)) ?? "custom"));
   // this setup's part: another setup's (its triangles from the caller), or a file
   $("sdModel").addEventListener("change", async () => {
     const v = $("sdModel").value;

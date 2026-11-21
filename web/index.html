@@ -308,13 +308,32 @@
       <div><label>Material <input id="sdMaterial" list="sdMaterials" placeholder="not set" autocomplete="off" size="16"></label>
         <span class="small muted">picks the tools' cutting data for it (feeds, depths, stepovers)</span></div>
       <datalist id="sdMaterials"></datalist>
-      <details id="sdPostBox" class="sd-post"><summary>G-code output</summary>
+      <fieldset id="sdWcsSet" class="sd-wcs">
+        <legend>Work zero (WCS)</legend>
         <div class="sd-dims">
           <label title="The work coordinate system the programs run in (written after the machine's start lines)">Work offset <select id="sdWork" aria-label="Work offset">
             <option value="">as the machine has it</option>
             <option>G54</option><option>G55</option><option>G56</option><option>G57</option><option>G58</option><option>G59</option>
             <option>G59.1</option><option>G59.2</option><option>G59.3</option>
+            <option>G54.1 P1</option><option>G54.1 P2</option><option>G54.1 P3</option>
           </select></label>
+          <label id="sdZeroRow" title="Where X0 Y0 Z0 of the programs is: on the stock or the part, or anywhere (X, Y, Z from the stock's low X and Y corner and its top)">Zero at <select id="sdZeroAt" aria-label="Where the work zero is">
+            <option value="top-ll">stock top, X- Y- corner (usual)</option>
+            <option value="top-c">stock top, centre</option>
+            <option value="top-lr">stock top, X+ Y- corner</option>
+            <option value="top-ul">stock top, X- Y+ corner</option>
+            <option value="top-ur">stock top, X+ Y+ corner</option>
+            <option value="bottom-ll">stock bottom, X- Y- corner</option>
+            <option value="bottom-c">stock bottom, centre</option>
+            <option value="part-c">part top, centre</option>
+            <option value="custom">custom</option>
+          </select></label>
+          <label id="sdZeroXYZ">X <input id="sdZeroX" type="number" step="any" value="0"> Y <input id="sdZeroY" type="number" step="any" value="0"> Z <input id="sdZeroZ" type="number" step="any" value="0"> mm</label>
+          <span id="sdZeroNote" class="small muted hidden">A rotary setup's zero is the bar's front on its axis (X0, the axis Y0 Z0).</span>
+        </div>
+      </fieldset>
+      <details id="sdPostBox" class="sd-post"><summary>G-code output</summary>
+        <div class="sd-dims">
           <label><input type="checkbox" id="sdLineNums"> number the lines (N10, N20...)</label>
           <label><input type="checkbox" id="sdNoComments"> no comments</label>
         </div>

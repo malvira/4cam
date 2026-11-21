@@ -64,6 +64,11 @@ pub struct PostOptions {
     /// Leave out the comments (a controller that dislikes them).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_comments: bool,
+    /// Where the work zero (X0 Y0 Z0 of the program) is, in the setup's coordinates (a vise
+    /// setup's: the block's low X and Y corner and its top when it is not given): the G-code's
+    /// numbers are written from there; nothing planned changes (Mar: the WCS).
+    #[serde(default, skip_serializing_if = "is_zero3")]
+    pub origin: [f64; 3],
 }
 
 impl PostOptions {
@@ -81,6 +86,9 @@ impl PostOptions {
                     "work offset {w:?}: G54 to G59, G59.1 to G59.3, or G54.1 P1 and up"
                 ));
             }
+        }
+        if self.origin.iter().any(|v| !v.is_finite()) {
+            return Err("the work zero must be numbers".into());
         }
         for l in self.header.iter().chain(&self.footer) {
             if l.contains('\n') || l.contains('\r') {

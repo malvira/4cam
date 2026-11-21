@@ -3063,6 +3063,32 @@ try {
       `${JSON.stringify(m1)} planned ${planned2} -> ${JSON.stringify(m2)}`);
   }
 
+  // (Mar) the work zero (WCS): a preset on the stock, the G-code written from it
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate planned", 240000);
+    const g0 = await js("window.__marcam.state.result.programs[0].gcode");
+    await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
+    await waitFor(() => js("document.getElementById('setupDialog').classList.contains('embedded') && document.getElementById('setupDialog').open"), "the setup's form", 30000);
+    await js("const z = document.getElementById('sdZeroAt'); z.value = 'top-c'; z.dispatchEvent(new Event('change', { bubbles: true })); true");
+    const typed = await js("['sdZeroX', 'sdZeroY', 'sdZeroZ'].map((id) => +document.getElementById(id).value)");
+    await js("document.getElementById('sdOk').click(); true");
+    await settle();
+    await waitFor(async () => JSON.stringify((await js("JSON.parse(document.getElementById('job').value).setups[0].post?.origin || null"))) === "[30,20,0]", "the work zero saved", 60000).catch(() => {});
+    const saved = await js("JSON.parse(document.getElementById('job').value).setups[0].post?.origin || null");
+    await clickGenerate();
+    await waitDone("the plate planned from the new zero", 240000);
+    const g1 = await js("window.__marcam.state.result.programs[0].gcode");
+    const firstX = (g) => +(/\bX(-?[\d.]+)/.exec(g.split("\n").find((l) => /^G[01] .*X/.test(l)) || "")?.[1]);
+    check("work zero: a preset on the stock (its top centre), the G-code written from it (X and Y 30 and 20 less), said in it",
+      JSON.stringify(typed) === "[30,20,0]" && JSON.stringify(saved) === "[30,20,0]" && /Work zero/.test(g1) && Math.abs(firstX(g0) - 30 - firstX(g1)) < 0.002,
+      `typed ${JSON.stringify(typed)}, saved ${JSON.stringify(saved)}, first X ${firstX(g0)} -> ${firstX(g1)}`);
+    await shot("34_work_zero");
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

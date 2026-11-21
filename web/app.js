@@ -1388,6 +1388,9 @@ async function drawModel() {
   // (a setup whose stock the one before left: that one's stock and part too)
   const carried = v2 && setup?.stock?.shape === "from_previous";
   const key = JSON.stringify([setup?.id, setup?.stock, setup?.kind, setup?.holding, models, v2 ? null : [doc.stock, doc.part], carried ? [doc.setups.map((s) => [s.id, s.stock, s.part, s.kind]), doc.models] : null, state.mesh?.length || 0, colorsGen]);
+  // the work zero's triad: where X0 Y0 Z0 of the programs is (a vise setup's own)
+  const z0 = setup?.post?.origin;
+  if (v.axes) v.axes.position.set(...(Array.isArray(z0) && (setup?.stock?.shape === "box" || setup?.kind === "vise") ? z0 : [0, 0, 0]));
   if (v.modelKey === key) return;
   v.modelKey = key;
   // built aside and swapped in at once when complete: the old part stays shown meanwhile
