@@ -717,24 +717,15 @@ async function generate(opts = {}) {
 /** After a live update with the stock shown: simulated again, at Coarse at once, then at the
  *  chosen resolution when it is quick (no question asked in the background). */
 async function backgroundSimulate() {
-  const want = $("simRes").value;
-  const sel = $("simRes");
-  try {
-    if (want !== "coarse") {
-      sel.value = "coarse";
-      await simLock.run("batch", () => simulateQuiet(), { quiet: true });
-      sel.value = want;
-    }
-    await simLock.run("batch", () => simulateQuiet(SIM_ASK_SECONDS), { quiet: true });
-  } finally {
-    sel.value = want;
-  }
+  // (the resolution passed along: the setting itself is the person's, never changed here)
+  if ($("simRes").value !== "coarse") await simLock.run("batch", () => simulateQuiet(Infinity, "coarse"), { quiet: true });
+  await simLock.run("batch", () => simulateQuiet(SIM_ASK_SECONDS), { quiet: true });
 }
 
 // ---------------------------------------------------------------- simulation resolution
 /** The grid asked for: a preset, or custom cell sizes (rotary mm x degrees, 3-axis mm). */
-function simOpts() {
-  const v = $("simRes").value;
+function simOpts(res) {
+  const v = res || $("simRes").value;
   // operations hidden in the tree are not simulated (their material stays)
   const hide = hiddenPlanned();
   if (v !== "custom") return { res: v, hide };
@@ -908,20 +899,20 @@ function simulate() {
 
 /** The batch simulation without asking (background): skipped when estimated longer than
  *  `max` seconds, or when the project changed meanwhile. */
-async function simulateQuiet(max = Infinity) {
+async function simulateQuiet(max = Infinity, res) {
   // (the results' own job: an edit since then is not simulated, nor planned, here)
   if (!state.result || !state.job || state.stale || !planIdle()) return;
   try {
     const job = state.job;
     const base = { libraries: libraries(), setup: job.schema_version === "0.2" ? state.tree?.setup : undefined, estimate: true };
-    const t = (await engine("simGrid", job, { ...base, ...simOpts() }, state.mesh)).result.time;
+    const t = (await engine("simGrid", job, { ...base, ...simOpts(res) }, state.mesh)).result.time;
     const s = (t?.seconds || 0) * (t?.batch_factor || 1);
     if (s > max || s > (t?.max_seconds ?? Infinity)) return;
     simRing.estimate = s;
   } catch {
     return;
   }
-  return simulateLocked({ quiet: true });
+  return simulateLocked({ quiet: true, res });
 }
 
 async function simulateLocked(opts = {}) {
@@ -937,7 +928,7 @@ async function simulateLocked(opts = {}) {
   }
   // (in the background: the buttons and the status line are left to what the person does)
   // the same simulation already done (in the background, after the plan): shown, not run again
-  const simKey = JSON.stringify([simOpts(), $("simGpu")?.checked]);
+  const simKey = JSON.stringify([simOpts(opts.res), $("simGpu")?.checked]);
   if (!opts.quiet && state.sim && state.simKey === simKey) {
     selectTab(state.tab);
     const s = state.sim.stocks[state.tab];
@@ -957,7 +948,7 @@ async function simulateLocked(opts = {}) {
     let backend = `CPU (${why})`;
     if (gpu) {
       try {
-        const { result: open } = await engine("gpuOpen", state.job, { ...simOpts(), libraries: libraries() }, state.mesh);
+        const { result: open } = await engine("gpuOpen", state.job, { ...simOpts(opts.res), libraries: libraries() }, state.mesh);
         // (gpuOpen plans through the same cache and leaves the hidden operations out)
         result = await simulateOnGpu(gpu, open, async (o, bytes) => (await engine("gpuStats", o, bytes)).result);
         backend = `GPU (${gpu.name})`;
@@ -966,7 +957,7 @@ async function simulateLocked(opts = {}) {
         backend = `CPU (${e.message})`;
       }
     }
-    if (!result) result = (await engine("simulate", state.job, simOpts(), state.mesh)).result;
+    if (!result) result = (await engine("simulate", state.job, simOpts(opts.res), state.mesh)).result;
     const ms = performance.now() - t0;
     if (epoch !== state.epoch) return;
     showBackend(backend);
@@ -1197,14 +1188,39 @@ async function getThree() {
     resize();
     // the view cube (upper right): view only, it turns the camera
     const cube = addViewCube({ THREE, renderer, camera, controls }, host);
-    const loop = () => {
+    // Drawn when something may have changed, not every frame regardless: at rest an idle
+    // view took a CPU's worth of drawing (all of it with software WebGL), which the engine's
+    // workers then lacked. At full rate a moment after any input, while the camera moves or
+    // the playback plays, and whenever what is shown changed (its signature below); twice a
+    // second otherwise, for anything the signature does not see.
+    let activeUntil = 0, lastDraw = 0, lastSig = "";
+    const kick = () => (activeUntil = performance.now() + 1500);
+    for (const ev of ["pointerdown", "pointermove", "wheel", "keydown", "resize"]) window.addEventListener(ev, kick, { passive: true, capture: true });
+    controls.addEventListener("change", kick);
+    window.__marcam.kickView = kick;
+    kick();
+    const signature = () => {
+      const m = state.machining, v = state.three, parts = [];
+      for (const g of Object.values(groups)) parts.push(g.visible ? g.children.length : -1);
+      for (const k of ["machining", "work", "toolModel", "simFinal"]) {
+        const g = v?.groups?.[k];
+        parts.push(g ? `${g.visible ? g.children.length : -1}:${g.position.x},${g.position.y},${g.position.z}:${g.rotation.x}` : "");
+      }
+      return [camera.position.toArray().join(), camera.quaternion.toArray().join(), camera.zoom, camera.aspect, controls.target.toArray().join(), state.tree?.selected, $("simGhost")?.checked, m?.pos, m?.open, m?.expanded, m?.swapping, JSON.stringify(m?.view), m?.stockMesh?.id, m?.paths?.cut[0]?.id, m?.paths?.cut[0]?.geometry.drawRange.count, v?.key, v?.modelKey, v?.simKey, v?.cutLines?.geometry.drawRange.count, groups.draft.children[0]?.id, colorsGen, document.body.className, parts.join()].join("|");
+    };
+    const loop = (t) => {
+      requestAnimationFrame(loop);
       controls.update();
       window.__marcam.machining?.syncFrame?.();
+      const sig = signature();
+      const busy = t < activeUntil || state.machining?.playing || cube.busy();
+      if (!busy && sig === lastSig && t - lastDraw < 500) return;
+      lastSig = sig;
+      lastDraw = t;
       renderer.render(scene, camera);
       cube.render();
-      requestAnimationFrame(loop);
     };
-    loop();
+    requestAnimationFrame(loop);
     state.three = { THREE, renderer, scene, camera, controls, groups, axes, fitted: null, cube };
     window.__marcam.viewCube = cube;
     $("viewNote").textContent = "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. The part turns, so the path is drawn around it (A rotates about X).";
@@ -1502,8 +1518,7 @@ async function drawModel() {
   $("viewNote").textContent = sb
     ? "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. Vise setup: the block stays put and the tool moves in X, Y and Z (Z0 = top of the stock)."
     : "Drag to orbit, scroll to zoom. Blue: cuts, red: rapids. The part turns, so the path is drawn around it (A rotates about X).";
-  groups.part.visible = $("showPart").checked && !(groups.sim.children.length && groups.sim.visible);
-  groups.stock.visible = $("showStock").checked && !(groups.sim.children.length && groups.sim.visible);
+  legacyLayers();
   v.renderer.render(v.scene, v.camera);
 }
 
@@ -1593,12 +1608,14 @@ function legacyLayers() {
   const tool = view ? view.tool : true;
   const simShown = !!groups.sim.children.length && sim;
   groups.sim.visible = sim;
-  groups.part.visible = part && !simShown;
+  // (picking: the faces to pick on stand in for the part)
+  groups.part.visible = part && !simShown && !state.tree?.pickMesh;
   groups.stock.visible = $("showStock").checked && (view ? view.part || view.stock : true) && !simShown;
   groups.path.visible = paths;
   if (v.rapLines) v.rapLines.visible = rapids;
   groups.tool.visible = tool;
-  if (groups.draft) groups.draft.visible = paths;
+  // (an operation's live preview: while it is being made, not after)
+  if (groups.draft) groups.draft.visible = paths && !!state.tree?.draft;
   // the playback shown (not stepped aside for picking or a new operation): it draws them
   if (m?.open && !m.editing && groups.machining?.visible) for (const k of ["part", "stock", "sim", "path", "tool"]) groups[k].visible = false;
 }

@@ -737,7 +737,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.pickMesh.material.dispose();
       t.pickMesh = null;
     }
-    if (v && !v.failed) v.groups.part.visible = $("showPart").checked;
+    if (v && !v.failed) window.__marcam.legacyLayers?.();
     t.picking = false;
     t.pick = null;
   }
@@ -1514,7 +1514,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.pickMesh.material.dispose();
       t.pickMesh = null;
     }
-    if (v && !v.failed) v.groups.part.visible = $("showPart").checked;
+    if (v && !v.failed) window.__marcam.legacyLayers?.();
     Object.assign(t, { doc: null, problems: [], setup: null, selected: null, picking: false, pickedChanged: false, regions: null, pick: null, draft: null, retype: null, typeNote: null, edited: null, upgraded: false, gen: t.gen + 1 });
     detected = { key: null, list: [] };
     $("tree").innerHTML = "";

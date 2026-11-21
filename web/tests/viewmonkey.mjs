@@ -81,6 +81,7 @@ const INSTALL = `(() => {
     if (c.mach && (c.legacy.part || c.legacy.sim || c.legacy.path || c.legacy.tool)) out.push('the playback and the view without it drawn together');
     if (c.legacy.draft && !editing) out.push('a draft preview left drawn with no draft');
     if (c.strays) out.push('objects drawn outside the view groups');
+    if (c.part && c.stock) out.push('the part and the simulated stock drawn together (they z-fight)');
     return out;
   }
   const frames = [];
@@ -88,7 +89,8 @@ const INSTALL = `(() => {
   v.renderer.render = (s, cam) => {
     if (s === v.scene && window.__monkey.recording) {
       const c = census();
-      frames.push({ part: c.part, path: c.path, tools: c.tools, audit: audit() });
+      const au = audit();
+      frames.push({ part: c.part, path: c.path, tools: c.tools, audit: au, census: au.length ? JSON.stringify({ c, open: M.machining.state.open, swapping: !!M.machining.state.swapping, session: !!M.machining.state.session, editing: !!M.machining.state.editing }) : null });
     }
     return r0(s, cam);
   };
@@ -113,10 +115,12 @@ const SNAP = `(() => {
     form: f ? [...f.querySelectorAll('input, select, textarea')].map((e) => e.name + '=' + (e.type === 'checkbox' ? e.checked : e.value)).join('|') : null,
     focus: document.activeElement ? (document.activeElement.name || document.activeElement.id || document.activeElement.tagName) : null,
     hidden: [...(M.state.hidden || [])].join(','),
+    // every setting on show outside the tree (the simulation's resolution, the machine, ...)
+    controls: [...document.querySelectorAll('input, select, textarea')].filter((e) => e.offsetParent && e.id !== 'job' && !e.closest('#tree') && !e.closest('#simControls') && e.type !== 'file' && e.type !== 'button').map((e) => (e.id || e.name) + '=' + (e.type === 'checkbox' ? e.checked : e.value)).join('|'),
   };
 })()`;
 
-const BUSY = "!(window.__marcam.planIdle() && document.body.dataset.state !== 'busy' && !window.__marcam.machining.state.autoOpening && !window.__marcam.machining.state.busy && !window.__marcam.machining.state.swapping && !window.__marcam.simLock.busy && !window.__marcam.viewCube?.busy?.())";
+const BUSY = "!(window.__marcam.planIdle() && document.body.dataset.state !== 'busy' && !window.__marcam.machining.state.autoOpening && !window.__marcam.machining.state.busy && !window.__marcam.machining.state.swapping && !window.__marcam.simLock.busy && !window.__marcam.viewCube?.busy?.() && !window.__marcam.inFlight().some((c) => c.worker === 'main'))";
 
 // ---------------------------------------------------------------- the actions
 // Each: what it may change (cam, view, selected, pos, project, form, hidden), and how.
@@ -163,6 +167,15 @@ function actions(r, app) {
       return `${field}=${val}`;
     } },
     { name: "edit", w: 2, may: ["project", "form", "pos"], run: async () => { const d = 1 + r.int(9); await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); const ops = (j.setups ? j.setups.flatMap((s) => s.operations) : j.programs.flatMap((p) => p.operations)); const o = ops[${r.int(100)} % ops.length]; for (const k of ['feed', 'rough_feed', 'finish_feed']) if (o[k]) o[k] += ${d}; t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`); return d; } },
+    { name: "add", w: 1, may: ["selected", "form"], run: async () => {
+      // a new operation of a random type: its form, filled by the engine (often while typing)
+      const k = r.f();
+      const kind = await js(`(() => { const s = document.getElementById('treeAddType'); if (!s) return null; const o = [...s.options]; s.value = o[Math.floor(${k} * o.length)].value; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()`);
+      if (kind) await click("document.getElementById('treeAdd')");
+      return kind;
+    } },
+    { name: "apply", w: 1, may: ["project", "form", "selected", "pos", "hidden"], run: async () => (await click("document.querySelector('#opForm button[type=submit]')")) || null },
+    { name: "cancel", w: 1, may: ["form", "selected"], run: async () => (await click("document.getElementById('cancelDraft')")) || null },
     { name: "generate", w: 1, may: ["pos"], run: async () => { await click("document.getElementById('generate')"); } },
   ];
 }
@@ -171,8 +184,10 @@ function actions(r, app) {
 const app = await startApp();
 const { js } = app;
 let failures = 0;
+let lateNote = "";
 const found = [];
 function fail(seed, i, what) {
+  if (lateNote) what += ` (still landing: ${lateNote})`;
   failures++;
   found.push(`seed ${seed} #${i}: ${what}`);
   console.log(`FAIL  seed ${seed} #${i}: ${what}`);
@@ -191,6 +206,7 @@ try {
     let errs0 = app.pageErrors().length;
     let camQuietAt = 0;
     let lastCam = "none";
+    const carry = new Set();
     console.log(`seed ${seed}: ${example}, ${ACTIONS} actions`);
     for (let i = 0; i < ACTIONS; i++) {
       const a = pickAct();
@@ -211,7 +227,12 @@ try {
       await sleep(80);
       const now = await js("window.__monkey.audit()");
       for (const x of now) fail(seed, i, `${a.name}: ${x} (at once)`);
-      if (r.chance(0.35)) continue;
+      // (not waited for: what it may still change is the next one's to change too)
+      if (r.chance(0.35)) {
+        for (const k of a.may) carry.add(k);
+        carry.add(`#${i} ${a.name}`);
+        continue;
+      }
       // settled
       try {
         await waitFor(async () => !(await js(BUSY)), "settling", 120000);
@@ -225,7 +246,10 @@ try {
       const after = await js(SNAP);
       for (const x of await js("window.__monkey.audit()")) fail(seed, i, `${a.name}: ${x} (settled)`);
       // what the action did not touch stays as it was
-      const may = new Set(a.may);
+      const may = new Set([...a.may, ...carry]);
+      const late = [...carry].filter((k) => k.startsWith("#")).join(", ");
+      lateNote = late;
+      carry.clear();
       const playing = before.playing || after.playing;
       if (!may.has("cam") && camSteady && Date.now() > camQuietAt && (before.cam !== after.cam || before.target !== after.target)) {
         const d = Math.max(...before.cam.split(",").map((x, k) => Math.abs(+x - +after.cam.split(",")[k])));
@@ -235,6 +259,8 @@ try {
       if (!may.has("selected") && before.selected !== after.selected) fail(seed, i, `${a.name}: the selection changed ${before.selected} -> ${after.selected}`);
       if (!may.has("pos") && !playing && after.open && before.open && after.pos !== Math.min(before.pos, after.segments ?? before.pos)) fail(seed, i, `${a.name}: the playhead moved ${before.pos} -> ${after.pos} (of ${after.segments})`);
       if (!may.has("project") && before.project !== after.project) fail(seed, i, `${a.name}: the project changed`);
+      // (the panels that show the project follow it: changed with it, by an edit)
+      if (!may.has("project") && before.controls !== after.controls) fail(seed, i, `${a.name}: a setting changed by itself: ${diff(before.controls, after.controls)}`);
       if (!may.has("form") && before.formOp && before.formOp === after.formOp && before.form !== after.form) fail(seed, i, `${a.name}: the form's values changed: ${diff(before.form, after.form)}`);
       if (a.name === "type" && what && before.formOp && after.formOp === before.formOp && !after.form?.includes(what.replace(/^(\w+)=/, "$1="))) {
         // (the value typed stays in its field, a plan landing or not)
@@ -250,7 +276,7 @@ try {
         if (lostPart && !may.has("view")) fail(seed, i, `${a.name}: the part vanished in ${frames.filter((f) => !f[0]).length} of ${frames.length} frames`);
         if (lostPath) fail(seed, i, `${a.name}: the toolpaths vanished in ${frames.filter((f) => !f[1]).length} of ${frames.length} frames`);
         const bad = frames.filter((f) => f[3]).map((f) => f[3]);
-        if (bad.length) fail(seed, i, `${a.name}: ${bad.length} of ${frames.length} frames drawn against the toggles (${[...new Set(bad)].join(" | ")})`);
+        if (bad.length) fail(seed, i, `${a.name}: ${bad.length} of ${frames.length} frames drawn against the toggles (${[...new Set(bad)].join(" | ")})${VERBOSE ? ` ${await js("window.__monkey.frames.find((f) => f.census)?.census")}` : ""}`);
       }
       const errs = app.pageErrors();
       if (errs.length > errs0) {
