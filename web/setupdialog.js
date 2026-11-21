@@ -547,6 +547,16 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     });
   }
 
+  /** No setup's details shown: the form, if it was there, closed (its edit dropped) and put
+   *  back in the page (never left out of it: its fields are looked up by id). */
+  function park() {
+    if (!dlg.classList.contains("embedded") && dlg.isConnected) return;
+    if (cur?.embedded) finish(false);
+    if (dlg.open) dlg.close();
+    dlg.classList.remove("embedded");
+    document.body.appendChild(dlg);
+  }
+
   /** Whether the form is open in the details for setup `id` (being edited there). */
   function embeddedFor(id) {
     return !!(cur?.embedded && cur.preset.setupId === id && dlg.open);
@@ -684,5 +694,5 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     finish(false);
   });
 
-  return { open, close: () => finish(false), preview, embeddedFor, reattach, get mode() { return cur?.mode ?? null; } };
+  return { open, close: () => finish(false), preview, embeddedFor, reattach, park, get mode() { return cur?.mode ?? null; } };
 }

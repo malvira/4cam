@@ -1573,7 +1573,8 @@ function legacyLayers() {
   // the playback shown (not stepped aside for picking or a new operation): it draws them
   const t = state.tree;
   const editing = !!(t && (t.picking || t.draft || t.tabMode));
-  if (m?.open && !editing && groups.machining?.visible) for (const k of ["part", "stock", "sim", "path", "tool"]) groups[k].visible = false;
+  // (shown while it opens, too: its scene is drawn before it counts as open)
+  if (!editing && groups.machining?.visible) for (const k of ["part", "stock", "sim", "path", "tool"]) groups[k].visible = false;
 }
 window.__marcam.legacyLayers = legacyLayers;
 
@@ -1652,6 +1653,7 @@ function simMesh(THREE, sim, s) {
 $("loadExample").addEventListener("click", () => {
   if (!window.__marcam.project.mayDiscard("Load the example")) return;
   loadExample($("example").value).catch((e) => {
+    console.error(e);
     showError(e.message);
     setStatus("Loading failed", "error");
   });
@@ -2292,6 +2294,30 @@ window.__marcam.tools = setupToolDialogs({
   },
   userLibraries: libraries,
 });
+// (Mar) the tool library is a node of the project tree: its panel is shown in the tree's
+// details when it is selected, and kept (hidden) in the left pane otherwise
+{
+  const panel = $("libraryPanel");
+  const park = document.createElement("div");
+  park.id = "libraryParked";
+  park.hidden = true;
+  panel.before(park);
+  park.appendChild(panel);
+  window.__marcam.tools.host = (host) => {
+    if (host) {
+      if (panel.parentElement !== host) host.appendChild(panel);
+      panel.open = true;
+      panel.classList.add("hosted");
+    } else if (panel.parentElement !== park) {
+      park.appendChild(panel);
+      panel.classList.remove("hosted");
+    }
+  };
+  window.__marcam.tools.summary = () => {
+    const lib = currentLibrary();
+    return lib ? `${lib.tools.length} tool${lib.tools.length === 1 ? "" : "s"} · ${lib.name || lib.id}` : "";
+  };
+}
 $("menuToolNumbers").addEventListener("click", () => window.__marcam.tools.openNumbers());
 $("menuAddTool").addEventListener("click", async () => {
   if (await window.__marcam.tools.pick()) await window.__marcam.tree?.refresh();

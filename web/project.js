@@ -1117,7 +1117,7 @@ export function setupProject(ctx) {
   /** The setup's settings in the details below the tree (`host`): the form put back as it was
    *  when it is already open there for that setup, else opened there anew. */
   function hostSetup(host, id, focus) {
-    if (!host) return;
+    if (!host) return dialog.park();
     if (dialog.embeddedFor(id)) return dialog.reattach(host, focus);
     editSetup(id, { host }).catch((e) => showError(e.message));
   }

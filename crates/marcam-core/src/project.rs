@@ -341,6 +341,10 @@ pub struct Setup {
     /// Its G-code options: work offset, header and footer lines, line numbers, comments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post: Option<job::PostOptions>,
+    /// The project's tools (by number) this setup lists besides those its operations use (a
+    /// tool brought in for it, ready for its operations). Nothing is planned from it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<u32>,
 }
 
 impl Project {
@@ -435,6 +439,7 @@ impl Project {
                 operations,
                 outputs,
                 post: None,
+                tools: Vec::new(),
             }],
         }
     }

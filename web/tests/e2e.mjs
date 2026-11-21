@@ -422,7 +422,7 @@ try {
   check("limit check flags the Carvera's 5 RPM rotary cap (5209 > 1800 deg/min)", /Carvera/.test(lim) && /5209 deg\/min/.test(lim) && /1800 deg\/min/.test(lim), lim.split("\n")[1] || lim);
 
   // 5c. tool library: import a Fusion 360 library by URL, edit a tool, use it as T1
-  await js("document.getElementById('libraryPanel').open = true; document.getElementById('importUrl').value = new URL('../tests/fixtures/fusion-tool-library.json', location).href; document.getElementById('importUrlBtn').click(); true");
+  await js("document.querySelector('#tree [data-act=library]')?.click(); document.getElementById('libraryPanel').open = true; document.getElementById('importUrl').value = new URL('../tests/fixtures/fusion-tool-library.json', location).href; document.getElementById('importUrlBtn').click(); true");
   const imported = await waitFor(() => js("document.getElementById('importInfo').textContent"), "the library import", 10000);
   check("Fusion tool library imports from a URL", /3 tools/.test(imported) && (await js("document.getElementById('library').value")) === "fusion-tool-library", imported);
   await js("document.querySelector('#toolTable button[data-edit=\"0\"]').click(); document.getElementById('tfName').value = 'Edited Flat 3.0'; document.getElementById('tfDiameter').value = '3.0'; document.getElementById('tfSave').click(); true");
@@ -560,7 +560,7 @@ try {
     await settle();
   }
   const empty = await js("document.querySelectorAll('#tree .tree-op').length");
-  await js("document.getElementById('treeWizard').click(); true");
+  await js("(document.getElementById('treeWizard') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeWizard'))).click(); true");
   await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 3"), "the wizard", 60000);
   const wiz = await gen();
   await js("document.querySelectorAll('#tabs button')[0].click(); true");
@@ -949,7 +949,8 @@ try {
   const s1 = (await rect("side"))[3];
   const sideBuf = await js("document.getElementById('side').height / (window.devicePixelRatio || 1)");
   check("dragging the 3D/side bar grows the side view, and its canvas follows", Math.abs(s1 - s0 - 100) <= 3 && Math.abs(sideBuf - s1) <= 2, `side ${s0}->${s1}, canvas ${sideBuf}`);
-  await js("document.getElementById('libraryPanel').open = true; true");
+  await js("document.querySelector('#tree [data-act=library]')?.click(); document.getElementById('libraryPanel').open = true; true");
+  await js("document.getElementById('splitTools').scrollIntoView({ block: 'center' }); true");
   const tw0 = (await rect("toolTableWrap"))[3];
   await drag("splitTools", 0, 80);
   const tw1 = (await rect("toolTableWrap"))[3];
@@ -1154,7 +1155,7 @@ try {
     await shot("14d_reopened");
 
     // Edit setup: rotary -> 3-axis vise converts it (warned), regenerates, and can be undone
-    await js("document.getElementById('treeEditSetup').click(); true");
+    await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
     await dialogOpen();
     const editPre = await js("({ kind: document.querySelector('input[name=\"sdKind\"]:checked').value, machine: document.getElementById('sdMachine').value, title: document.getElementById('sdTitle').textContent })");
     const nDialogs = cdp.dialogs.length;
@@ -2109,7 +2110,7 @@ try {
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await settle();
     const lib = () => js("JSON.parse(localStorage.getItem('marcam.libraries')).find((l) => l.id === 'my-tools').tools.find((t) => t.id === 'spiral-o-metal-3.175x12')");
-    await js("document.getElementById('libraryPanel').open = true; const l = document.getElementById('library'); l.value = 'my-tools'; l.dispatchEvent(new Event('change')); true");
+    await js("document.querySelector('#tree [data-act=library]')?.click(); document.getElementById('libraryPanel').open = true; const l = document.getElementById('library'); l.value = 'my-tools'; l.dispatchEvent(new Event('change')); true");
     const ti = await js("JSON.parse(localStorage.getItem('marcam.libraries')).find((l) => l.id === 'my-tools').tools.findIndex((t) => t.id === 'spiral-o-metal-3.175x12')");
     await js(`document.querySelector('#toolTable button[data-edit="${ti}"]').click(); true`);
     await waitFor(() => js("document.querySelectorAll('#tfCutTable .cut-op option').length > 5"), "the operation types in the cutting data", 60000);
@@ -2134,7 +2135,7 @@ try {
     await settle();
     const before = await js("(() => { const o = JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.id === 'auto'); return { feed: o.feed, step_down: o.step_down }; })()");
     const plans0 = await js("window.__marcam.calls.planAndPost || 0");
-    await js("document.getElementById('treeEditSetup').click(); true");
+    await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
     await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     const listed = await js("[...document.querySelectorAll('#sdMaterials option')].map((o) => o.value)");
     await js("document.getElementById('sdMaterial').value = 'aluminium'; document.getElementById('sdOk').click(); true");
@@ -2152,7 +2153,7 @@ try {
       const f = (await window.__marcam.engine('opDefaults', d, { type: 'face', setup: s.id, tool: 1 })).result;
       return { pocket: p.feed, depth: p.step_down, face: f.feed }; })()`);
     // reopened, the dialog shows the material
-    await js("document.getElementById('treeEditSetup').click(); true");
+    await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
     await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     const shown = await js("document.getElementById('sdMaterial').value");
     await js("document.getElementById('sdCancel').click(); true");
@@ -2165,7 +2166,7 @@ try {
   // and depth in the setup's material (aluminium, set above), faster for a thin adaptive cut
   {
     const ti = await js("JSON.parse(localStorage.getItem('marcam.libraries')).find((l) => l.id === 'my-tools').tools.findIndex((t) => t.id === 'spiral-o-metal-3.175x12')");
-    await js(`document.getElementById('libraryPanel').open = true; document.querySelector('#toolTable button[data-edit="${ti}"]').click(); true`);
+    await js(`document.querySelector('#tree [data-act=library]')?.click(); document.getElementById('libraryPanel').open = true; document.querySelector('#toolTable button[data-edit="${ti}"]').click(); true`);
     await waitFor(() => js("document.querySelectorAll('#tfCutTable .cut-op option').length > 5"), "the tool form", 60000);
     await js(`document.getElementById('tfCutAdd').click(); const r = [...document.querySelectorAll('#tfCutTable tr.cut-row')].pop();
       r.querySelector('.cut-material').value = 'hardwood'; r.querySelector('.cut-op').value = 'contour'; r.querySelector('.cut-calc').click(); true`);
@@ -2231,7 +2232,7 @@ try {
     await settle();
     await clickGenerate();
     await waitDone("the plate generated", 240000);
-    await js("document.getElementById('treeEditSetup').click(); true");
+    await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
     await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     await js(`document.getElementById('sdPostBox').open = true; document.getElementById('sdWork').value = 'G55';
       document.getElementById('sdHeader').value = 'M8'; document.getElementById('sdFooter').value = 'M9'; document.getElementById('sdLineNums').checked = true; true`);
@@ -2704,7 +2705,7 @@ try {
   {
     await js("window.__confirm0 = window.confirm; window.confirm = () => true; true");
     const openEdit = async () => {
-      await js("document.getElementById('treeEditSetup').click(); true");
+      await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
       await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     };
     const set = (id, v) => js(`(() => { const e = document.getElementById('${id}'); e.value = '${v}'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
@@ -2813,7 +2814,7 @@ try {
     await waitDone("the plate", 120000);
     const jawsLook = () => js("(() => { const g = window.__marcam.state.three.groups.jaws; return { n: g?.children.length || 0, visible: !!g?.visible, top: g?.children[0] ? +(g.children[0].position.z + g.children[0].children[0].geometry.parameters.depth / 2).toFixed(3) : null }; })()");
     const before = { look: await jawsLook(), warnings: await js("window.__marcam.state.result.programs.flatMap((p) => p.warnings || [])") };
-    await js("document.getElementById('treeEditSetup').click(); true");
+    await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
     await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     const shownJaws = await js("!document.getElementById('sdJawsRow').classList.contains('hidden')");
     await js("(() => { const e = document.getElementById('sdJaws'); e.value = '8.5'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
@@ -3000,6 +3001,29 @@ try {
       rot === "[0,0,90]" && Math.abs(b1[0] - b0[1]) < 0.02 && Math.abs(b1[1] - b0[0]) < 0.02 && flat.every((v) => Number.isFinite(v)) && flat.every((v) => v % 90 === 0),
       `${rot}; ${JSON.stringify(b0)} -> ${JSON.stringify(b1)}; lay flat ${JSON.stringify(flat)}`);
     await js("document.getElementById('sdCancel').click(); true");
+  }
+
+  // (Mar) the tool library in the tree, and each setup's tools (one added from the library)
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle();
+    await js("document.querySelector('#tree [data-act=library]').click(); true");
+    await settle();
+    const lib = await js("(() => { const p = document.getElementById('libraryPanel'); return { inDetails: !!p.closest('#treeDetails'), open: p.open, rows: document.querySelectorAll('#toolTable tr[data-tool]').length }; })()");
+    await js("document.querySelector('#tree .tree-tool [data-act=tool]').click(); true");
+    await settle();
+    const tool = await js("({ details: document.getElementById('treeDetails').textContent, parked: !!document.getElementById('libraryPanel').closest('#libraryParked') })");
+    const before = await js("[...document.querySelectorAll('#tree .tree-tool')].map((r) => r.dataset.tool).join(',')");
+    await js("document.getElementById('treeAddTool').click(); true");
+    await waitFor(() => js("document.getElementById('toolPick').open"), "the tool library picker", 10000);
+    await js("[...document.querySelectorAll('#tpList .tp-row')].find((r) => !/Spiral O Metal 3\.175 x 12/.test(r.textContent)).click(); true");
+    await waitFor(() => js("!document.getElementById('toolPick').open"), "the picker closed", 10000);
+    await settle();
+    const after = await js("({ rows: [...document.querySelectorAll('#tree .tree-tool')].map((r) => r.dataset.tool).join(','), listed: JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].tools || []) })");
+    check("tool library in the tree: its panel in the details; a setup's tools listed with their details; one added from the library joins the project and the setup",
+      lib.inDetails && lib.open && lib.rows > 0 && /T1/.test(tool.details) && /Diameter/.test(tool.details) && tool.parked && after.rows.split(",").length === before.split(",").length + 1 && after.listed !== "[]",
+      `${JSON.stringify(lib)} parked ${tool.parked}; ${before} -> ${after.rows}; listed ${after.listed}`);
   }
 
   // 9. phone width: layout stacks, no horizontal scroll

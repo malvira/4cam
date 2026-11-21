@@ -183,6 +183,8 @@ function actions(r, app) {
       return want;
     } },
     { name: "setup", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=setup]')")) || null },
+    { name: "library", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree [data-act=library]')")) || null },
+    { name: "tool", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-tool [data-act=tool]')")) || null },
     { name: "foldtree", w: 1, may: [], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=fold]')")) || null },
     { name: "generate", w: 1, may: ["pos"], run: async () => { await click("document.getElementById('generate')"); } },
   ];
@@ -206,7 +208,9 @@ try {
     const example = r.pick(["knob", "plate"]);
     await js(`document.getElementById('example').value = '${example}'; document.getElementById('loadExample').click(); true`);
     await sleep(500);
-    await waitFor(async () => !(await js(BUSY)) && (await js("!!window.__marcam.state.result && !!window.__marcam.state.three?.renderer && window.__marcam.machining.state.open")), `${example} planned and shown`, 180000);
+    await waitFor(async () => !(await js(BUSY)) && (await js("!!window.__marcam.state.result && !!window.__marcam.state.three?.renderer && window.__marcam.machining.state.open")), `${example} planned and shown`, 180000).catch(async (e) => {
+      throw new Error(`${e.message}: ${await js("JSON.stringify({ result: !!window.__marcam.state.result, open: window.__marcam.machining.state.open, state: document.body.dataset.state, status: document.getElementById('status').textContent, error: document.getElementById('error').textContent, inFlight: window.__marcam.inFlight(), stale: window.__marcam.state.stale, planIdle: window.__marcam.planIdle() })")} ${app.pageErrors().join(" | ").slice(0, 900)}`);
+    });
     await js(INSTALL);
     const acts = actions(r, app);
     const total = acts.reduce((n, a) => n + a.w, 0);

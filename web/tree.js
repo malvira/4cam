@@ -29,7 +29,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     try {
       raw = readJob();
     } catch {
-      $("tree").innerHTML = '<div class="muted small">(fix the JSON to see the project)</div>';
+      setTree('<div class="muted small">(fix the JSON to see the project)</div>');
       return;
     }
     try {
@@ -39,7 +39,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.problems = result.problems;
       t.upgraded = result.upgraded;
     } catch (e) {
-      $("tree").innerHTML = `<div class="error">${esc(e.message)}</div>`;
+      setTree(`<div class="error">${esc(e.message)}</div>`);
       return;
     }
     if (!t.doc.setups.some((s) => s.id === t.setup)) t.setup = t.doc.setups[0]?.id ?? null;
@@ -192,7 +192,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (!t.doc) return;
     const s = setup();
     if (!s) {
-      box.innerHTML = '<div class="muted small" id="treeEmpty">No part yet: Import STL (or drop one on the page) to get a setup, then add its operations.</div>';
+      const lib = window.__marcam.tools?.summary?.() || "";
+      setTree(`<div class="tree-list"><div class="tree-lib ${t.focus === "library" ? "sel" : ""}"><div class="tree-setuphead"><span class="twisty-pad"></span><span class="tree-label" data-act="library" title="The tools of every project: add, edit, import, export">Tool library</span> <span class="muted">${esc(lib)}</span></div></div>
+        <div class="muted small" id="treeEmpty">No part yet: Import STL (or drop one on the page) to get a setup, then add its operations.</div></div>
+        ${t.focus === "library" ? '<div class="tree-details" id="treeDetails"><div class="tree-outname">Tool library</div><div id="libHost"></div></div>' : ""}`);
+      window.__marcam.tools?.host?.($("libHost"));
+      window.__marcam.project?.hostSetup?.(null);
       return;
     }
     const setupSel = t.doc.setups
@@ -203,6 +208,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     // folded or not: as the person left each setup; by default the one worked on unfolded
     t.fold ||= new Map();
     let html = `<select id="treeSetup" class="hidden" aria-hidden="true" tabindex="-1">${setupSel}</select><div class="tree-list" id="treeList">`;
+    // (Mar) the tool library, for every project, first
+    const lib = window.__marcam.tools?.summary?.() || "";
+    html += `<div class="tree-lib ${t.focus === "library" ? "sel" : ""}"><div class="tree-setuphead"><span class="twisty-pad"></span><span class="tree-label" data-act="library" title="The tools of every project: add, edit, import, export">Tool library</span> <span class="muted">${esc(lib)}</span></div></div>`;
     for (const x of t.doc.setups) {
       if (x.id === s.id) {
         html += setupHead(x, true);
@@ -211,6 +219,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       }
       html += setupHead(x, false) + otherOps(x) + `</div>`;
     }
+    html += setupTools(s);
     html += `<div class="row small eyes"><span class="muted">Toolpaths shown:</span>
         <button type="button" id="eyeAll" title="Show every toolpath of this setup">Show all</button>
         <button type="button" id="eyeNone" title="Hide every toolpath of this setup (view only)">Hide all</button></div>
@@ -260,7 +269,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     html += `<div class="row small"><button type="button" id="treeAddSetup" title="Another setup for the same part (e.g. the other side, or a vise setup)">+ Add setup</button></div></div>`;
     // the details of what is selected: the setup (nothing else selected), or the operation
     html += `<div class="tree-details" id="treeDetails">`;
-    if (!t.selected) {
+    const tool = t.focus === "tool" && !t.selected ? t.doc.tools.find((x) => x.number === t.tool) : null;
+    if (t.focus === "library" && !t.selected) {
+      html += `<div class="tree-outname">Tool library</div><div id="libHost"></div>`;
+    } else if (tool) {
+      html += toolDetails(tool, s);
+    } else if (!t.selected) {
       html += `<div class="tree-outname">${esc(s.name || s.id)} <span class="muted">setup</span></div>
         <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
         <div class="row small"><button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
@@ -269,21 +283,60 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         <div id="setupHost" class="setup-host"></div>`;
     }
     html += `<div id="opEditor"></div></div>`;
-    box.innerHTML = html;
+    setTree(html);
     box.dataset.ops = String(n);
     renderStates();
     renderEditor();
-    // the setup's settings (stock, part, holding, output) in its details
-    if (!t.selected) window.__marcam.project?.hostSetup?.($("setupHost"), t.setup, sdFocus);
+    // the setup's settings (stock, part, holding, output) in its details; the library's
+    window.__marcam.project?.hostSetup?.($("setupHost"), t.setup, sdFocus);
+    window.__marcam.tools?.host?.($("libHost"));
     for (const [e, y] of scrolls) e.scrollTop = y;
     detectFeatures();
+  }
+
+  /** The tool numbers a setup lists: those it was given, and those its operations use. */
+  function toolsOf(x) {
+    const ns = new Set([...(x.tools || []), ...x.operations.map((o) => o.tool).filter((n) => n != null)]);
+    return [...ns].sort((a, b) => a - b);
+  }
+  /** A setup's tools in the tree: T number, name, size; one added from the library. */
+  function setupTools(x) {
+    const rows = toolsOf(x)
+      .map((n) => {
+        const e = t.doc.tools.find((y) => y.number === n);
+        const i = e ? toolInfo(e) : null;
+        const sel = t.focus === "tool" && t.tool === n && !t.selected;
+        return `<div class="tree-tool ${sel ? "sel" : ""}" data-tool="${n}"><span class="tree-label" data-act="tool">T${n} <span class="muted">${esc(i ? `${i.name || i.kind} · Ø${+(+i.diameter || 0).toFixed(3)}` : "not in the project")}</span></span></div>`;
+      })
+      .join("");
+    return `<div class="tree-tools"><div class="tree-outname">Tools <button type="button" id="treeAddTool" class="small" title="A tool from the library for this setup (it gets the next tool number)">+ from library</button></div>${rows}</div>`;
+  }
+  /** A tool's details: as the project has it (its number, what it is, its sizes). */
+  function toolDetails(e, x) {
+    const i = toolInfo(e);
+    const sh = i.shape || {};
+    const rows = [
+      ["Number", `T${i.number}`],
+      ["Name", i.name || ""],
+      ["Kind", i.kind || ""],
+      ["Diameter", sh.diameter != null ? `${sh.diameter} mm` : i.diameter != null ? `${i.diameter} mm` : ""],
+      ["Tip diameter", sh.tip_diameter != null ? `${sh.tip_diameter} mm` : ""],
+      ["Angle", sh.angle != null ? `${sh.angle}°` : ""],
+      ["Flute length", i.flute_length != null ? `${i.flute_length} mm` : ""],
+      ["Flutes", i.flutes != null ? String(i.flutes) : ""],
+      ["Stickout", sh.stickout != null ? `${sh.stickout} mm` : ""],
+      ["From", e.library ? `library ${e.library}` : "this project"],
+      ["Used by", x.operations.filter((o) => o.tool === i.number).map((o) => o.id).join(", ") || "no operation yet"],
+    ].filter(([, v]) => v);
+    return `<div class="tree-outname">T${i.number} <span class="muted">tool</span></div><table class="small tool-details">${rows.map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>
+      <div class="muted small">Its sizes and cutting data are edited in the Tool library.</div>`;
   }
 
   /** A setup's line in the tree (its `<div class="tree-setup">` left open): a fold button,
    *  its name (selecting it shows the setup's details), its kind. */
   function setupHead(x, active) {
     const open = isOpen(x);
-    return `<div class="tree-setup ${active ? "active" : ""} ${active && !t.selected ? "sel" : ""}" data-setup="${esc(x.id)}">
+    return `<div class="tree-setup ${active ? "active" : ""} ${active && !t.selected && (!t.focus || t.focus === "setup") ? "sel" : ""}" data-setup="${esc(x.id)}">
       <div class="tree-setuphead"><button type="button" class="twisty" data-act="fold" aria-expanded="${open}" aria-label="Show the operations of ${esc(x.name || x.id)}">${open ? "▾" : "▸"}</button>
       <span class="tree-label" data-act="setup" title="This setup's details">${esc(x.name || x.id)}</span> <span class="muted">${esc(KIND_NAMES[kindOfSetup(x)])} · ${x.operations.length} op${x.operations.length === 1 ? "" : "s"}</span></div>`;
   }
@@ -303,10 +356,21 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (id === t.setup) return;
     if (t.picking) endPicking(false);
     t.setup = id;
+    t.focus = null;
     t.selected = null;
     t.draft = null;
     t.retype = null;
     t.typeNote = null;
+  }
+
+  /** The tree's contents replaced: what lives in it but is not drawn by it (the tool library's
+   *  panel, the setup's form) taken out first, to the page, as they are (never left detached:
+   *  the app looks their fields up by id); the tree puts them back where they belong. */
+  function setTree(html) {
+    window.__marcam.tools?.host?.(null);
+    const dlg = document.getElementById("setupDialog");
+    if (dlg && $("tree").contains(dlg)) document.body.appendChild(dlg);
+    $("tree").innerHTML = html;
   }
 
   /** The field focused inside `el`, with its caret (to be put back after drawing again). */
@@ -1078,6 +1142,36 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       await window.__marcam.project.editSetup(t.setup);
       return;
     }
+    if (el.dataset?.act === "library") {
+      if (t.picking) endPicking(false);
+      t.focus = "library";
+      t.selected = null;
+      t.draft = null;
+      t.retype = null;
+      return render();
+    }
+    if (el.dataset?.act === "tool") {
+      if (t.picking) endPicking(false);
+      t.focus = "tool";
+      t.tool = +el.closest(".tree-tool").dataset.tool;
+      t.selected = null;
+      t.draft = null;
+      t.retype = null;
+      return render();
+    }
+    if (el.id === "treeAddTool") {
+      // a library tool for this setup: into the project (the next number), listed here
+      const n = await window.__marcam.tools?.pick();
+      if (!n) return;
+      await refresh();
+      const s = setup();
+      if (!s) return;
+      s.tools = [...new Set([...(s.tools || []), n])].sort((a, b) => a - b);
+      t.focus = "tool";
+      t.tool = n;
+      t.selected = null;
+      return commit({ label: `Added T${n} to ${s.name || s.id}.` });
+    }
     const head = el.closest?.(".tree-setup");
     if (el.dataset?.act === "fold" && head) {
       const id = head.dataset.setup;
@@ -1087,6 +1181,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.dataset?.act === "setup" && head) {
       // a setup's name: it is worked on, its details shown
+      t.focus = "setup";
       if (t.picking) endPicking(false);
       switchSetup(head.dataset.setup);
       t.selected = null;
@@ -1187,6 +1282,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const out = s.outputs.find((o) => o.operations.includes(id));
     const act = el.dataset.act;
     if (act === "select") {
+      t.focus = null;
       if (t.picking) stopPicking();
       // another operation: an unsaved new one or a pending type change is dropped
       t.draft = null;
@@ -1604,7 +1700,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (v && !v.failed) window.__marcam.legacyLayers?.();
     Object.assign(t, { doc: null, problems: [], setup: null, selected: null, picking: false, pickedChanged: false, regions: null, pick: null, draft: null, retype: null, typeNote: null, edited: null, upgraded: false, gen: t.gen + 1 });
     detected = { key: null, list: [] };
-    $("tree").innerHTML = "";
+    setTree("");
   }
 
   /** Each operation's badge: planned, waiting to be planned again, being planned, or failed
