@@ -87,6 +87,64 @@ export function encodeStl(tris, header = "marcam") {
   return out;
 }
 
+/** The engine's rotation (MeshSource.rotate): degrees about X, then Y, then Z; quarter turns
+ *  exact (as the engine's). Returns a function of a point; null for none. */
+export function rotation(rot) {
+  if (!rot || rot.every((v) => !v)) return null;
+  const sc = (deg) => {
+    const q = deg / 90;
+    if (Number.isInteger(q)) return [[0, 1], [1, 0], [0, -1], [-1, 0]][((q % 4) + 4) % 4];
+    const r = (deg * Math.PI) / 180;
+    return [Math.sin(r), Math.cos(r)];
+  };
+  const [[sx, cx], [sy, cy], [sz, cz]] = rot.map(sc);
+  return (p) => {
+    let q = [p[0], cx * p[1] - sx * p[2], sx * p[1] + cx * p[2]];
+    q = [cy * q[0] + sy * q[2], q[1], -sy * q[0] + cy * q[2]];
+    return [cz * q[0] - sz * q[1], sz * q[0] + cz * q[1], q[2]];
+  };
+}
+
+/** The part's largest flat faces (after the axis mapping): their outward normals, the
+ *  biggest first, for laying the part down on one (up to `n`). */
+export function flatFaces(tris, axis, n = 6) {
+  const by = new Map();
+  for (let i = 0; i + 8 < tris.length; i += 9) {
+    const a = mapAxis([tris[i], tris[i + 1], tris[i + 2]], axis);
+    const b = mapAxis([tris[i + 3], tris[i + 4], tris[i + 5]], axis);
+    const c = mapAxis([tris[i + 6], tris[i + 7], tris[i + 8]], axis);
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const nn = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const l = Math.hypot(...nn);
+    if (l < 1e-12) continue;
+    const k = nn.map((x) => Math.round((x / l) * 200) / 200);
+    const key = k.join(",");
+    const e = by.get(key) || { n: k, area: 0 };
+    e.area += l / 2;
+    by.set(key, e);
+  }
+  return [...by.values()].sort((p, q) => q.area - p.area).slice(0, n).map((e) => {
+    const l = Math.hypot(...e.n);
+    return e.n.map((x) => x / l);
+  });
+}
+
+/** The rotation [x, y, 0] (degrees) that turns the outward normal `nrm` straight down (the
+ *  face it belongs to on the table or the vise's floor); near quarter turns made exact. */
+export function layFlat(nrm) {
+  const [nx, ny, nz] = nrm;
+  const a = Math.atan2(ny, nz);
+  const w = Math.hypot(ny, nz);
+  const b = Math.PI - Math.atan2(nx, w);
+  const snap = (r) => {
+    let d = (r * 180) / Math.PI;
+    d = ((d % 360) + 540) % 360 - 180;
+    const q = Math.round(d / 90) * 90;
+    return Math.abs(d - q) < 1e-4 ? (q === -180 ? 180 : q) : Math.round(d * 1e4) / 1e4;
+  };
+  return [snap(a), snap(b), 0];
+}
+
 /** The engine's axis mapping (MeshSource.axis): the mesh axis that becomes X. */
 export function mapAxis(p, axis) {
   if (axis === "y") return [p[1], p[2], p[0]];
@@ -270,9 +328,12 @@ export function placePart(tris, opts = {}) {
   const kind = opts.kind ?? (opts.holding === "vise" ? "vise" : "rotary");
   const vise = kind === "vise";
   const ax = vise ? UP_AXIS[opts.up ?? opts.axis ?? "z"] : opts.axis ?? "x";
+  // (the part's orientation: after the axis mapping, as the engine turns it)
+  const rot = rotation(opts.rotate);
+  const map = rot ? (p) => rot(mapAxis(p, ax)) : (p) => mapAxis(p, ax);
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < tris.length; i += 3) {
-    const q = mapAxis([tris[i], tris[i + 1], tris[i + 2]], ax);
+    const q = map([tris[i], tris[i + 1], tris[i + 2]]);
     for (let k = 0; k < 3; k++) {
       lo[k] = Math.min(lo[k], q[k]);
       hi[k] = Math.max(hi[k], q[k]);
@@ -298,7 +359,7 @@ export function placePart(tris, opts = {}) {
       const pts = [];
       const step = Math.max(1, Math.floor(tris.length / 3 / 200000));
       for (let i = 0; i < tris.length; i += 3 * step) {
-        const q = mapAxis([tris[i], tris[i + 1], tris[i + 2]], ax);
+        const q = map([tris[i], tris[i + 1], tris[i + 2]]);
         pts.push([q[1] - cy, q[2] - cz]);
       }
       dims = fitBar(spec.shape, pts, spec.margin ?? opts.margin ?? 0.5, spec.dims?.angle ?? 0);
@@ -338,14 +399,14 @@ export function placePart(tris, opts = {}) {
     const pts = [];
     const step = Math.max(1, Math.floor(tris.length / 3 / 200000));
     for (let i = 0; i < tris.length; i += 3 * step) {
-      const q = mapAxis([tris[i], tris[i + 1], tris[i + 2]], ax);
+      const q = map([tris[i], tris[i + 1], tris[i + 2]]);
       pts.push([q[1] - cy, q[2] - cz]);
     }
     dims = fitBar(shape, pts, spec?.margin ?? opts.margin ?? 0.5, spec?.dims?.angle ?? spec?.angle ?? 0);
     // the older default (the part + 15 mm) unless a chuck length is given
     length = spec?.chuck != null ? Math.ceil(size[0] + chuck + 3 + Math.max(0, shift)) : Math.ceil(size[0] + 15 + Math.max(0, shift));
   }
-  return { axis: ax, translate, stock: barStock(shape, dims, length), size, chuck: spec?.chuck };
+  return { axis: ax, rotate: opts.rotate, translate, stock: barStock(shape, dims, length), size, chuck: spec?.chuck };
 }
 
 /** The setup's kind: its own, else from its stock (a block: vise; a bar: rotary). */
@@ -427,7 +488,7 @@ export function setupProject(ctx) {
   const { $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, resetProject, machineArg, currentMachine } = ctx;
   const p = { name: "untitled", dirty: false, fileName: null, pending: null };
   state.project = p;
-  const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS, stockSpecOf, lyingBar });
+  const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS, stockSpecOf, lyingBar, flatFaces, layFlat, UP_AXIS, rotation });
 
   function show() {
     $("projectName").textContent = p.name;
@@ -811,8 +872,11 @@ export function setupProject(ctx) {
       while (k > 0 && doc.setups[k].stock?.shape === "from_previous") k--;
       if (k >= 0) ensureTools(doc, doc.setups[k].stock);
     } else if (model && tris) {
-      const place = placePart(tris, { kind, axis: cfg.axis, up: cfg.axis, margin: cfg.margin, explicit: cfg.stock ? undefined : cfg.explicit, stock: cfg.stock, origin: cfg.origin });
+      const place = placePart(tris, { kind, axis: cfg.axis, up: cfg.axis, margin: cfg.margin, explicit: cfg.stock ? undefined : cfg.explicit, stock: cfg.stock, origin: cfg.origin, rotate: cfg.rotate });
       model.axis = place.axis;
+      // the part's orientation (Mar): none, unless turned
+      if (cfg.rotate?.some((v) => v)) model.rotate = cfg.rotate.map((v) => Math.round(v * 1e4) / 1e4);
+      else delete model.rotate;
       model.translate = place.translate.map(r3);
       s.stock = place.stock;
       ensureTools(doc, place.stock);
@@ -1082,7 +1146,7 @@ export function setupProject(ctx) {
     const cfg = await dialog.open("edit", {
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
       stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null, previewTris, post: s.post,
-      canCarry: doc.setups.indexOf(s) > 0, setupId: s.id,
+      canCarry: doc.setups.indexOf(s) > 0, setupId: s.id, rotate: m?.rotate,
       carrySources: doc.setups.slice(0, doc.setups.indexOf(s)).map((x) => ({ id: x.id, name: x.name || x.id })),
     }, { host: opts.host });
     if (!cfg) return false;

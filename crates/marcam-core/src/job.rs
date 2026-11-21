@@ -358,6 +358,10 @@ impl Turn {
     }
 }
 
+fn is_zero3(v: &[f64; 3]) -> bool {
+    v.iter().all(|x| *x == 0.0)
+}
+
 /// Where the part mesh comes from and how it sits on the rotary axis.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeshSource {
@@ -366,7 +370,11 @@ pub struct MeshSource {
     /// Mesh axis that becomes the rotary X axis.
     #[serde(default)]
     pub axis: crate::mesh::Axis,
-    /// Turned after the axis mapping (a setup that turns the part over or end for end).
+    /// Turned after the axis mapping: degrees about X, then Y, then Z (the part's
+    /// orientation in its setup: a quarter turn, laid on a face, any angle).
+    #[serde(default, skip_serializing_if = "is_zero3")]
+    pub rotate: [f64; 3],
+    /// Turned after that (a setup that turns the part over or end for end).
     #[serde(default, skip_serializing_if = "Turn::is_none")]
     pub turn: Turn,
     /// Translation applied after the axis mapping and the turn (mm).
@@ -385,7 +393,7 @@ impl MeshSource {
             Some(r) => crate::relief::relief_mesh(&crate::relief::decode_gray(bytes)?, r),
             None => crate::Mesh::from_bytes(bytes)?,
         };
-        Ok(m.oriented_turned(self.axis, self.turn, self.translate))
+        Ok(m.oriented_rotated(self.axis, self.rotate, self.turn, self.translate))
     }
 
     /// [`MeshSource::mesh`] from the file, relative to `dir`.

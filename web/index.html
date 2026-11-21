@@ -231,6 +231,17 @@
         <label><span id="sdAxisLabel">Part axis along X</span> <select id="sdAxis"><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
         <label><span id="sdOriginLabel">Front at X0, then shift</span> <input id="sdOrigin" type="number" step="any" value="0"> mm</label>
         <label id="sdTailRow"><input id="sdTail" type="checkbox"> tailstock</label>
+        <div id="sdOrient" class="sd-orient small" title="How the part sits in this setup: turned about X, Y and Z (in that order, after the axis), in quarter turns or any angle">
+          <span>Turned</span>
+          <button type="button" data-rot="0" title="A quarter turn about X">X 90&deg;</button>
+          <button type="button" data-rot="1" title="A quarter turn about Y">Y 90&deg;</button>
+          <button type="button" data-rot="2" title="A quarter turn about Z">Z 90&deg;</button>
+          <button type="button" id="sdFlip" title="Upside down (half a turn about X)">Flip</button>
+          <button type="button" id="sdLayFlat" title="Lay the part down on its next largest flat face">Lay flat</button>
+          <label>X <input id="sdRotX" type="number" step="any" value="0" aria-label="Turned about X (degrees)">&deg;</label>
+          <label>Y <input id="sdRotY" type="number" step="any" value="0" aria-label="Turned about Y (degrees)">&deg;</label>
+          <label>Z <input id="sdRotZ" type="number" step="any" value="0" aria-label="Turned about Z (degrees)">&deg;</label>
+        </div>
       </div>
       <canvas id="sdPreview" width="560" height="170" aria-label="Placement preview"></canvas>
       <div id="sdInfo" class="small muted"></div>

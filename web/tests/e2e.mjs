@@ -2979,6 +2979,29 @@ try {
       `embedded ${embedded}; ${JSON.stringify(d2)} ${JSON.stringify(d3)}; ${JSON.stringify(ss)}`);
   }
 
+  // (Mar) the part's orientation in a setup: quarter turns, any angle, laid on a face
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle();
+    const bounds = () => js(`await (async () => { const M = window.__marcam, d = JSON.parse(document.getElementById('job').value); const { result } = await M.engine('meshTriangles', d, { setup: d.setups[0].id, libraries: M.planArgs().libraries }, M.state.mesh); const t = result.triangles; let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9]; for (let i = 0; i < t.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], t[i + k]); hi[k] = Math.max(hi[k], t[i + k]); } return [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]].map((v) => +v.toFixed(2)); })()`);
+    const b0 = await bounds();
+    await waitFor(() => js("document.getElementById('setupDialog').classList.contains('embedded') && document.getElementById('setupDialog').open"), "the setup's form in its details", 30000);
+    await js("document.querySelector('#sdOrient [data-rot=\"2\"]').click(); document.getElementById('sdOk').click(); true");
+    await settle();
+    await waitFor(async () => (await js("JSON.stringify(JSON.parse(document.getElementById('job').value).models.find((m) => m.kind === 'mesh').rotate || null)")) === "[0,0,90]", "the part turned", 60000).catch(() => {});
+    const rot = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).models.find((m) => m.kind === 'mesh').rotate || null)");
+    const b1 = await bounds();
+    // laid flat: a face down (a quarter or half turn about X or Y here)
+    await waitFor(() => js("document.getElementById('setupDialog').classList.contains('embedded') && document.getElementById('setupDialog').open"), "the setup's form again", 30000);
+    await js("document.getElementById('sdLayFlat').click(); true");
+    const flat = await js("['sdRotX', 'sdRotY', 'sdRotZ'].map((id) => +document.getElementById(id).value)");
+    check("orientation: a quarter turn about Z turns the part (its X and Y sizes swap); Lay flat puts a face down",
+      rot === "[0,0,90]" && Math.abs(b1[0] - b0[1]) < 0.02 && Math.abs(b1[1] - b0[0]) < 0.02 && flat.every((v) => Number.isFinite(v)) && flat.every((v) => v % 90 === 0),
+      `${rot}; ${JSON.stringify(b0)} -> ${JSON.stringify(b1)}; lay flat ${JSON.stringify(flat)}`);
+    await js("document.getElementById('sdCancel').click(); true");
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

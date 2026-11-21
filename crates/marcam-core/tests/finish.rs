@@ -264,6 +264,7 @@ fn mesh_file_pipeline_matches_revolved_profile() {
     with_mesh.part.mesh = Some(marcam::job::MeshSource {
         file: "knob.stl".into(),
         axis: Default::default(),
+        rotate: [0.0; 3],
         turn: Default::default(),
         translate: [0.0; 3],
         image: None,

@@ -22,7 +22,7 @@ const COMMON = {
 };
 const BAR_SHAPES = ["round", "square", "rect", "hex"];
 
-export function setupDialog({ $, state, parseStl, readPart, partSummary, placePart, KINDS, stockSpecOf, lyingBar }) {
+export function setupDialog({ $, state, parseStl, readPart, partSummary, placePart, KINDS, stockSpecOf, lyingBar, flatFaces, layFlat, UP_AXIS, rotation }) {
   const dlg = $("setupDialog");
   let cur = null; // { mode, preset, parsed, resolve }
 
@@ -81,8 +81,43 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
   }
 
   function options() {
-    return { kind: kind(), axis: $("sdAxis").value, up: $("sdAxis").value, margin: bar(kind()) ? mm("sdMargin") : undefined, stock: stockSpec(), origin: num("sdOrigin") };
+    return { kind: kind(), axis: $("sdAxis").value, up: $("sdAxis").value, margin: bar(kind()) ? mm("sdMargin") : undefined, stock: stockSpec(), origin: num("sdOrigin"), rotate: rotate() };
   }
+  /** The part's orientation: degrees about X, Y and Z. */
+  const rotate = () => ["sdRotX", "sdRotY", "sdRotZ"].map((id) => +$(id).value || 0);
+  const ROT_IDS = ["sdRotX", "sdRotY", "sdRotZ"];
+  // (in (-180, 180])
+  const normDeg = (d) => {
+    let v = ((d % 360) + 360) % 360;
+    if (v > 180) v -= 360;
+    return +v.toFixed(4);
+  };
+  const setRotate = (r) => ROT_IDS.forEach((id, i) => ($(id).value = String(normDeg(r[i]))));
+  // a quarter turn about one axis, upside down, or laid on its next largest flat face
+  for (const b of dlg.querySelectorAll("#sdOrient [data-rot]")) {
+    b.addEventListener("click", () => {
+      const r = rotate();
+      r[+b.dataset.rot] += 90;
+      setRotate(r);
+      preview();
+    });
+  }
+  $("sdFlip").addEventListener("click", () => {
+    const r = rotate();
+    r[0] += 180;
+    setRotate(r);
+    preview();
+  });
+  $("sdLayFlat").addEventListener("click", () => {
+    const t = tris();
+    if (!t) return;
+    const ax = kind() === "vise" ? UP_AXIS[$("sdAxis").value] : $("sdAxis").value;
+    const faces = flatFaces(t, ax);
+    if (!faces.length) return;
+    cur.flat = ((cur.flat ?? -1) + 1) % faces.length;
+    setRotate(layFlat(faces[cur.flat]));
+    preview();
+  });
 
   /** The shapes the setup type takes (a vise: a block; the rotary axis: bars), the fields of
    *  the one chosen, the common sizes. */
@@ -190,8 +225,10 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     const st = place.stock;
     const sh = stockSpecOf(st);
     const a = place.axis;
+    const turned = rotation(rotate());
     const map = (p) => {
-      const q = a === "y" ? [p[1], p[2], p[0]] : a === "z" ? [p[2], p[0], p[1]] : p;
+      let q = a === "y" ? [p[1], p[2], p[0]] : a === "z" ? [p[2], p[0], p[1]] : p;
+      if (turned) q = turned(q);
       return [q[0] + place.translate[0], q[1] + place.translate[1], q[2] + place.translate[2]];
     };
     // the view box (Y across, Z up); a bar lying in a vise: at its axis, its top at Z0
@@ -309,9 +346,11 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       $("sdInfo").textContent = e.message;
       return;
     }
+    const turned = rotation(rotate());
     const map = (p) => {
       const a = place.axis;
-      const q = a === "y" ? [p[1], p[2], p[0]] : a === "z" ? [p[2], p[0], p[1]] : p;
+      let q = a === "y" ? [p[1], p[2], p[0]] : a === "z" ? [p[2], p[0], p[1]] : p;
+      if (turned) q = turned(q);
       return [q[0] + place.translate[0], q[1] + place.translate[1], q[2] + place.translate[2]];
     };
     const st = place.stock;
@@ -441,6 +480,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       // (the setup's own axis; a change of type resets it to that type's, unless set here)
       $("sdAxis").value = preset.axis ?? (bar(k) ? "x" : "z");
       $("sdTail").checked = !!preset.tailstock;
+      ["sdRotX", "sdRotY", "sdRotZ"].forEach((id, i) => ($(id).value = String(preset.rotate?.[i] ?? 0)));
+      cur.presetRotate = JSON.stringify(preset.rotate ?? [0, 0, 0]);
       $("sdMaterials").innerHTML = (state.registry?.materials ?? []).map((m) => `<option value="${m}">`).join("");
       $("sdMaterial").value = preset.material ?? "";
       const st = preset.stock;
@@ -577,7 +618,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         tailstock: bar(k) && $("sdTail").checked,
         material: $("sdMaterial").value.trim() || null,
         // the placement fields typed in (others are the type's defaults)
-        edited: ["sdMargin", "sdOrigin", "sdAxis"].filter((id) => $(id).dataset.edited),
+        edited: ["sdMargin", "sdOrigin", "sdAxis"].filter((id) => $(id).dataset.edited).concat(JSON.stringify(rotate()) !== c.presetRotate ? ["sdRotate"] : []),
+        rotate: rotate(),
         file: c.parsed?.file ?? null,
         tris: c.parsed?.tris ?? null,
         ascii: !!c.parsed?.ascii,

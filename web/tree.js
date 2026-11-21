@@ -1477,6 +1477,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (t.draft && ev.target.closest?.("#opForm")) previewDraft();
   });
   $("tree").addEventListener("submit", async (ev) => {
+    // (the operation's form; the setup's form in the details is the setup dialog's own)
+    if (ev.target.id !== "opForm") return;
     ev.preventDefault();
     const op = readForm();
     const doc = structuredClone(t.doc);

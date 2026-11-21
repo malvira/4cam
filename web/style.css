@@ -104,6 +104,9 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; }
 #setupDialog.embedded #sdTitle { display: none; }
 #setupDialog.embedded canvas { max-width: 100%; height: auto; }
 #setupDialog.embedded .sd-grid, #setupDialog.embedded .sd-dims { grid-template-columns: 1fr; }
+.sd-orient { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; grid-column: 1 / -1; }
+.sd-orient button { padding: 1px 6px; }
+.sd-orient input { width: 5em; }
 #setupDialog.embedded .sd-kinds { gap: 4px; }
 #setupDialog.embedded .sd-kind { padding: 4px 6px; gap: 2px; }
 #setupDialog.embedded .sd-kind svg { width: 36px; height: 24px; }

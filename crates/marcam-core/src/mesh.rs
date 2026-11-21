@@ -160,6 +160,54 @@ impl Mesh {
         m
     }
 
+    /// [`Mesh::oriented_turned`] with a rotation between the axis mapping and the turn:
+    /// `rotate` degrees about X, then Y, then Z (right-handed). Quarter turns are exact.
+    pub fn oriented_rotated(
+        self,
+        axis: Axis,
+        rotate: Vec3,
+        turn: crate::job::Turn,
+        translate: Vec3,
+    ) -> Mesh {
+        if rotate == [0.0; 3] {
+            return self.oriented_turned(axis, turn, translate);
+        }
+        // sine and cosine, exact at quarter turns
+        let sc = |deg: f64| -> (f64, f64) {
+            let q = deg / 90.0;
+            if q.fract() == 0.0 {
+                match (q as i64).rem_euclid(4) {
+                    0 => (0.0, 1.0),
+                    1 => (1.0, 0.0),
+                    2 => (0.0, -1.0),
+                    _ => (-1.0, 0.0),
+                }
+            } else {
+                deg.to_radians().dsin_cos()
+            }
+        };
+        let (sx, cx) = sc(rotate[0]);
+        let (sy, cy) = sc(rotate[1]);
+        let (sz, cz) = sc(rotate[2]);
+        let r = |p: Vec3| -> Vec3 {
+            let p = [p[0], cx * p[1] - sx * p[2], sx * p[1] + cx * p[2]];
+            let p = [cy * p[0] + sy * p[2], p[1], -sy * p[0] + cy * p[2]];
+            [cz * p[0] - sz * p[1], sz * p[0] + cz * p[1], p[2]]
+        };
+        let mut m = self.oriented(axis, [0.0; 3]);
+        for t in &mut m.triangles {
+            for p in t.iter_mut() {
+                let q = turn.apply(r(*p));
+                *p = [
+                    q[0] + translate[0],
+                    q[1] + translate[1],
+                    q[2] + translate[2],
+                ];
+            }
+        }
+        m
+    }
+
     /// The mesh turned by `a_deg` about +X (right-handed): where the part sits in machine
     /// coordinates with the rotary axis at A = `a_deg`.
     pub fn rotated_x(&self, a_deg: f64) -> Mesh {
