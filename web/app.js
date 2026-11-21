@@ -1003,6 +1003,11 @@ function selectTab(i) {
   state.tab = i;
   const p = state.result.programs[i];
   for (const b of $("tabs").children) b.setAttribute("aria-selected", String(+b.dataset.index === i));
+  // (a setup with no operation yet: nothing planned for it)
+  if (!p) {
+    $("summary").innerHTML = '<div class="muted">This setup has no operations yet: add one in the project tree.</div>';
+    return;
+  }
   const g = p.gouge;
   const sim = state.sim?.stocks?.[i];
   const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
@@ -1080,6 +1085,7 @@ function drawSide() {
   const res = state.result;
   if (!res) return;
   const p = res.programs[state.tab];
+  if (!p) return;
   const pts = p.toolpath.points;
   const n = +$("scrub").value;
   const sb = res.stock_box;
@@ -1521,6 +1527,16 @@ async function updateView() {
   const { THREE, groups } = v;
   const res = state.result;
   const p = res.programs[state.tab];
+  if (!p) {
+    // (a setup with no operation yet: no toolpath, its part and stock as they are)
+    clear(groups.path);
+    clear(groups.tool);
+    v.cutLines = v.rapLines = null;
+    v.key = null;
+    await drawModel();
+    legacyLayers();
+    return;
+  }
   const key = `${state.tab}:${res.programs.length}:${p.lines}:${[...state.hidden].join(",")}`;
   const hide = hiddenMask(p);
 
