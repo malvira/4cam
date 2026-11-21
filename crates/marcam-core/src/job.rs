@@ -389,6 +389,8 @@ impl MeshSource {
     /// The part from the file's bytes, placed as this source says: an STL/3MF mesh, or the
     /// relief built from an image; then the axis mapping and translation.
     pub fn mesh(&self, bytes: &[u8]) -> Result<crate::Mesh, crate::mesh::MeshError> {
+        // (several part files given: this one's)
+        let bytes = crate::mesh::bundle_file(bytes, &self.file)?;
         let m = match &self.image {
             Some(r) => crate::relief::relief_mesh(&crate::relief::decode_gray(bytes)?, r),
             None => crate::Mesh::from_bytes(bytes)?,

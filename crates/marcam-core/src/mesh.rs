@@ -20,6 +20,59 @@ pub struct Mesh {
 /// see the `marcam-step` crate) start with this header.
 pub const FACES_HEADER: &[u8] = b"marcam STEP faces";
 
+/// The start of several part files given together (a project whose setups have different
+/// parts): this line, then for each file its name's length, its name, its length and its
+/// bytes (lengths as 4-byte little-endian numbers).
+pub const BUNDLE_MAGIC: &[u8] = b"MARCAM-MESHES\n";
+
+fn take<'a>(n: usize, rest: &mut &'a [u8]) -> Result<&'a [u8], MeshError> {
+    if rest.len() < n {
+        return Err(MeshError::Format("a bundle of part files cut short".into()));
+    }
+    let (a, b) = rest.split_at(n);
+    *rest = b;
+    Ok(a)
+}
+
+/// The files of a bundle ([`BUNDLE_MAGIC`]) as (name, bytes), or None for one plain file.
+pub fn bundle(data: &[u8]) -> Result<Option<Vec<(String, &[u8])>>, MeshError> {
+    let Some(mut rest) = data.strip_prefix(BUNDLE_MAGIC) else {
+        return Ok(None);
+    };
+    let mut out = Vec::new();
+    while !rest.is_empty() {
+        let n = u32::from_le_bytes(take(4, &mut rest)?.try_into().unwrap()) as usize;
+        let name = String::from_utf8_lossy(take(n, &mut rest)?).into_owned();
+        let m = u32::from_le_bytes(take(4, &mut rest)?.try_into().unwrap()) as usize;
+        out.push((name, take(m, &mut rest)?));
+    }
+    Ok(Some(out))
+}
+
+/// The bytes of part file `file`: `data` itself, or that file of a bundle (by name, or by its
+/// name without folders).
+pub fn bundle_file<'a>(data: &'a [u8], file: &str) -> Result<&'a [u8], MeshError> {
+    let Some(files) = bundle(data)? else {
+        return Ok(data);
+    };
+    let base = |s: &str| s.rsplit(['/', '\\']).next().unwrap_or(s).to_string();
+    files
+        .iter()
+        .find(|(n, _)| n == file)
+        .or_else(|| files.iter().find(|(n, _)| base(n) == base(file)))
+        .map(|(_, b)| *b)
+        .ok_or_else(|| {
+            MeshError::Format(format!(
+                "no part file {file:?} given (given: {})",
+                files
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum MeshError {
     Io(String),
@@ -76,6 +129,10 @@ impl Mesh {
     /// Load from bytes; the format is detected from the content (3MF zip, binary or ASCII STL,
     /// and STEP where a STEP reader is installed).
     pub fn from_bytes(data: &[u8]) -> Result<Mesh, MeshError> {
+        // several files (each setup's part): the first, when nothing says which
+        if let Some(first) = bundle(data)?.and_then(|b| b.into_iter().next()) {
+            return Mesh::from_bytes(first.1);
+        }
         if data.starts_with(b"PK\x03\x04") {
             read_3mf(data)
         } else if is_step(data) {
