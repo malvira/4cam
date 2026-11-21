@@ -937,7 +937,9 @@ try {
   const L0 = (await rect("left"))[2], R0 = (await rect("right"))[2];
   await drag("splitLeft", 120, 0);
   const L1 = (await rect("left"))[2], R1 = (await rect("right"))[2];
-  check("dragging the left bar resizes both panes", Math.abs(L1 - L0 - 120) <= 3 && Math.abs(R0 - R1 - 120) <= 3, `left ${L0}->${L1}, right ${R0}->${R1}`);
+  // (the right pane takes what is left: give or take the page's scrollbar, which comes or goes
+  // as the left pane's text wraps differently with the fonts a machine has)
+  check("dragging the left bar resizes both panes", Math.abs(L1 - L0 - 120) <= 3 && Math.abs(R0 - R1 - 120) <= 20, `left ${L0}->${L1}, right ${R0}->${R1}`);
   // (Mar) no G-code pane: the viewer takes the results' whole width; Download .nc stays
   const c1 = await js("window.__marcam.state.three.renderer.domElement.clientWidth");
   const v3 = (await rect("view3d"))[2], views = (await rect("views"))[2];
