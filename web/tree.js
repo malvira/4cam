@@ -724,7 +724,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const mode = pickModeOf(typeOf(op.type));
     if (!mode) return;
     const model = partModel(s);
-    const doc = t.doc;
+    const gen = t.gen, sel = t.selected;
     let regions, picks;
     try {
       [{ result: regions }, { result: picks }] = await Promise.all([
@@ -734,8 +734,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     } catch (e) {
       return showError(`Picking: ${e.message}`);
     }
-    // the project was replaced meanwhile (New, Open, an example)
-    if (t.doc !== doc) return;
+    // the project was replaced meanwhile (New, Open, an example), or another operation or
+    // setup selected (a plan landing meanwhile only reads the same project again)
+    if (gen !== t.gen || t.selected !== sel || t.setup !== s.id) return;
     const bytes = (b64) => (typeof b64 === "string" ? Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) : b64);
     t.regions = { model, list: regions.regions, tri: new Float32Array(bytes(regions.triangles).buffer), of: new Uint16Array(bytes(regions.region_of).buffer) };
     const list = picks.pickables.filter((x) => mode.kinds.includes(x.kind));
@@ -1043,11 +1044,13 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.typeNote = null;
       t.selected = id;
       t.edited = new Set();
-      const gen = t.gen, doc = t.doc;
+      const gen = t.gen;
       try {
         const { result } = await engine("opDefaults", t.doc, { type: kind, setup: s.id, machine: machineArg?.() ?? null }, state.mesh);
-        // the project was replaced meanwhile, or another operation selected
-        if (gen !== t.gen || doc !== t.doc || t.selected !== id) return;
+        // the project was replaced meanwhile (New, Open, an example), another operation or
+        // setup selected, or the id taken (an undo brought one back). (A plan landing
+        // meanwhile reads the same project again: t.doc is a new copy, not another project.)
+        if (gen !== t.gen || t.selected !== id || t.setup !== s.id || setup()?.operations.some((o) => o.id === id)) return;
         t.draft = { op: { id, ...result }, out, title: ty.title };
         render();
       } catch (e) {
