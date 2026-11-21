@@ -55,7 +55,9 @@ async function waitFor(fn, what, timeoutMs = 30000) {
     try { last = await fn(); if (last) return last; } catch (e) { last = e; }
     await sleep(200);
   }
-  throw new Error(`timed out waiting for ${what} (${last})`);
+  // (what the engine was doing then: its calls not answered yet, and how long they waited)
+  const busy = await js("JSON.stringify({ inFlight: window.__marcam?.inFlight?.(), lock: window.__marcam?.simLock?.busy, status: document.getElementById('status')?.textContent })").catch(() => "");
+  throw new Error(`timed out waiting for ${what} (${last})${busy ? ` ${busy}` : ""}`);
 }
 
 function findBrowser() {
@@ -509,7 +511,9 @@ try {
   const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
   check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 18 && String(typesAll).split(",").length === 18, `${typesAll}`);
   const filled = [];
+  const took = [];
   for (const kind of String(typesAll).split(",")) {
+    const t0 = Date.now();
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
     await waitFor(() => js(`!!document.getElementById('opForm') && !!window.__marcam.state.tree.draft && window.__marcam.state.tree.draft.op.type === '${kind}'`), `the ${kind} form`, 60000);
     // blank fields, but text whose registry default is "" (none: e.g. a V-carve's text)
@@ -525,8 +529,9 @@ try {
     if (blanks) break;
     await treeAct(id, "delete");
     await settle();
+    took.push(`${kind} ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   }
-  check("every operation type's new form is fully filled and applies cleanly", filled.length === 18 && filled.every((f) => f.endsWith("none blank")), filled.join(" "));
+  check("every operation type's new form is fully filled and applies cleanly", filled.length === 18 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 60000);

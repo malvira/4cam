@@ -327,7 +327,7 @@ The tests cover:
   `cargo test`; `MARCAM_FUZZ_CASES=500` runs more, `MARCAM_FUZZ_SEED=<n> MARCAM_FUZZ_CASES=1`
   replays one (`web/tests/simfuzz.mjs` is a smaller run in the browser).
 
-Planning and simulating are bounded: an operation set too fine to plan (more than 3 million
+Planning and simulating are bounded: an operation set too fine to plan (more than 2 million
 moves, or 300 million units of surface checking) fails in seconds with the reason, and a
 simulation estimated to take longer than 10 minutes in a browser is refused, naming the
 finest resolution that fits (the app asks first about anything over 30 seconds, and shows a

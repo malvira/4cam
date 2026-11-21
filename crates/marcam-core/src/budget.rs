@@ -14,9 +14,9 @@ use std::cell::Cell;
 pub const OP_LIMIT: u64 = 300_000_000;
 /// The work a query counts besides the triangles or points it reads.
 pub const PER_QUERY: u64 = 16;
-/// Moves one operation may keep (each takes about 50 bytes: 150 MB); real ones keep tens of
-/// thousands.
-pub const MOVE_LIMIT: u64 = 3_000_000;
+/// Moves one operation may keep (each takes about 50 bytes, but planned, posted and played
+/// back about 600: 1.2 GB, under what a browser tab has); real ones keep tens of thousands.
+pub const MOVE_LIMIT: u64 = 2_000_000;
 
 thread_local! {
     static USED: Cell<u64> = const { Cell::new(0) };
