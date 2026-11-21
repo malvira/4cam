@@ -868,6 +868,12 @@ pub struct Region {
 impl Region {
     /// `reach`: the largest distance that will be asked for (bigger is clamped).
     pub fn new(paths: &[Path2], reach: f64) -> Region {
+        Region::with_cell(paths, reach.max(0.25))
+    }
+
+    /// Indexed in square cells `cell` wide (for [`Region::nearest`], any size: about 32
+    /// across the region is quick).
+    pub fn with_cell(paths: &[Path2], cell: f64) -> Region {
         let mut segs = Vec::new();
         for p in paths {
             if p.len() < 3 {
@@ -895,7 +901,6 @@ impl Region {
             lo = [0.0; 2];
             hi = [0.0; 2];
         }
-        let cell = reach.max(0.25);
         let nx = (((hi[0] - lo[0]) / cell).ceil() as usize + 1).max(1);
         let ny = (((hi[1] - lo[1]) / cell).ceil() as usize + 1).max(1);
         let mut bins = vec![Vec::new(); nx * ny];
@@ -969,6 +974,85 @@ impl Region {
                 .fold(cap, f64::min);
         }
         best
+    }
+}
+
+/// The segments that can be the nearest to some point of each cell of a grid: for each cell,
+/// those whose distance from it can be no more than the farthest any point of it can be from
+/// its nearest segment. The distance found among them is the distance to the whole outline,
+/// bit for bit (the same minimum of the same values), at a few of them a point.
+pub struct Nearest {
+    x0: f64,
+    y0: f64,
+    cell: f64,
+    nx: usize,
+    ny: usize,
+    lists: Vec<Vec<u32>>,
+    segs: Vec<[[f64; 2]; 2]>,
+}
+
+impl Nearest {
+    /// Over `lo..hi` (points outside are clamped to the edge cells, which keeps them exact:
+    /// see [`Nearest::distance`]), in cells `cell` wide.
+    pub fn new(region: &Region, lo: [f64; 2], hi: [f64; 2], cell: f64) -> Nearest {
+        let segs = region.segs.clone();
+        let nx = (((hi[0] - lo[0]) / cell).ceil() as usize).max(1);
+        let ny = (((hi[1] - lo[1]) / cell).ceil() as usize).max(1);
+        let half = 0.5 * cell * std::f64::consts::SQRT_2;
+        let mut lists = Vec::with_capacity(nx * ny);
+        for j in 0..ny {
+            for i in 0..nx {
+                let (ax, ay) = (lo[0] + i as f64 * cell, lo[1] + j as f64 * cell);
+                let corners = [
+                    [ax, ay],
+                    [ax + cell, ay],
+                    [ax, ay + cell],
+                    [ax + cell, ay + cell],
+                ];
+                let c = [ax + 0.5 * cell, ay + 0.5 * cell];
+                // no point of the cell is farther than this from its nearest segment (the
+                // distance to a segment is convex: its largest over the cell is at a corner)
+                let far = segs
+                    .iter()
+                    .map(|&sg| corners.iter().map(|&q| seg_dist(q, sg)).fold(0.0, f64::max))
+                    .fold(f64::INFINITY, f64::min);
+                let list: Vec<u32> = segs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, sg)| seg_dist(c, **sg) - half <= far + 1e-9)
+                    .map(|(k, _)| k as u32)
+                    .collect();
+                lists.push(list);
+            }
+        }
+        Nearest {
+            x0: lo[0],
+            y0: lo[1],
+            cell,
+            nx,
+            ny,
+            lists,
+            segs,
+        }
+    }
+
+    /// The distance from `p` to the outline (infinite without one). A point outside the
+    /// grid is looked up in all segments.
+    pub fn distance(&self, p: [f64; 2]) -> f64 {
+        let fi = (p[0] - self.x0) / self.cell;
+        let fj = (p[1] - self.y0) / self.cell;
+        if fi < 0.0 || fj < 0.0 || fi >= self.nx as f64 || fj >= self.ny as f64 {
+            return self
+                .segs
+                .iter()
+                .map(|&s| seg_dist(p, s))
+                .fold(f64::INFINITY, f64::min);
+        }
+        let k = fj as usize * self.nx + fi as usize;
+        self.lists[k]
+            .iter()
+            .map(|&s| seg_dist(p, self.segs[s as usize]))
+            .fold(f64::INFINITY, f64::min)
     }
 }
 

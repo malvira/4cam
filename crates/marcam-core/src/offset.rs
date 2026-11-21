@@ -2,7 +2,7 @@
 //! distance, as closed loops: the iso-lines of the signed distance to the outline, sampled on
 //! a grid and traced with marching squares. Used to clear pockets of any shape.
 
-use crate::engrave::{Path2, Region};
+use crate::engrave::{Nearest, Path2, Region};
 use std::collections::HashMap;
 
 /// A grid edge: (i, j, 0) from (i, j) to (i+1, j); (i, j, 1) from (i, j) to (i, j+1).
@@ -23,6 +23,18 @@ impl DistanceField {
     pub fn new(paths: &[Path2], h: f64, cap: f64) -> DistanceField {
         let region = Region::new(paths, cap);
         let pad = 2.0 * h;
+        // uncapped: each sample's distance from the few segments that can be nearest in its
+        // 1 mm cell, not from all of them (a billion for a large face at 0.05 mm: seconds);
+        // the same values, bit for bit
+        let index = cap.is_infinite().then(|| {
+            let c = (20.0 * h).max(0.25);
+            Nearest::new(
+                &region,
+                [region.lo[0] - pad - c, region.lo[1] - pad - c],
+                [region.hi[0] + pad + c, region.hi[1] + pad + c],
+                c,
+            )
+        });
         let (x0, y0) = (region.lo[0] - pad, region.lo[1] - pad);
         let nx = (((region.hi[0] + pad - x0) / h).ceil() as usize + 1).max(2);
         let ny = (((region.hi[1] + pad - y0) / h).ceil() as usize + 1).max(2);
@@ -33,7 +45,10 @@ impl DistanceField {
             for i in 0..nx {
                 let x = x0 + i as f64 * h;
                 let inside = spans.iter().any(|&(a, b)| x >= a && x < b);
-                let dist = region.distance([x, y], cap);
+                let dist = match &index {
+                    Some(ix) => ix.distance([x, y]),
+                    None => region.distance([x, y], cap),
+                };
                 d[j * nx + i] = if inside { dist } else { -dist };
             }
         }
@@ -359,4 +374,114 @@ pub fn simplify(p: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
         .filter(|(_, k)| **k)
         .map(|(q, _)| *q)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The uncapped field's distances (from each sample's candidate segments) are the
+    /// distances to the whole outline, bit for bit: random outlines with holes, small and
+    /// large, against the minimum over every segment.
+    #[test]
+    fn the_uncapped_field_is_exact() {
+        let mut s = 0x2545f4914f6cdd1du64;
+        let mut rnd = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for case in 0..12 {
+            let size = [3.0, 20.0, 110.0][case % 3];
+            let (cx, cy) = (size * rnd(), size * rnd());
+            let mut paths = Vec::new();
+            // a wobbly outline, and a few holes inside it
+            let n = 8 + (rnd() * 200.0) as usize;
+            paths.push(
+                (0..n)
+                    .map(|k| {
+                        let a = std::f64::consts::TAU * k as f64 / n as f64;
+                        let r = size * (0.35 + 0.1 * rnd());
+                        [cx + r * a.cos(), cy + 0.7 * r * a.sin()]
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            for _ in 0..(case % 4) {
+                let (hx, hy, hr) = (
+                    cx + size * 0.15 * (rnd() - 0.5),
+                    cy + size * 0.1 * (rnd() - 0.5),
+                    size * 0.04 * (0.2 + rnd()),
+                );
+                paths.push(
+                    (0..24)
+                        .rev()
+                        .map(|k| {
+                            let a = std::f64::consts::TAU * k as f64 / 24.0;
+                            [hx + hr * a.cos(), hy + hr * a.sin()]
+                        })
+                        .collect(),
+                );
+            }
+            let h = size / 400.0;
+            let f = DistanceField::new(&paths, h, f64::INFINITY);
+            let all = Region::new(&paths, f64::INFINITY);
+            for j in 0..f.ny {
+                for i in 0..f.nx {
+                    let p = f.point(i, j);
+                    let want = all.distance(p, f64::INFINITY);
+                    let got = f.at(i, j).abs();
+                    assert_eq!(
+                        got.to_bits(),
+                        want.to_bits(),
+                        "case {case} at {p:?}: {got} vs {want}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Mar: facing the oval grip's picked top face took seconds. A face like it (106 x 84 mm,
+    /// a wobbly outline of 200 points, two round holes) at the pockets' 0.05 mm: 3.6 million
+    /// samples, each once measured against every segment (a billion). Built from the
+    /// candidates it must be many times quicker than that (a ratio, the same on any machine;
+    /// the slow way timed on every tenth row).
+    #[test]
+    fn the_uncapped_field_of_a_large_face_is_quick() {
+        let (cx, cy) = (52.9, 42.0);
+        let outline: Vec<[f64; 2]> = (0..200)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / 200.0;
+                let w = 1.0 + 0.02 * (9.0 * a).sin();
+                [cx + 50.9 * w * a.cos(), cy + 40.0 * w * a.sin()]
+            })
+            .collect();
+        let hole = |hx: f64| -> Vec<[f64; 2]> {
+            (0..32)
+                .rev()
+                .map(|k| {
+                    let a = std::f64::consts::TAU * k as f64 / 32.0;
+                    [hx + 3.8 * a.cos(), cy + 3.8 * a.sin()]
+                })
+                .collect()
+        };
+        let paths = vec![outline, hole(25.25), hole(80.6)];
+        let t = std::time::Instant::now();
+        let f = DistanceField::new(&paths, 0.05, f64::INFINITY);
+        let quick = t.elapsed().as_secs_f64();
+        let all = Region::new(&paths, f64::INFINITY);
+        let t = std::time::Instant::now();
+        let mut sum = 0.0;
+        for j in (0..f.ny).step_by(10) {
+            for i in 0..f.nx {
+                sum += all.distance(f.point(i, j), f64::INFINITY);
+            }
+        }
+        let slow = 10.0 * t.elapsed().as_secs_f64();
+        assert!(sum > 0.0);
+        assert!(
+            slow > 5.0 * quick,
+            "the field took {quick:.3} s, every segment {slow:.3} s"
+        );
+    }
 }
