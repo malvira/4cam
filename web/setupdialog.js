@@ -398,10 +398,21 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
    * (a parsed STL given), "edit" (a setup: type, machine, stock, origin, holding), "add" (a new
    * setup for the same part). Resolves to the configuration, or null when cancelled.
    */
-  function open(mode, preset = {}) {
+  function open(mode, preset = {}, opts = {}) {
     cur?.resolve(null);
+    // (Mar) a setup's settings in the details below the tree: the same form, in `opts.host`,
+    // not modal; anywhere else (New, Import, Add setup, Edit setup...) a modal dialog
+    const host = opts.host || null;
+    if (host) {
+      if (dlg.parentElement !== host) host.appendChild(dlg);
+      dlg.classList.add("embedded");
+    } else if (dlg.classList.contains("embedded")) {
+      if (dlg.open) dlg.close();
+      document.body.appendChild(dlg);
+      dlg.classList.remove("embedded");
+    }
     return new Promise((resolve) => {
-      cur = { mode, preset, parsed: preset.parsed ? { ...preset.parsed, file: preset.file } : null, resolve };
+      cur = { mode, preset, parsed: preset.parsed ? { ...preset.parsed, file: preset.file } : null, resolve, embedded: !!host };
       const titles = { new: "New project", import: `Import ${preset.file?.name ?? "STL"}`, edit: `Setup: ${preset.setupName ?? ""}`, add: "Add a setup" };
       $("sdTitle").textContent = titles[mode];
       $("sdOk").textContent = { new: "Create", import: "Import", edit: "Apply", add: "Add setup" }[mode];
@@ -449,11 +460,17 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       dlg.querySelector(`input[name="sdStock"][value="${ex || preset.stockSpec?.mode === "given" ? "explicit" : "auto"}"]`).checked = true;
       // a setup after another: its stock may be what that one left
       $("sdCarryOpt").classList.toggle("hidden", !preset.canCarry);
+      // (any setup before this one: the one just before by default)
+      const sources = preset.carrySources ?? [];
+      $("sdCarryFrom").innerHTML = sources.map((x) => `<option value="${x.id}">${x.name}</option>`).join("");
+      const from = st?.shape === "from_previous" && st.from ? st.from : sources[sources.length - 1]?.id;
+      if (from) $("sdCarryFrom").value = from;
       $("sdTurn").value = st?.shape === "from_previous" ? st.turn ?? "none" : "none";
       const off = st?.shape === "from_previous" ? st.offset ?? [0, 0, 0] : [0, 0, 0];
       ["sdOffX", "sdOffY", "sdOffZ"].forEach((id, i) => ($(id).value = off[i]));
-      if (preset.canCarry && st?.shape === "from_previous") dlg.querySelector('input[name="sdStock"][value="previous"]').checked = true;
-      cur.presetCarry = st?.shape === "from_previous" ? JSON.stringify([st.turn ?? "none", off]) : null;
+      // (a setup added after others: it carries on from the last by default, Mar)
+      if (preset.canCarry && (st?.shape === "from_previous" || (mode === "add" && sources.length))) dlg.querySelector('input[name="sdStock"][value="previous"]').checked = true;
+      cur.presetCarry = st?.shape === "from_previous" ? JSON.stringify([st.turn ?? "none", off, from ?? null]) : null;
       if (sp?.dims) {
         const d = sp.dims;
         setMm("sdDia", d.radius != null ? 2 * d.radius : null);
@@ -482,8 +499,29 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       setMm("sdChuckFit", preset.chuck);
       $("sdWarn").classList.add("hidden");
       layout(false);
-      if (!dlg.open) dlg.showModal();
+      if (!dlg.open) {
+        if (host) dlg.show();
+        else dlg.showModal();
+      }
     });
+  }
+
+  /** Whether the form is open in the details for setup `id` (being edited there). */
+  function embeddedFor(id) {
+    return !!(cur?.embedded && cur.preset.setupId === id && dlg.open);
+  }
+  /** Put the open form back in `host` (the details drawn again): as it was, values and all. */
+  function reattach(host, focus) {
+    if (dlg.parentElement !== host) host.appendChild(dlg);
+    if (focus) {
+      const x = dlg.querySelector(`#${CSS.escape(focus.id)}`);
+      if (x && document.activeElement !== x) {
+        x.focus({ preventScroll: true });
+        try {
+          if (focus.s != null) x.setSelectionRange(focus.s, focus.e);
+        } catch {}
+      }
+    }
   }
 
   function finish(ok) {
@@ -492,7 +530,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     if (ok) {
       const k = kind();
       const spec = stockSpec();
-      const carry = stockMode() === "previous" ? { turn: $("sdTurn").value, offset: ["sdOffX", "sdOffY", "sdOffZ"].map((id) => num(id) || 0) } : null;
+      const carry = stockMode() === "previous" ? { turn: $("sdTurn").value, offset: ["sdOffX", "sdOffY", "sdOffZ"].map((id) => num(id) || 0), from: $("sdCarryFrom").value || null } : null;
       const need = carry ? [] : missing(spec);
       if (need.length) {
         $("sdWarn").textContent = `Give every stock size (${need.join(", ")}), or fit the stock to the part.`;
@@ -535,7 +573,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         carry,
         jaws: k === "vise" ? mm("sdJaws") : undefined,
         // (the stock changed: given sizes, another shape, a margin typed)
-        stockChanged: carry ? JSON.stringify([carry.turn, carry.offset]) !== c.presetCarry : !!ex || shape() !== c.presetShape || c.presetCarry !== null || STOCK_FIELDS.some((id) => id !== "sdJaws" && $(id).dataset.edited),
+        stockChanged: carry ? JSON.stringify([carry.turn, carry.offset, carry.from]) !== c.presetCarry : !!ex || shape() !== c.presetShape || c.presetCarry !== null || STOCK_FIELDS.some((id) => id !== "sdJaws" && $(id).dataset.edited),
         tailstock: bar(k) && $("sdTail").checked,
         material: $("sdMaterial").value.trim() || null,
         // the placement fields typed in (others are the type's defaults)
@@ -604,5 +642,5 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     finish(false);
   });
 
-  return { open, close: () => finish(false), preview, get mode() { return cur?.mode ?? null; } };
+  return { open, close: () => finish(false), preview, embeddedFor, reattach, get mode() { return cur?.mode ?? null; } };
 }

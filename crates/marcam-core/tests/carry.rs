@@ -246,3 +246,42 @@ fn rotary_roughing_of_a_carried_bar_cuts_only_what_is_left() {
     let g = marcam::gouge_check(&js[1].1, &carried, None).unwrap();
     assert!(g.iter().all(|r| r.max_depth < 0.02), "{g:?}");
 }
+
+#[test]
+fn a_setup_can_take_the_stock_of_any_setup_before_it() {
+    // (Mar) setup 3 takes setup 1's stock, not setup 2's: the pocket on top, its bottom as
+    // setup 1 left it (setup 2 faced its copy, turned over)
+    let dir = root().join("examples/plate");
+    let mut v = plate_three_setups();
+    v["setups"][2]["stock"] = json!({"shape": "from_previous", "from": "vise1"});
+    let mut js = jobs(&v, &dir);
+    let c = js[2].1.carry.clone().unwrap();
+    assert_eq!((c.from.as_str(), c.turn), ("vise1", Turn::None));
+    let meshes = |j: &Job| marcam::load_mesh(j, &dir).ok().flatten();
+    carry_stock(&mut js, &meshes, None).unwrap();
+    let c3 = js[2].1.carried.as_deref().unwrap();
+    let sb3 = js[2].1.stock_box.unwrap();
+    let h3 = c3.heightmap(&sb3, 0.5).unwrap();
+    let at = |h: &marcam::sim3::Heightmap3, x: f64, y: f64, b: &[f64]| {
+        let i = ((x - h.x0) / h.cell) as usize;
+        let j = ((y - h.y0) / h.cell) as usize;
+        (h.z[j * h.nx + i], b[j * h.nx + i])
+    };
+    let b3 = c3.bottoms(&h3);
+    let (pocket, _) = at(&h3, 15.0, 20.0, &b3);
+    let (top, bottom) = at(&h3, 45.0, 20.0, &b3);
+    assert!(
+        (pocket + 3.5).abs() < 0.05 && (top + 0.5).abs() < 0.05,
+        "{pocket} {top}"
+    );
+    // (not faced: setup 2's facing was of its own copy)
+    assert!((bottom + 10.0).abs() < 0.05, "{bottom}");
+    // a setup after it, or one that is not there: refused
+    let mut bad = plate_three_setups();
+    bad["setups"][1]["stock"] = json!({"shape": "from_previous", "from": "vise3"});
+    let libs = marcam::profiles::builtin_libraries();
+    let e =
+        marcam::project::jobs_from_any_with(&bad.to_string(), &libs, &|src| src.load(&dir).ok())
+            .unwrap_err();
+    assert!(e.contains("not a setup before it"), "{e}");
+}

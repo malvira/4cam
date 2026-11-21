@@ -1668,7 +1668,7 @@ document.addEventListener("keydown", (ev) => {
   if (!which) return;
   const t = ev.target;
   if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-  if (document.querySelector("dialog[open]")) return;
+  if (document.querySelector("dialog[open]:not(.embedded)")) return;
   ev.preventDefault();
   window.__marcam.project[which]();
 });

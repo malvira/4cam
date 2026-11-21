@@ -125,11 +125,15 @@ pub enum StockDef {
         radius: f64,
         length: f64,
     },
-    /// The stock left by the previous setup (simulated), turned (`turn`: flipped over, or end
-    /// for end) and moved: re-zeroed where it was (its X and Y lowest corner, and its top for
-    /// a block, where they were), then by `offset`. The part turns and moves with it. A bar's
-    /// `radius` and `length` are the previous setup's when zero.
+    /// The stock left by the previous setup (simulated), or by setup `from` (any setup before
+    /// this one), turned (`turn`: flipped over, or end for end) and moved: re-zeroed where it
+    /// was (its X and Y lowest corner, and its top for a block, where they were), then by
+    /// `offset`. The part turns and moves with it. A bar's `radius` and `length` are that
+    /// setup's when zero.
     FromPrevious {
+        /// The setup whose stock this one takes (None: the one just before).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
         #[serde(default)]
         radius: f64,
         #[serde(default)]
@@ -459,6 +463,14 @@ impl Project {
                     "setup {:?}: the first setup cannot take its stock from a previous one",
                     s.id
                 ));
+            }
+            if let StockDef::FromPrevious { from: Some(f), .. } = &s.stock {
+                if !self.setups[..k].iter().any(|x| &x.id == f) {
+                    return Err(format!(
+                        "setup {:?}: its stock comes from {f:?}, which is not a setup before it",
+                        s.id
+                    ));
+                }
             }
             for out in &s.outputs {
                 if !outputs.insert(out.name.clone()) {
@@ -883,6 +895,7 @@ impl Project {
         let k = self.setups.iter().position(|s| s.id == setup.id);
         if let (
             StockDef::FromPrevious {
+                from,
                 radius,
                 length,
                 turn,
@@ -897,7 +910,19 @@ impl Project {
                     setup.id
                 ));
             }
-            let prev_setup = &self.setups[k - 1];
+            // the one just before, or the setup named (any before this one)
+            let prev_setup = match from {
+                None => &self.setups[k - 1],
+                Some(f) => self.setups[..k]
+                    .iter()
+                    .find(|x| &x.id == f)
+                    .ok_or_else(|| {
+                        format!(
+                        "setup {:?}: its stock comes from {f:?}, which is not a setup before it",
+                        setup.id
+                    )
+                    })?,
+            };
             let prev = self.setup_frame(prev_setup)?;
             let (turn, offset) = (*turn, *offset);
             // the previous stock's box: a block's, or a bar's on the axis (front at X0)
@@ -1239,11 +1264,19 @@ pub fn simulate_project(
         crate::simulate_job(first, &[], mesh0.as_ref(), dx, na, 0.02).map_err(|e| e.to_string())?;
     let grid = base.stock.grid;
     let mut stock: Option<crate::sim::RadialMap> = None;
-    let mut after = Vec::new();
+    let mut after: Vec<(String, crate::sim::RadialMap)> = Vec::new();
     let mut rapid_hits = Vec::new();
     for (id, job) in jobs {
         let setup = p.setup(id).ok_or(format!("unknown setup {id:?}"))?;
         let start = match (&setup.stock, &stock) {
+            // (from a setup named: what that one left)
+            (StockDef::FromPrevious { from: Some(f), .. }, _) => after
+                .iter()
+                .find(|(x, _)| x == f)
+                .map(|(_, s)| s.clone())
+                .ok_or(format!(
+                    "setup {id:?}: its stock comes from {f:?}, not simulated before it"
+                ))?,
             (StockDef::FromPrevious { .. }, Some(prev)) => prev.clone(),
             (StockDef::FromPrevious { .. }, None) => {
                 return Err(format!(
@@ -1382,6 +1415,7 @@ mod tests {
         s2.id = "setup2".into();
         s2.name = "Knurl (re-chucked)".into();
         s2.stock = StockDef::FromPrevious {
+            from: None,
             radius: 12.5,
             length: 100.0,
             turn: job::Turn::None,

@@ -801,6 +801,9 @@ export function setupProject(ctx) {
     if (cfg.carry) {
       // what the setup before left: the engine turns the part and the stock together
       s.stock = { shape: "from_previous" };
+      // (another setup than the one just before: named; the one just before is the default)
+      const at = doc.setups.indexOf(s);
+      if (cfg.carry.from && at > 0 && cfg.carry.from !== doc.setups[at - 1].id) s.stock.from = cfg.carry.from;
       if (cfg.carry.turn && cfg.carry.turn !== "none") s.stock.turn = cfg.carry.turn;
       if (cfg.carry.offset?.some((v) => v)) s.stock.offset = cfg.carry.offset.map(r3);
       // the starter tools, for the stock it started from (the first setup back with its own)
@@ -1047,7 +1050,15 @@ export function setupProject(ctx) {
   }
 
   /** Edit a setup: type, machine, stock, origin, holding. A new type converts the setup. */
-  async function editSetup(id) {
+  /** The setup's settings in the details below the tree (`host`): the form put back as it was
+   *  when it is already open there for that setup, else opened there anew. */
+  function hostSetup(host, id, focus) {
+    if (!host) return;
+    if (dialog.embeddedFor(id)) return dialog.reattach(host, focus);
+    editSetup(id, { host }).catch((e) => showError(e.message));
+  }
+
+  async function editSetup(id, opts = {}) {
     let doc;
     try {
       doc = readJob();
@@ -1071,8 +1082,9 @@ export function setupProject(ctx) {
     const cfg = await dialog.open("edit", {
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
       stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null, previewTris, post: s.post,
-      canCarry: doc.setups.indexOf(s) > 0,
-    });
+      canCarry: doc.setups.indexOf(s) > 0, setupId: s.id,
+      carrySources: doc.setups.slice(0, doc.setups.indexOf(s)).map((x) => ({ id: x.id, name: x.name || x.id })),
+    }, { host: opts.host });
     if (!cfg) return false;
     // nothing about the placement changed (only the name or the material): the operations
     // keep their values; a new material changes only the ones not typed over
@@ -1131,7 +1143,8 @@ export function setupProject(ctx) {
     if (!meshModel || !state.mesh) return showError("Import an STL first: a new setup needs the part as a mesh.");
     let n = doc.setups.length + 1;
     while (doc.setups.some((s) => s.id === `setup${n}`)) n++;
-    const cfg = await dialog.open("add", { kind: "vise", machine: currentMachine()?.id, setupName: `Setup ${n}`, hasMesh: true, tris: parseStl(state.mesh).tris, canCarry: true });
+    const cfg = await dialog.open("add", { kind: "vise", machine: currentMachine()?.id, setupName: `Setup ${n}`, hasMesh: true, tris: parseStl(state.mesh).tris, canCarry: true,
+      carrySources: doc.setups.map((x) => ({ id: x.id, name: x.name || x.id })) });
     if (!cfg) return false;
     setStatus(`Adding a ${KINDS[cfg.kind]} setup...`, "busy");
     const before = $("job").value;
@@ -1198,5 +1211,5 @@ export function setupProject(ctx) {
     if (f) await replaceModel(f);
   });
 
-  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, addSetup, undo, redo, dropUndo, keepUndo, nameEdit, resetHistory, meshSet, history: h, dialog, state: p, settings };
+  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, hostSetup, addSetup, undo, redo, dropUndo, keepUndo, nameEdit, resetHistory, meshSet, history: h, dialog, state: p, settings };
 }

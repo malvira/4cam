@@ -271,7 +271,7 @@ const A = {
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "monkey", models: [], tools: [], setups: [] } }))}, "monkey.marcam.json").then(() => true)`);
     await settle();
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${b64(path)}"), (c) => c.charCodeAt(0))], "${name}")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the import dialog", 15000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the import dialog", 15000);
     await js(`(() => { const b = document.querySelector('.sd-kind[data-kind="${kind}"]'); if (b) b.click(); document.getElementById('sdOk').click(); return true; })()`);
     await settle(600);
     return `import ${name} as ${kind}`;
@@ -456,13 +456,13 @@ const A = {
   },
   // Edit > Undo / Redo by their keys (on the page, not in a field)
   async histUndo() {
-    if (!(await js("window.__marcam.state.history.undo.length > 0 && !document.querySelector('dialog[open]')"))) return null;
+    if (!(await js("window.__marcam.state.history.undo.length > 0 && !document.querySelector('dialog[open]:not(.embedded)')"))) return null;
     await js("document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true })); true");
     await settle(400);
     return "Ctrl+Z";
   },
   async histRedo() {
-    if (!(await js("window.__marcam.state.history.redo.length > 0 && !document.querySelector('dialog[open]')"))) return null;
+    if (!(await js("window.__marcam.state.history.redo.length > 0 && !document.querySelector('dialog[open]:not(.embedded)')"))) return null;
     await js("document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true })); true");
     await settle(400);
     return "Ctrl+Shift+Z";

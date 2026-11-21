@@ -465,7 +465,7 @@ try {
   };
   const treeAct = (op, act) => js(`document.querySelector('#tree .tree-op[data-op="${op}"] [data-act="${act}"]').click(); true`);
   const settle = () => waitFor(() => js("!!window.__marcam.state.tree.doc && document.body.dataset.state !== 'busy'"), "tree", 60000).then(() => sleep(400)).catch(async (e) => {
-    throw new Error(`${e.message}: ${await js("JSON.stringify({ doc: !!window.__marcam.state.tree.doc, state: document.body.dataset.state, status: document.getElementById('status').textContent, error: document.getElementById('error').textContent, dialog: document.getElementById('setupDialog').open })")}`);
+    throw new Error(`${e.message}: ${await js("JSON.stringify({ doc: !!window.__marcam.state.tree.doc, state: document.body.dataset.state, status: document.getElementById('status').textContent, error: document.getElementById('error').textContent, dialog: (document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded')) })")}`);
   });
   await treeAct("op3", "enable");
   await settle();
@@ -743,7 +743,7 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "bare", models: [], tools: [], setups: [] } }))}, "bare.marcam.json").then(() => true)`);
     await settle();
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${knobStl}"), (c) => c.charCodeAt(0))], "knob.stl")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the import dialog (no starters)", 60000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the import dialog (no starters)", 60000);
     await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
     await waitFor(() => js("(() => { try { const d = JSON.parse(document.getElementById('job').value); return d.setups?.length === 1 && d.models?.length === 1 && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "the part imported with no operations", 120000);
     const bare = await js("(() => { const d = JSON.parse(document.getElementById('job').value); return { ops: d.setups[0].operations.length, error: document.getElementById('error').textContent, result: !!window.__marcam.state.result, status: document.getElementById('status').textContent }; })()");
@@ -757,7 +757,7 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "times", models: [], tools: [], setups: [] } }))}, "times.marcam.json").then(() => true)`);
     await settle();
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${knobStl}"), (c) => c.charCodeAt(0))], "knob.stl")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the import dialog", 60000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the import dialog", 60000);
     await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
     await waitDone("the knob STL imported on a vise", 240000);
     await settle();
@@ -1011,7 +1011,7 @@ try {
     const allGcode = () => js("window.__marcam.state.result.programs.map((p) => p.name + '\\n' + p.gcode).join('\\n')");
     const viewsOk = () => js(`(() => { const v = window.__marcam.state.three; const s = document.getElementById('side'); const px = s.getContext('2d').getImageData(0, 0, s.width, s.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++;
       return { part: v.groups.part.children.length, stock: v.groups.stock.children.length, path: v.groups.path.children.length, side: ink, tabs: [...document.querySelectorAll('#tabs button')].map((b) => b.textContent), ops: document.querySelectorAll('#tree .tree-op').length, stale: document.body.classList.contains('stale') }; })()`);
-    const dialogOpen = () => waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 60000);
+    const dialogOpen = () => waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     // fill the setup dialog: { kind, units, axis, name, file: [name, bytes] }, then OK
     async function inDialog(o = {}) {
       await dialogOpen();
@@ -1042,7 +1042,7 @@ try {
     await js("document.getElementById('projectNew').click(); true");
     await sleep(300);
     const kept = await js("document.querySelectorAll('#tree .tree-op').length");
-    const noDialog = !(await js("document.getElementById('setupDialog').open"));
+    const noDialog = !(await js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"));
     cdp.dialogAnswer = true;
     check("unsaved changes are marked, and New asks before discarding them (declined: nothing lost)", dirty0 && /unsaved changes/.test(dialogs().pop() || "") && kept > 0 && noDialog, `${dialogs().slice(-1)}; ${kept} operations kept`);
 
@@ -1233,7 +1233,7 @@ try {
     await sleep(500);
     const badJson = await js("document.getElementById('error').textContent");
     check("bad files: a clear error and the project left as it was",
-      /notes\.stl: not an STL file/.test(badStl) && /broken\.marcam\.json: not a marcam project/.test(badJson) && (await js("document.querySelectorAll('#tree .tree-op').length")) === opsBefore && !(await js("document.getElementById('setupDialog').open")),
+      /notes\.stl: not an STL file/.test(badStl) && /broken\.marcam\.json: not a marcam project/.test(badJson) && (await js("document.querySelectorAll('#tree .tree-op').length")) === opsBefore && !(await js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))")),
       `${badStl} | ${badJson}`);
     await shot("14g_bad_file");
 
@@ -1633,7 +1633,7 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: proj0 }))}, "noops.marcam.json").then(() => true)`);
     await settle();
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${knobStl}"), (c) => c.charCodeAt(0))], "knob.stl")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the import dialog", 60000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the import dialog", 60000);
     await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
     await waitDone("the knob imported on a vise", 240000);
     // delete every operation, one by one
@@ -2135,10 +2135,10 @@ try {
     const before = await js("(() => { const o = JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.id === 'auto'); return { feed: o.feed, step_down: o.step_down }; })()");
     const plans0 = await js("window.__marcam.calls.planAndPost || 0");
     await js("document.getElementById('treeEditSetup').click(); true");
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 60000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     const listed = await js("[...document.querySelectorAll('#sdMaterials option')].map((o) => o.value)");
     await js("document.getElementById('sdMaterial').value = 'aluminium'; document.getElementById('sdOk').click(); true");
-    await waitFor(() => js("!document.getElementById('setupDialog').open && JSON.parse(document.getElementById('job').value).setups[0].material === 'aluminium'"), "the material set", 30000);
+    await waitFor(() => js("!(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded')) && JSON.parse(document.getElementById('job').value).setups[0].material === 'aluminium'"), "the material set", 30000);
     await settle();
     const after = await js("(() => { const d = JSON.parse(document.getElementById('job').value); const g = (id) => d.setups[0].operations.find((o) => o.id === id); return { auto: { feed: g('auto').feed, plunge: g('auto').plunge_feed, step_down: g('auto').step_down }, typed: { feed: g('typed').feed, step_down: g('typed').step_down }, n: d.setups[0].operations.length, status: document.getElementById('status').textContent }; })()");
     const plans1 = await js("window.__marcam.calls.planAndPost || 0");
@@ -2153,7 +2153,7 @@ try {
       return { pocket: p.feed, depth: p.step_down, face: f.feed }; })()`);
     // reopened, the dialog shows the material
     await js("document.getElementById('treeEditSetup').click(); true");
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 60000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     const shown = await js("document.getElementById('sdMaterial').value");
     await js("document.getElementById('sdCancel').click(); true");
     check("a new operation takes the tool's data for its type in the setup's material, else the tool's for the material; the dialog shows the material",
@@ -2199,7 +2199,7 @@ try {
     await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate's dome mesh", 60000);
     await settle();
     await js("document.getElementById('treeAddSetup').click(); true");
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 60000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     const offered = await js("!document.getElementById('sdCarryOpt').classList.contains('hidden')");
     await js(`document.querySelector('.sd-kind[data-kind="vise"]').click();
       const r = document.querySelector('input[name="sdStock"][value="previous"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true }));
@@ -2232,12 +2232,12 @@ try {
     await clickGenerate();
     await waitDone("the plate generated", 240000);
     await js("document.getElementById('treeEditSetup').click(); true");
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 60000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     await js(`document.getElementById('sdPostBox').open = true; document.getElementById('sdWork').value = 'G55';
       document.getElementById('sdHeader').value = 'M8'; document.getElementById('sdFooter').value = 'M9'; document.getElementById('sdLineNums').checked = true; true`);
     await shot("33a_gcode_options");
     await js("document.getElementById('sdOk').click(); true");
-    await waitFor(() => js("!document.getElementById('setupDialog').open && !!JSON.parse(document.getElementById('job').value).setups[0].post"), "the options saved", 60000);
+    await waitFor(() => js("!(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded')) && !!JSON.parse(document.getElementById('job').value).setups[0].post"), "the options saved", 60000);
     await settle();
     await clickGenerate();
     await waitDone("generation with the options", 240000);
@@ -2705,14 +2705,14 @@ try {
     await js("window.__confirm0 = window.confirm; window.confirm = () => true; true");
     const openEdit = async () => {
       await js("document.getElementById('treeEditSetup').click(); true");
-      await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 60000);
+      await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     };
     const set = (id, v) => js(`(() => { const e = document.getElementById('${id}'); e.value = '${v}'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     const pick = (name, v) => js(`(() => { const e = document.querySelector('input[name="${name}"][value="${v}"]'); e.checked = true; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     const shown = () => js("[...document.querySelectorAll('#sdDims label:not(.hidden), #sdMargins label:not(.hidden)')].map((l) => l.querySelector('input').id)");
     const apply = async () => {
       await js("document.getElementById('sdOk').click(); true");
-      await waitFor(() => js("!document.getElementById('setupDialog').open"), "the dialog closed", 60000);
+      await waitFor(() => js("!(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the dialog closed", 60000);
       await settle();
     };
     const stockNow = () => js("JSON.parse(document.getElementById('job').value).setups[0].stock");
@@ -2814,11 +2814,11 @@ try {
     const jawsLook = () => js("(() => { const g = window.__marcam.state.three.groups.jaws; return { n: g?.children.length || 0, visible: !!g?.visible, top: g?.children[0] ? +(g.children[0].position.z + g.children[0].children[0].geometry.parameters.depth / 2).toFixed(3) : null }; })()");
     const before = { look: await jawsLook(), warnings: await js("window.__marcam.state.result.programs.flatMap((p) => p.warnings || [])") };
     await js("document.getElementById('treeEditSetup').click(); true");
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the setup dialog", 60000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
     const shownJaws = await js("!document.getElementById('sdJawsRow').classList.contains('hidden')");
     await js("(() => { const e = document.getElementById('sdJaws'); e.value = '8.5'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await js("document.getElementById('sdOk').click(); true");
-    await waitFor(() => js("!document.getElementById('setupDialog').open"), "the dialog closed", 60000);
+    await waitFor(() => js("!(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the dialog closed", 60000);
     await settle();
     await clickGenerate();
     await waitDone("the plate with the jaws higher", 120000);
@@ -2951,6 +2951,32 @@ try {
       t0.names.split("|").length === 2 && t0.details && t0.ops > 0 && t1.active !== t0.active && t1.chooser === t1.active && t1.details.length > 0 && !t1.selected && other > 0 && t2.active === t0.active && !!t2.selected && t2.form && !t2.setupDetails && folded,
       `${JSON.stringify(t0)} ${JSON.stringify(t1)} other ${other} ${JSON.stringify(t2)} folded ${folded}`);
     await shot("32_setup_tree");
+  }
+  // (Mar) a setup added carries on from the last one by default; a setup can take the stock
+  // of any setup before it; a setup's settings are in its details, not a pop-up
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle();
+    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
+    const embedded = await js("(() => { const d = document.getElementById('setupDialog'); return d.open && d.classList.contains('embedded') && !!d.closest('#treeDetails'); })()");
+    const add = async (from) => {
+      await js("document.getElementById('treeAddSetup').click(); true");
+      await waitFor(() => js(modal), "the add setup dialog", 30000);
+      const dflt = await js("({ carry: document.querySelector('input[name=\"sdStock\"][value=\"previous\"]').checked, from: document.getElementById('sdCarryFrom').value })");
+      if (from) await js(`document.getElementById('sdCarryFrom').value = '${from}'; true`);
+      await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
+      await waitFor(() => js(`!${modal}`), "the setup added", 60000);
+      await settle();
+      return dflt;
+    };
+    const d2 = await add(null);
+    const first = await js("JSON.parse(document.getElementById('job').value).setups[0].id");
+    const d3 = await add(first);
+    const ss = await js("JSON.parse(document.getElementById('job').value).setups.map((s) => s.stock)");
+    check("setups: a setup's settings in its details; one added carries on from the last by default; one may take the stock of any setup before it",
+      embedded && d2.carry && d2.from === first && d3.carry && ss.length === 3 && ss[1].shape === "from_previous" && !ss[1].from && ss[2].shape === "from_previous" && ss[2].from === first,
+      `embedded ${embedded}; ${JSON.stringify(d2)} ${JSON.stringify(d3)}; ${JSON.stringify(ss)}`);
   }
 
   // 9. phone width: layout stacks, no horizontal scroll

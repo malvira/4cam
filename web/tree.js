@@ -65,7 +65,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     onChange?.();
   }
 
-  const setup = () => t.doc.setups.find((s) => s.id === t.setup);
+  const setup = () => t.doc?.setups.find((s) => s.id === t.setup);
   // the operation being edited: a new one (draft), an applied one whose type is being changed
   // (retype, written on Apply), else the project's
   const opById = (id) =>
@@ -177,6 +177,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     // panel's scroll: drawn again, the tree must not change what the person did not touch
     const oldEd = $("opEditor");
     if (oldEd) t.keepEd = { el: oldEd, focus: focusIn(oldEd) };
+    // (the setup's form in the details: put back after, focus and all)
+    const fa = document.activeElement;
+    let sdFocus = null;
+    if (fa?.closest?.("#setupDialog.embedded") && fa.id) {
+      try {
+        sdFocus = { id: fa.id, s: fa.selectionStart, e: fa.selectionEnd };
+      } catch {
+        sdFocus = { id: fa.id, s: null, e: null };
+      }
+    }
     const scrolls = [];
     for (let e = box; e; e = e.parentElement) if (e.scrollTop) scrolls.push([e, e.scrollTop]);
     if (!t.doc) return;
@@ -255,13 +265,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
         <div class="row small"><button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
         <button type="button" id="treeReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button>
-        <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>`;
+        <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>
+        <div id="setupHost" class="setup-host"></div>`;
     }
     html += `<div id="opEditor"></div></div>`;
     box.innerHTML = html;
     box.dataset.ops = String(n);
     renderStates();
     renderEditor();
+    // the setup's settings (stock, part, holding, output) in its details
+    if (!t.selected) window.__marcam.project?.hostSetup?.($("setupHost"), t.setup, sdFocus);
     for (const [e, y] of scrolls) e.scrollTop = y;
     detectFeatures();
   }

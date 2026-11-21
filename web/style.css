@@ -98,6 +98,17 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; }
 .tree-op.other .tree-label { padding-left: 2px; }
 .twisty { padding: 0 3px; font-size: 11px; border: none; background: none; cursor: pointer; }
 .tree-details { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
+/* the setup's form in its details (the Edit setup dialog's, not modal) */
+#setupDialog.embedded { position: static; display: block; width: auto; max-width: none; max-height: none; margin: 6px 0 0; padding: 0; border: none; background: transparent; color: inherit; box-shadow: none; }
+#setupDialog.embedded:not([open]) { display: none; }
+#setupDialog.embedded #sdTitle { display: none; }
+#setupDialog.embedded canvas { max-width: 100%; height: auto; }
+#setupDialog.embedded .sd-grid, #setupDialog.embedded .sd-dims { grid-template-columns: 1fr; }
+#setupDialog.embedded .sd-kinds { gap: 4px; }
+#setupDialog.embedded .sd-kind { padding: 4px 6px; gap: 2px; }
+#setupDialog.embedded .sd-kind svg { width: 36px; height: 24px; }
+#setupDialog.embedded .sd-kind b { font-size: 12px; }
+#setupDialog.embedded .sd-kind small { display: none; }
 .opform { display: grid; gap: 3px; padding: 6px; border: 1px solid var(--line); border-radius: 4px; margin-top: 6px; }
 .opform label { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
 .opform input, .opform select { width: 140px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }

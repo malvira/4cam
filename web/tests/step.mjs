@@ -33,7 +33,7 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "step", models: [], tools: [], setups: [] } }))}, "step.marcam.json").then(() => true)`);
     await app.settle();
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${b64}"), (c) => c.charCodeAt(0))], "${name}")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    await waitFor(() => js("document.getElementById('setupDialog').open"), "the import dialog", 120000);
+    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the import dialog", 120000);
     const shown = await js("document.getElementById('sdFileName').textContent");
     await js(`document.querySelector('.sd-kind[data-kind="${kind}"]').click(); document.getElementById('sdOk').click(); true`);
     await waitFor(() => js("document.body.dataset.state === 'done' || document.body.dataset.state === 'error'"), `${name} imported and planned`, 240000);

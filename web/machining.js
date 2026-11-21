@@ -217,7 +217,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     const t = ev.target;
     if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-    if (document.querySelector("dialog[open]")) return;
+    if (document.querySelector("dialog[open]:not(.embedded)")) return;
     const key = ev.key.toLowerCase();
     if (key === " " && (!t || t === document.body || t.closest?.("#view3d"))) {
       if (!m.session) return;
