@@ -9,18 +9,29 @@
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-async function instantiate(source) {
+async function instantiate(source, imports) {
   if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
-    return (await WebAssembly.instantiate(source, {})).instance;
+    return (await WebAssembly.instantiate(source, imports)).instance;
   }
   const resp = await fetch(source);
   if (!resp.ok) throw new Error(`could not load ${source}: ${resp.status}`);
-  return (await WebAssembly.instantiate(await resp.arrayBuffer(), {})).instance;
+  return (await WebAssembly.instantiate(await resp.arrayBuffer(), imports)).instance;
 }
 
-export async function load(source) {
-  const inst = await instantiate(source);
+/** `opts.onPhase(text)`: told where a long call is as it goes (the operation being planned,
+ *  the checks), for diagnostics. */
+export async function load(source, opts = {}) {
+  let mem = null;
+  const imports = {
+    env: {
+      marcam_phase: (ptr, len) => {
+        if (opts.onPhase && mem) opts.onPhase(dec.decode(new Uint8Array(mem.buffer, ptr, len).slice()));
+      },
+    },
+  };
+  const inst = await instantiate(source, imports);
   const { memory, fc_alloc, fc_free, fc_call } = inst.exports;
+  mem = memory;
 
   function put(bytes) {
     if (!bytes || bytes.length === 0) return [0, 0];

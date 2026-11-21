@@ -39,6 +39,12 @@ function startWorker(which = "main") {
     const { id, ok, result, error, ms } = ev.data;
     const p = pending.get(id);
     if (!p) return;
+    // (where the call is, as it goes: for the diagnostics)
+    if (ev.data.phase) {
+      p.phase = ev.data.phase;
+      p.phaseT = performance.now();
+      return;
+    }
     pending.delete(id);
     simCallDone(p.cmd);
     ok ? p.resolve({ result, ms }) : p.reject(new Error(error));
@@ -147,7 +153,7 @@ const state = {
   three: null, // lazily loaded three.js view
 };
 /** The engine calls not answered yet: command, worker and seconds waited (for diagnostics). */
-const inFlight = () => [...pending.values()].map((p) => ({ cmd: p.cmd, worker: p.worker, s: Math.round((performance.now() - p.t0) / 100) / 10 }));
+const inFlight = () => [...pending.values()].map((p) => ({ cmd: p.cmd, worker: p.worker, s: Math.round((performance.now() - p.t0) / 100) / 10, ...(p.phase ? { phase: p.phase, phaseS: Math.round((performance.now() - p.phaseT) / 100) / 10 } : {}) }));
 window.__marcam = { state, engine, calls, cancelEngine, simRing, inFlight };
 
 function setStatus(text, mode = "") {

@@ -506,6 +506,22 @@ fn too_fine(program: &str, op: &Operation) -> Error {
     ))
 }
 
+static PHASE: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Where the work is, told as it goes (which operation is planned, the checks): for
+/// diagnostics, e.g. the browser's worker passes it to the page while a long call runs. Set
+/// once; nothing is told without it.
+pub fn set_phase_hook(f: fn(&str)) {
+    let _ = PHASE.set(f);
+}
+
+/// Tell the phase hook (if any) what is done now.
+pub fn phase(what: &str) {
+    if let Some(f) = PHASE.get() {
+        f(what);
+    }
+}
+
 fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Toolpath, Error> {
     let job = ctx.job;
     // a vise setup (box stock) runs only 3-axis operations; a rotary setup runs both, the
@@ -571,6 +587,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
     let mut first_tool = None;
     for op in &prog.operations {
         // the work it may take (see budget): counted until the end of this iteration
+        phase(&format!("planning {} ({})", op_name(op), prog.name));
         let _budget = budget::Guard::start(budget::OP_LIMIT);
         b.ramp_tan = op
             .ramp_angle()
@@ -1402,6 +1419,7 @@ pub fn gouge_check(
     tps: &[Toolpath],
     mesh: Option<&Mesh>,
 ) -> Result<Vec<GougeReport>, Error> {
+    phase("gouge check");
     let revolved;
     let surface = match (mesh, &job.part.profile) {
         (Some(m), _) => m,
@@ -1642,6 +1660,7 @@ pub fn collision_check(
     tps: &[Toolpath],
     machine: &Machine,
 ) -> Result<Vec<collision::CollisionReport>, Error> {
+    phase("holder and shank check");
     let res = sim::Resolution::preset("coarse").expect("built in");
     let cutters = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
     let bodies = |t: u32| job.tool(t).map(collision::ToolBody::of);

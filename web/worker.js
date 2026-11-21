@@ -7,7 +7,9 @@
 // on the main thread took over a second at a time, and the view stalled meanwhile.
 import { load } from "./pkg/marcam.js";
 
-const ready = load(new URL("./pkg/marcam.wasm", import.meta.url));
+// (where a long call is: told to the page as it goes, for its diagnostics)
+let current = null;
+const ready = load(new URL("./pkg/marcam.wasm", import.meta.url), { onPhase: (phase) => current != null && self.postMessage({ id: current, phase }) });
 
 /** base64 text -> bytes (a plain loop: Uint8Array.from with a mapper is far slower). */
 function bytes(s) {
@@ -64,7 +66,13 @@ self.onmessage = async (ev) => {
     const cam = await ready;
     if (typeof cam[cmd] !== "function") throw new Error(`unknown command ${cmd}`);
     const t0 = performance.now();
-    const result = cam[cmd](...(args || []));
+    current = id;
+    let result;
+    try {
+      result = cam[cmd](...(args || []));
+    } finally {
+      current = null;
+    }
     if (result && result.error) {
       self.postMessage({ id, ok: false, error: result.error });
     } else {

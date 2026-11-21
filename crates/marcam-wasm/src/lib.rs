@@ -351,6 +351,7 @@ pub mod api {
         };
         let gouges = gouge_check(&job, &tps, mesh.as_ref()).unwrap_or_default();
         let collisions = marcam::collision_check(&job, &tps, &machine).unwrap_or_default();
+        marcam::phase("machine limits");
         let limits = profiles::check_limits(&job, &tps, &profile);
         let jaws = marcam::jaw_check(&job, &tps);
         // project operation ids by planning order (0.2 documents), for per-operation times
@@ -359,6 +360,7 @@ pub mod api {
         let programs: Vec<Value> = tps
             .iter()
             .map(|tp| {
+                marcam::phase(&format!("post {}", tp.name));
                 let gcode = post(tp, &machine);
                 let time = marcam::estimate::estimate_toolpath(tp, &profile);
                 total_s += time.estimate.total_s;
@@ -1881,6 +1883,23 @@ pub mod api {
     }
 }
 
+// the page told where a long call is (see marcam::phase): an import the JS wrapper gives
+#[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn marcam_phase(ptr: *const u8, len: usize);
+}
+
+fn phase_to_js(what: &str) {
+    #[cfg(target_arch = "wasm32")]
+    // SAFETY: the pointer and length are of a live &str for the call
+    unsafe {
+        marcam_phase(what.as_ptr(), what.len())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = what;
+}
+
 /// Allocate `len` bytes for the host to write into.
 #[no_mangle]
 pub extern "C" fn fc_alloc(len: usize) -> *mut u8 {
@@ -1926,6 +1945,8 @@ pub unsafe extern "C" fn fc_call(
     c_ptr: *const u8,
     c_len: usize,
 ) -> *mut u8 {
+    // (where a long call is, told to the page as it goes: set once)
+    marcam::set_phase_hook(phase_to_js);
     let name = String::from_utf8_lossy(slice(name_ptr, name_len)).into_owned();
     let out = api::call(
         &name,
