@@ -33,6 +33,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
 
   /** The part's triangles in mm, if there is a part (the chosen file, else the project's). */
   function tris() {
+    // (another part chosen for this setup: that one)
+    if (cur?.modelPick?.tris) return cur.modelPick.tris;
     const t = cur?.parsed?.tris ?? cur?.preset?.tris ?? cur?.preset?.previewTris ?? null;
     if (!t) return null;
     return cur.parsed && $("sdUnits").value === "inch" ? t.map((v) => v * 25.4) : t;
@@ -470,6 +472,12 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         el.querySelector("input").disabled = off;
       }
       $("sdFileRow").classList.toggle("hidden", mode !== "new");
+      // (Mar) this setup's part: its own, another setup's, or another file
+      const choices = preset.modelChoices || [];
+      $("sdModelRow").classList.toggle("hidden", !choices.length);
+      $("sdModel").innerHTML = choices.map((c) => `<option value="${c.value}">${c.label}</option>`).join("");
+      $("sdModel").value = "own";
+      cur.modelPick = null;
       $("sdFile").value = "";
       $("sdFileName").textContent = cur.parsed ? `${preset.file.name}: ${partSummary(cur.parsed)}` : "";
       $("sdUnits").value = preset.units ?? "mm";
@@ -628,7 +636,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         tailstock: bar(k) && $("sdTail").checked,
         material: $("sdMaterial").value.trim() || null,
         // the placement fields typed in (others are the type's defaults)
-        edited: ["sdMargin", "sdOrigin", "sdAxis"].filter((id) => $(id).dataset.edited).concat(JSON.stringify(rotate()) !== c.presetRotate ? ["sdRotate"] : []),
+        edited: ["sdMargin", "sdOrigin", "sdAxis"].filter((id) => $(id).dataset.edited).concat(JSON.stringify(rotate()) !== c.presetRotate ? ["sdRotate"] : [], c.modelPick ? ["sdModel"] : []),
+        model: c.modelPick ? { kind: c.modelPick.kind, id: c.modelPick.id, file: c.modelPick.file, parsed: c.modelPick.parsed } : null,
         rotate: rotate(),
         file: c.parsed?.file ?? null,
         tris: c.parsed?.tris ?? null,
@@ -684,6 +693,37 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     if (t.type === "number") preview();
   });
   $("sdFit").addEventListener("click", () => fitTo());
+  // this setup's part: another setup's (its triangles from the caller), or a file
+  $("sdModel").addEventListener("change", async () => {
+    const v = $("sdModel").value;
+    if (!cur) return;
+    if (v === "file") return $("sdModelFile").click();
+    if (v.startsWith("setup:")) {
+      const id = v.slice(6);
+      cur.modelPick = { kind: "setup", id, tris: cur.preset.trisOf?.(id) ?? null };
+    } else cur.modelPick = null;
+    preview();
+  });
+  $("sdModelFile").addEventListener("change", async () => {
+    const f = $("sdModelFile").files[0];
+    $("sdModelFile").value = "";
+    if (!f || !cur) return;
+    try {
+      const parsed = await readPart(new Uint8Array(await f.arrayBuffer()), f.name);
+      cur.modelPick = { kind: "file", file: f, parsed, tris: parsed.tris };
+      const o = document.createElement("option");
+      o.value = "picked";
+      o.textContent = f.name;
+      $("sdModel").querySelector('option[value="picked"]')?.remove();
+      $("sdModel").append(o);
+      $("sdModel").value = "picked";
+      preview();
+    } catch (e) {
+      $("sdWarn").textContent = `${f.name}: ${e.message}`;
+      $("sdWarn").classList.remove("hidden");
+      $("sdModel").value = "own";
+    }
+  });
   $("sdForm").addEventListener("submit", (ev) => {
     ev.preventDefault();
     finish(true);

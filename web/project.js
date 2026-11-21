@@ -524,7 +524,7 @@ export function setupProject(ctx) {
   const TYPING_MS = 1000;
   const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const h = { undo: [], redo: [], cur: null, loading: true, restoring: false, typingAt: 0, label: null };
-  const snap = () => ({ text: $("job").value, mesh: state.mesh, meshName: state.meshName, meshSource: state.meshSource });
+  const snap = () => ({ text: $("job").value, mesh: state.mesh, meshName: state.meshName, meshSource: state.meshSource, extras: new Map(state.extraMeshes) });
   state.history = h;
   /** A project opened, made or reset: no history, this is where it starts. */
   function resetHistory() {
@@ -535,7 +535,7 @@ export function setupProject(ctx) {
   }
   /** The mesh set while a project is being opened is part of where the history starts. */
   function meshSet() {
-    if (h.loading && !h.restoring && h.cur) Object.assign(h.cur, { mesh: state.mesh, meshName: state.meshName, meshSource: state.meshSource });
+    if (h.loading && !h.restoring && h.cur) Object.assign(h.cur, { mesh: state.mesh, meshName: state.meshName, meshSource: state.meshSource, extras: new Map(state.extraMeshes) });
   }
   /** An edit is about to change the mesh (before the text): the snapshot keeps the old one. */
   function checkpoint() {
@@ -598,6 +598,7 @@ export function setupProject(ctx) {
     h.restoring = true;
     try {
       $("job").value = e.text;
+      state.extraMeshes = new Map(e.extras || []);
       setMesh(e.mesh, e.meshName, e.meshSource);
       changed();
     } finally {
@@ -654,7 +655,10 @@ export function setupProject(ctx) {
     try {
       view = viewFile ? JSON.parse(new TextDecoder().decode(un(viewFile.bytes))) : null;
     } catch {}
-    await openParsed({ project: result.project, mesh: part ? un(part.bytes) : null, meshName: part?.name || "", view }, fileName);
+    // the setups' own part files, besides the project's
+    const others = new Set((result.project.models || []).filter((m) => m.kind === "mesh" && m.file && m.file !== part?.name).map((m) => m.file));
+    const extras = result.files.filter((f) => others.has(f.name)).map((f) => [f.name, { bytes: un(f.bytes), name: f.name }]);
+    await openParsed({ project: result.project, mesh: part ? un(part.bytes) : null, meshName: part?.name || "", view, extras }, fileName);
   }
 
   async function openText(text, fileName) {
@@ -667,9 +671,10 @@ export function setupProject(ctx) {
     return openParsed(readProjectFile(text), fileName);
   }
 
-  async function openParsed({ project, mesh, meshName, view }, fileName) {
+  async function openParsed({ project, mesh, meshName, view, extras }, fileName) {
     const name = project.name || slug(fileName || "project");
     await resetProject("");
+    if (extras?.length) state.extraMeshes = new Map(extras);
     writeJob(project, { load: true });
     const wanted = meshFileOf(project);
     // a STEP part: converted again (the same faces, the same ids)
@@ -752,6 +757,11 @@ export function setupProject(ctx) {
     const files = [];
     const partBytes = src ? src.bytes : state.mesh;
     if (partBytes) files.push({ name: meshFileOf(project) || state.meshName.split(" ")[0] || "part.stl", bytes: partBytes });
+    // (and the setups' own part files)
+    for (const m of project.models || []) {
+      const e = m.kind === "mesh" && state.extraMeshes.get(m.file);
+      if (e && !files.some((f) => f.name === m.file)) files.push({ name: m.file, bytes: e.bytes });
+    }
     // which toolpaths are hidden (the view): beside the project
     if (state.hidden?.size) files.push({ name: "view.json", bytes: new TextEncoder().encode(JSON.stringify({ hidden: [...state.hidden] })) });
     let zip;
@@ -1145,8 +1155,18 @@ export function setupProject(ctx) {
     const axis = kind === "vise" ? Object.entries(UP_AXIS).find(([, v]) => v === (m?.axis ?? "x"))?.[0] ?? "z" : m?.axis ?? "x";
     const cfg = await dialog.open("edit", {
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
-      stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && state.mesh), tris: m && state.mesh ? parseStl(state.mesh).tris : null, previewTris, post: s.post,
+      stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && window.__marcam.meshFor(m.file)), tris: m && window.__marcam.meshFor(m.file) ? parseStl(window.__marcam.meshFor(m.file)).tris : null, previewTris, post: s.post,
       canCarry: doc.setups.indexOf(s) > 0, setupId: s.id, rotate: m?.rotate,
+      // (Mar) this setup's part: its own, another setup's, or another file
+      modelChoices: m ? [{ value: "own", label: `its own: ${m.file}` }]
+        .concat(doc.setups.filter((o) => o !== s).map((o) => [o, doc.models.find((x) => o.part.includes(x.id) && x.kind === "mesh")]).filter(([, om]) => om && om.file !== m.file && window.__marcam.meshFor(om.file)).map(([o, om]) => ({ value: `setup:${o.id}`, label: `as ${o.name || o.id}: ${om.file}` })))
+        .concat([{ value: "file", label: "another file..." }]) : [],
+      trisOf: (id) => {
+        const o = doc.setups.find((x) => x.id === id);
+        const om = o && doc.models.find((x) => o.part.includes(x.id) && x.kind === "mesh");
+        const b = om && window.__marcam.meshFor(om.file);
+        return b ? parseStl(b).tris : null;
+      },
       carrySources: doc.setups.slice(0, doc.setups.indexOf(s)).map((x) => ({ id: x.id, name: x.name || x.id })),
     }, { host: opts.host });
     if (!cfg) return false;
@@ -1188,9 +1208,38 @@ export function setupProject(ctx) {
       setStatus("Setup unchanged", "ready");
       return false;
     }
-    const report = await applySetup(doc, doc.setups.find((x) => x.id === s.id), cfg, m && state.mesh ? parseStl(state.mesh).tris : null);
+    // this setup's part: its own (from its file), another setup's, or a new file (its picks
+    // found again on it; only this setup's operations)
+    const ownBytes = m && window.__marcam.meshFor(m.file);
+    let tris = ownBytes ? parseStl(ownBytes).tris : null;
+    let found = null;
+    if (cfg.model?.kind === "setup") {
+      const o = doc.setups.find((x) => x.id === cfg.model.id);
+      const om = o && doc.models.find((x) => o.part.includes(x.id) && x.kind === "mesh");
+      if (om) {
+        const own = ownModel(doc, doc.setups.find((x) => x.id === s.id));
+        own.file = om.file;
+        tris = parseStl(window.__marcam.meshFor(om.file)).tris;
+      }
+    } else if (cfg.model?.kind === "file") {
+      const part = cfg.model.parsed;
+      const taken = new Set([...doc.models.map((x) => x.file), ...state.extraMeshes.keys()]);
+      let name = `${slug(cfg.model.file.name)}.stl`;
+      for (let k = 2; taken.has(name); k++) name = `${slug(cfg.model.file.name)}_${k}.stl`;
+      const bytes = part.step ? part.step.stl : encodeStl(part.tris, `marcam: ${cfg.model.file.name}`);
+      const own = ownModel(doc, doc.setups.find((x) => x.id === s.id));
+      const { result } = await engine("replaceModel", doc, { model: own.id, file: name }, bytes);
+      doc = result.project;
+      state.extraMeshes.set(name, { bytes, name: cfg.model.file.name });
+      state.meshesGen++;
+      tris = part.tris;
+      found = result.operations;
+    }
+    const report = await applySetup(doc, doc.setups.find((x) => x.id === s.id), cfg, tris);
     await commitSetupChange(doc, report, { label: `Setup "${s.name || s.id}" changed to ${KINDS[cfg.kind]}.`, job: before });
     if (cfg.machine) ctx.selectMachine(cfg.machine);
+    const bad = (found || []).filter((o) => !o.ok);
+    if (bad.length) showError(`The new part: ${bad.length} operation(s) not planned until picked again: ${bad.map((o) => `${o.op} (${o.error})`).join("; ")}`);
     return report;
   }
 

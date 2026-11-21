@@ -7,7 +7,7 @@ import { addViewCube } from "./viewcube.js";
 import { setupToolDialogs } from "./tooldialog.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
-import { jawGrip, lyingBar, setupProject } from "./project.js";
+import { jawGrip, lyingBar, meshFileOf, setupProject } from "./project.js";
 import { calcFeeds, feedsSummary } from "./feeds.js";
 import { color, colorNum, colorRgb, COLOR_DEFAULTS, COLOR_LABELS, onColorsChange, resetColors, setColor } from "./colors.js";
 
@@ -121,6 +121,8 @@ const calls = {};
 const WITH_LIBRARIES = new Set(["opDefaults", "setMaterial", "simulate", "meshTriangles", "simGrid", "simOpen", "gpuOpen"]);
 function engine(cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
+  // (Mar) setups with their own parts: the part file and theirs, given together
+  if (state.extraMeshes?.size) args = args.map((a) => (a && a === state.mesh ? meshBundle() : a));
   // the person's tool libraries: their tools' cutting data for new operations' defaults
   // (and every command that reads the project: one of their tools is found in them)
   if (WITH_LIBRARIES.has(cmd) && args[1] && typeof args[1] === "object" && !args[1].libraries) args[1] = { ...args[1], libraries: libraries() };
@@ -405,6 +407,9 @@ async function resetProject(msg, actions) {
   window.__marcam.machining?.reset();
   window.__marcam.tree?.reset();
   window.__marcam.project?.dropUndo();
+  // (the setups' own part files go with the project)
+  state.extraMeshes = new Map();
+  state.meshesGen++;
   try {
     await engine("simClose");
   } catch {
@@ -533,9 +538,43 @@ function liveLoaded() {
   if (autoOn() && ops && state.registry) scheduleAuto();
 }
 
+/** The part files of setups with a part of their own (other than the project's part, the
+ *  mesh below): file name -> { bytes (an STL), name (shown) }. */
+state.extraMeshes = new Map();
+state.meshesGen = 0;
+let bundled = null;
+/** The project's part file and the setups' own, as one argument for the engine (each model
+ *  takes its file from it: see the engine's mesh bundle). */
+function meshBundle() {
+  if (bundled?.gen === state.meshesGen && bundled.mesh === state.mesh) return bundled.bytes;
+  let main = "part.stl";
+  try {
+    main = meshFileOf(readJob()) || main;
+  } catch {}
+  const files = [[main, state.mesh], ...[...state.extraMeshes].map(([n, e]) => [n, e.bytes])].filter(([, b]) => b);
+  const enc = new TextEncoder();
+  const parts = [enc.encode("MARCAM-MESHES\n")];
+  for (const [n, b] of files) {
+    const nb = enc.encode(n);
+    const len = (x) => new Uint8Array(new Uint32Array([x]).buffer);
+    parts.push(len(nb.length), nb, len(b.length), b);
+  }
+  const out = new Uint8Array(parts.reduce((k, p) => k + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  bundled = { gen: state.meshesGen, mesh: state.mesh, bytes: out };
+  return out;
+}
+/** The bytes of part file `file`: a setup's own, else the project's part. */
+window.__marcam.meshFor = (file) => (file && state.extraMeshes.get(file)?.bytes) || state.mesh;
+
 /** The part's mesh (an STL, with face numbers when it came from a STEP); `source`: the file it
  *  was made from, which the project saves instead ({ name, bytes }: a STEP). */
 function setMesh(bytes, name, source = null) {
+  state.meshesGen++;
   state.mesh = bytes;
   state.meshName = name;
   state.meshSource = source;

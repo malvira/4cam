@@ -3026,6 +3026,43 @@ try {
       `${JSON.stringify(lib)} parked ${tool.parked}; ${before} -> ${after.rows}; listed ${after.listed}`);
   }
 
+  // (Mar) each setup its own part: another file in one setup only, or the same as another's
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle();
+    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
+    // a second setup, its own placement (not carried)
+    await js("document.getElementById('treeAddSetup').click(); true");
+    await waitFor(() => js(modal), "the add setup dialog", 30000);
+    await js("document.querySelector('input[name=\"sdStock\"][value=\"auto\"]').click(); document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
+    await waitFor(() => js(`!${modal}`), "the setup added", 60000);
+    await settle();
+    const modelOf = (k) => `(() => { const d = JSON.parse(document.getElementById('job').value); const s = d.setups[${k}]; return d.models.find((m) => s.part.includes(m.id) && m.kind === 'mesh')?.file; })()`;
+    await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
+    await waitFor(() => js("document.getElementById('setupDialog').classList.contains('embedded') && document.getElementById('setupDialog').open"), "setup 2's form", 30000);
+    const knob = readFileSync(join(root, "examples", "knob", "knob.stl")).toString("base64");
+    await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${knob}"), (c) => c.charCodeAt(0))], "knob.stl")); const i = document.getElementById('sdModelFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await waitFor(() => js("document.getElementById('sdModel').value === 'picked'"), "the new part read", 30000);
+    await js("document.getElementById('sdOk').click(); true");
+    await settle();
+    await waitFor(async () => (await js(modelOf(1))) === "knob.stl", "setup 2's new part", 60000).catch(() => {});
+    const m1 = [await js(modelOf(0)), await js(modelOf(1))];
+    await clickGenerate();
+    await waitDone("setup 2 planned with its own part", 240000);
+    const planned2 = await js("window.__marcam.state.result?.programs?.length >= 0 && document.body.dataset.state === 'done'");
+    // the same part as setup 1 again
+    await waitFor(() => js("document.getElementById('setupDialog').classList.contains('embedded') && document.getElementById('setupDialog').open"), "setup 2's form again", 30000);
+    const first = await js("JSON.parse(document.getElementById('job').value).setups[0].id");
+    await js(`(() => { const s = document.getElementById('sdModel'); s.value = 'setup:${first}'; s.dispatchEvent(new Event('change', { bubbles: true })); document.getElementById('sdOk').click(); return true; })()`);
+    await settle();
+    await waitFor(async () => (await js(modelOf(1))) === "dome.stl", "setup 2 back on setup 1's part", 60000).catch(() => {});
+    const m2 = [await js(modelOf(0)), await js(modelOf(1))];
+    check("each setup its own part: another file in one setup only (the other keeps its own), planned; then the same part as another setup",
+      m1[0] === "dome.stl" && m1[1] === "knob.stl" && planned2 && m2[0] === "dome.stl" && m2[1] === "dome.stl",
+      `${JSON.stringify(m1)} planned ${planned2} -> ${JSON.stringify(m2)}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);
