@@ -34,8 +34,11 @@ fn take<'a>(n: usize, rest: &mut &'a [u8]) -> Result<&'a [u8], MeshError> {
     Ok(a)
 }
 
+/// One file of a bundle: its name and its bytes.
+pub type BundleFile<'a> = (String, &'a [u8]);
+
 /// The files of a bundle ([`BUNDLE_MAGIC`]) as (name, bytes), or None for one plain file.
-pub fn bundle(data: &[u8]) -> Result<Option<Vec<(String, &[u8])>>, MeshError> {
+pub fn bundle(data: &[u8]) -> Result<Option<Vec<BundleFile<'_>>>, MeshError> {
     let Some(mut rest) = data.strip_prefix(BUNDLE_MAGIC) else {
         return Ok(None);
     };
