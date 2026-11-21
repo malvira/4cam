@@ -173,6 +173,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   function render() {
     const box = $("tree");
+    // the form being edited is kept (what is typed in it, the focus, the caret), and the
+    // panel's scroll: drawn again, the tree must not change what the person did not touch
+    const oldEd = $("opEditor");
+    if (oldEd) t.keepEd = { el: oldEd, focus: focusIn(oldEd) };
+    const scrolls = [];
+    for (let e = box; e; e = e.parentElement) if (e.scrollTop) scrolls.push([e, e.scrollTop]);
     if (!t.doc) return;
     const s = setup();
     if (!s) {
@@ -236,7 +242,51 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     box.dataset.ops = String(n);
     renderStates();
     renderEditor();
+    for (const [e, y] of scrolls) e.scrollTop = y;
     detectFeatures();
+  }
+
+  /** The field focused inside `el`, with its caret (to be put back after drawing again). */
+  function focusIn(el) {
+    const a = document.activeElement;
+    if (!el || !a || !el.contains(a) || !a.name) return null;
+    let s = null, e = null;
+    try {
+      s = a.selectionStart;
+      e = a.selectionEnd;
+    } catch {}
+    return { name: a.name, s, e };
+  }
+  function refocus(el, f) {
+    if (!f) return;
+    const x = el.querySelector(`[name="${CSS.escape(f.name)}"]`);
+    if (!x || document.activeElement === x) return;
+    x.focus({ preventScroll: true });
+    try {
+      if (f.s != null) x.setSelectionRange(f.s, f.e);
+    } catch {}
+  }
+  /** The fields changed in `from` (not applied yet) put into `to`, where `to` was drawn from
+   *  the same value (the operation's own value did not change meanwhile). */
+  function carryEdits(from, to) {
+    if (!from || !to) return;
+    for (const a of from.querySelectorAll("input, select, textarea")) {
+      if (!a.name) continue;
+      const b = to.querySelector(`[name="${CSS.escape(a.name)}"]`);
+      if (!b || b.type !== a.type) continue;
+      if (a.type === "checkbox" || a.type === "radio") {
+        if (a.checked !== a.defaultChecked && b.defaultChecked === a.defaultChecked) b.checked = a.checked;
+      } else if (a.tagName === "SELECT") {
+        // (the tool and the type act at once, through their own handlers; "__" values are
+        // commands, such as adding a tool from the library: not edits waiting for Apply)
+        if (a.name === "tool" || a.name === "__type" || a.value.startsWith("__")) continue;
+        const was = [...a.options].find((o) => o.defaultSelected)?.value;
+        const now = [...b.options].find((o) => o.defaultSelected)?.value;
+        if (a.value !== was && now === was && [...b.options].some((o) => o.value === a.value)) b.value = a.value;
+      } else if (a.value !== a.defaultValue && b.defaultValue === a.defaultValue) {
+        b.value = a.value;
+      }
+    }
   }
 
   // ------------------------------------------------------------ visibility (view only)
@@ -391,9 +441,13 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     // placing tabs is for the contour selected
     if (t.tabMode && opById(t.selected)?.type !== "contour") t.tabMode = false;
     const ed = $("opEditor");
+    // (drawn again by the tree: the form as it was there)
+    const kept = t.keepEd;
+    t.keepEd = null;
     const op = t.selected && opById(t.selected);
     if (!op) {
       ed.innerHTML = "";
+      ed.__html = "";
       dropOverlay();
       return;
     }
@@ -490,7 +544,22 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const pending = (t.draft && t.draft.op.id === op.id) || (t.retype && t.retype.op.id === op.id);
     const feedy = ty.params.some((p) => ["feed", "rough_feed", "finish_feed", "plunge_feed"].includes(p.name));
     html += `<div id="opErrors" class="error small hidden"></div>${feedy ? '<div id="opFeedsNotes" class="small muted" aria-live="polite"></div>' : ""}<div class="row"><button type="submit" class="primary">Apply</button>${pending ? ' <button type="button" id="cancelDraft">Cancel</button>' : ""}${feedy ? ' <button type="button" id="opCalcFeeds" title="Calculate the feeds for this tool, its stepover and depth in the setup\'s material at the setup\'s spindle speed (chip load, chip thinning), within the machine\'s cap">Calculate feeds</button>' : ""}</div></form>`;
+    const cur = kept?.el || ed;
+    const focus = kept?.focus || focusIn(ed);
+    if (cur.__html === html) {
+      // nothing it shows changed: the same form, as the person left it
+      if (cur !== ed) ed.replaceWith(cur);
+      refocus(cur, focus);
+      showUses(op);
+      return;
+    }
+    // (the same operation drawn anew: what was typed in it and not applied carries over)
+    const before = cur.__html && cur.__op === `${op.id}:${op.type}` ? cur.querySelector("#opForm") : null;
     ed.innerHTML = html;
+    ed.__html = html;
+    ed.__op = `${op.id}:${op.type}`;
+    carryEdits(before, ed.querySelector("#opForm"));
+    refocus(ed, focus);
     showUses(op);
   }
 

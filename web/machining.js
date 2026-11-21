@@ -154,11 +154,16 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     remember(VIEW_KEY, JSON.stringify(view));
     syncInputs();
     renderToggles();
-    if (k === "stock") return stockToggled();
+    if (k === "stock") {
+      applyLayers();
+      window.__marcam.legacyLayers?.();
+      return stockToggled();
+    }
     applyLayers();
     showRange();
     m.selKey = null;
     syncFrame();
+    window.__marcam.legacyLayers?.();
   }
   /** The stock shown or not: while playing, the playback again at the same place (the stock
    *  simulated along); otherwise the background simulation's result (run if missing). */
@@ -295,10 +300,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   async function applyHidden() {
     if (!m.session) return;
     if (m.open) {
-      // (a view action: opened again by itself, the status line keeps the job's times)
-      const at = m.pos;
+      // (a view action: opened again by itself, the status line keeps the job's times; at
+      // the place last asked for, a scrub still under way included: the reopen keeps it)
       await open({ auto: true });
-      if (m.session) await seek(Math.min(at, m.session.segments));
     } else {
       refreshHidden();
       renderLegend();
@@ -502,6 +506,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (!v || v.failed || !v.groups.work) return;
     for (const o of m.paths?.cut || []) o.visible = view.paths !== "off";
     for (const o of m.paths?.rapid || []) o.visible = view.paths !== "off" && view.rapids;
+    // the stock as the toggle says at once (while the playback is made again without it)
+    if (m.stockMesh) m.stockMesh.visible = view.stock;
+    if (m.ghost) m.ghost.visible = view.stock && $("simGhost").checked;
     // at rest with the stock on: the background simulation's stock instead of the part
     const finalStock = !m.expanded && view.stock && !!v.groups.simFinal?.children.length;
     for (const c of v.groups.work.children) if (c.userData.shared) c.visible = view.part && !finalStock;
@@ -558,12 +565,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function showMachining(on) {
     const v = state.three;
     if (!v || v.failed) return;
-    for (const k of ["part", "stock", "sim", "path", "tool"]) v.groups[k].visible = !on && (k !== "sim" || $("showSim").checked);
-    if (!on) {
-      v.groups.part.visible = $("showPart").checked;
-      v.groups.stock.visible = $("showStock").checked;
-    }
     if (v.groups.machining) v.groups.machining.visible = on;
+    // the view without the playback: as the corner toggles say (none of it while it shows)
+    if (window.__marcam.legacyLayers) window.__marcam.legacyLayers();
+    else for (const k of ["part", "stock", "sim", "path", "tool"]) v.groups[k].visible = !on;
   }
 
   /** Tool model: shank + cutting end, tip at the origin, axis +Z (the spindle). */
@@ -825,6 +830,14 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   }
 
   async function openLocked(job, opts = {}) {
+    try {
+      return await openLocked1(job, opts);
+    } finally {
+      m.swapping = false;
+    }
+  }
+
+  async function openLocked1(job, opts = {}) {
     // the stock simulated along while playing (Stock on); at rest only the tool and the path
     // (the stock shown then is the background simulation's)
     let stock = view.stock && !!m.expanded;
@@ -846,6 +859,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // the same place when open again; the first time, the end (the whole job drawn)
     const keep = m.open ? (m.wanted ?? m.pos) : (m.keepAt ?? Number.POSITIVE_INFINITY);
     m.keepAt = null;
+    // open again (after a plan): the old playback stays shown, untouched, until the new one
+    // is built at the same place, then swapped in (never a frame from its start)
+    const reopening = m.open;
     try {
       const setup = job.schema_version === "0.2" ? state.tree?.setup : undefined;
       const machine = machineArg?.() ?? null;
@@ -859,6 +875,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       }
       result.path = f32(result.path);
       result.times = result.times ? f32(result.times) : null;
+      if (reopening) m.swapping = true;
       m.session = result;
       m.stock = stock;
       m.xyz = result.kind === "xyz";
@@ -866,13 +883,17 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.clock = null;
       m.gpu?.destroy();
       m.gpu = null;
+      // (the place, within the new job: clamped if it got shorter)
+      const at = Math.min(keep, result.segments);
       if (!stock) {
         if (mine !== epoch) return void (m.session = null);
         m.backend = "";
         renderLegend();
+        m.pos = at;
         await buildScene();
+        m.swapping = false;
         $("simScrub").max = String(result.segments);
-        $("simScrub").value = "0";
+        $("simScrub").value = String(m.pos);
         $("simControls").classList.toggle("hidden", !m.expanded);
         m.open = true;
         document.body.dataset.machining = "open";
@@ -918,9 +939,17 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       await engine("simSeek", 0);
       refreshHidden();
       renderLegend();
+      if (reopening && at > 0) {
+        // the stock run to the place first (into the engine's mirror only: the old scene
+        // stays as it was), then built there
+        m.stockMesh = null;
+        await seek(at);
+        if (m.session !== result) return;
+      }
       await buildScene();
+      m.swapping = false;
       $("simScrub").max = String(result.segments);
-      $("simScrub").value = "0";
+      $("simScrub").value = String(m.pos);
       $("simControls").classList.toggle("hidden", !m.expanded);
       m.open = true;
       document.body.dataset.machining = "open";
@@ -931,8 +960,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       // in the background
       window.__marcam.statsInBackground?.();
     } catch (e) {
-      // (the project went meanwhile: nothing to say)
-      if (e.message === "superseded") return;
+      // (the project went meanwhile, or a newer plan: nothing to say)
+      if (e.message === "superseded" || e.message === "replanning") return;
       if (opts.auto) {
         // (opened by itself: the status line stays the person's)
         if (e.message !== "cancelled") showError(e.message);
@@ -986,6 +1015,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function frame(t) {
     if (!m.playing) {
       restride();
+      return;
+    }
+    // (the playback being replaced after a plan: on once it is)
+    if (!m.session || m.swapping) {
+      m.last = t;
+      requestAnimationFrame(frame);
       return;
     }
     const dt = Math.min(0.1, (t - (m.last || t)) / 1000);
@@ -1113,7 +1148,14 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   });
 
   /** The engine's worker was ended (a cancel): its playback is gone, so this one closes. */
-  function lost() {
+  function lost(why) {
+    // a newer plan (the playback being made for the last one stopped): what is shown stays
+    // until the new playback replaces it, at the same place
+    if (why === "replanning" && m.open) {
+      if (m.session) m.keepAt = m.wanted ?? m.pos;
+      m.session = null;
+      return;
+    }
     if (m.session || m.open) close();
     m.session = null;
   }
@@ -1126,6 +1168,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // the vise's jaws go with the part and the stock, a playback open or not
     if (v?.groups?.jaws) v.groups.jaws.visible = view.part || view.stock;
     if (!m.open || !v || v.failed || !v.groups.work) return;
+    // (a new playback being built: the old one shown as it is meanwhile)
+    if (m.swapping || !m.session) return;
     // (a test's chosen layers, View hooks: they stand until it clears them)
     if (state.viewShow) {
       if (v.groups.machining) v.groups.machining.visible = false;

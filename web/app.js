@@ -64,7 +64,7 @@ function cancelEngine(why = "cancelled") {
   showSimRing();
   startWorker("sim");
   state.epoch = (state.epoch || 0) + 1;
-  window.__marcam.machining?.lost?.();
+  window.__marcam.machining?.lost?.(why);
   // ("superseded": a project opened or started meanwhile; nothing to say about it)
   for (const [, p] of waiting) p.reject(new Error(why));
 }
@@ -663,7 +663,7 @@ async function generate(opts = {}) {
   $("generate").disabled = $("simulate").disabled = true;
   // the playback being made for the last plan by itself is stale now: stopped, so it does not
   // hold the machine while this one plans (a slow one took minutes on a slow PC)
-  if (window.__marcam.machining?.state?.autoOpening) cancelEngine("superseded");
+  if (window.__marcam.machining?.state?.autoOpening) cancelEngine("replanning");
   setStatus(opts.auto ? "Updating the toolpaths..." : "Generating...", "busy");
   const run = (state.genRun = (state.genRun || 0) + 1);
   const hadSim = !!state.sim;
@@ -1312,7 +1312,9 @@ function previewDraft(doc, setupId, opId) {
         const k = ops.findIndex((o) => o.id === opId);
         if (k < 0) continue;
         const n = p.toolpath.points.length / 4;
-        const start = Math.max(0, ops[k].start - 1);
+        // (from its own first point: the one before is where the operation before ended, and
+        // a line from it drew a link at depth that the program does not make)
+        const start = Math.max(0, ops[k].start);
         const end = k + 1 < ops.length ? ops[k + 1].start : n;
         pts = p.toolpath.points.slice(4 * start, 4 * end);
         break;
@@ -1558,11 +1560,7 @@ async function updateView() {
     const s = state.sim?.stocks?.[state.tab];
     if (s) groups.sim.add(simMesh(THREE, state.sim, s));
   }
-  groups.sim.visible = $("showSim").checked;
-  groups.part.visible = $("showPart").checked && !(groups.sim.children.length && groups.sim.visible);
-  groups.stock.visible = $("showStock").checked && !(groups.sim.children.length && groups.sim.visible);
-  v.rapLines.visible = $("showRapids").checked;
-  if (state.machining?.open) for (const k of ["part", "stock", "sim", "path"]) groups[k].visible = false;
+  legacyLayers();
 
   // scrubber
   const k = +$("scrub").value;
@@ -1577,6 +1575,34 @@ async function updateView() {
     groups.tool.add(tip);
   }
 }
+
+/** What the view without a playback shows (the part, the stock, the simulated stock, the
+ *  toolpath and its tip, an operation's live preview): as the corner toggles say, and none of
+ *  it while the playback shows (it draws its own). The one place their visibility is set. */
+function legacyLayers() {
+  const v = state.three;
+  if (!v || v.failed) return;
+  const { groups } = v;
+  const view = state.machining?.view;
+  const m = state.machining;
+  // (no toggles yet, at the very start: the older switches)
+  const part = view ? view.part : $("showPart").checked;
+  const sim = view ? view.stock : $("showSim").checked;
+  const paths = view ? view.paths !== "off" : true;
+  const rapids = view ? view.rapids : $("showRapids").checked;
+  const tool = view ? view.tool : true;
+  const simShown = !!groups.sim.children.length && sim;
+  groups.sim.visible = sim;
+  groups.part.visible = part && !simShown;
+  groups.stock.visible = $("showStock").checked && (view ? view.part || view.stock : true) && !simShown;
+  groups.path.visible = paths;
+  if (v.rapLines) v.rapLines.visible = rapids;
+  groups.tool.visible = tool;
+  if (groups.draft) groups.draft.visible = paths;
+  // the playback shown (not stepped aside for picking or a new operation): it draws them
+  if (m?.open && !m.editing && groups.machining?.visible) for (const k of ["part", "stock", "sim", "path", "tool"]) groups[k].visible = false;
+}
+window.__marcam.legacyLayers = legacyLayers;
 
 function ramp(t) {
   t = Math.max(0, Math.min(1, t));
@@ -1728,7 +1754,7 @@ $("scrub").addEventListener("input", () => {
   drawSide();
   updateView();
 });
-for (const id of ["showRapids", "showStock", "showPart", "showSim"]) $(id).addEventListener("change", () => { drawSide(); updateView(); });
+for (const id of ["showRapids", "showStock", "showPart", "showSim"]) $(id).addEventListener("change", () => { drawSide(); updateView(); legacyLayers(); });
 window.addEventListener("resize", drawSide);
 
 (async () => {

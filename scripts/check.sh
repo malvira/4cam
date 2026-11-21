@@ -28,6 +28,8 @@ if [ "$1" = "--fast" ]; then
   node web/tests/project.test.mjs
   MARCAM_E2E_FAST=1 node web/tests/e2e.mjs
   node web/tests/stress.mjs --only monkey --seeds 1,2 --steps 30
+  # the viewer, tree and forms: what is drawn is what the toggles say, nothing changes by itself
+  node web/tests/viewmonkey.mjs --seeds 1,2 --actions 30
   node web/tests/perf.mjs --gate --seconds 2
   echo "FAST CHECKS PASSED in $(( $(date +%s) - t0 )) s"
   exit 0
@@ -67,6 +69,7 @@ node web/tests/project.test.mjs
 node web/tests/e2e.mjs
 # stateful UI tests: scripted scenarios and the seeded monkey (fixed seeds)
 node web/tests/stress.mjs
+node web/tests/viewmonkey.mjs --seeds 1,2,3,4 --actions 50
 # the simulation fuzz in the browser (fixed seeds; the engine-level one runs with cargo test)
 node web/tests/simfuzz.mjs
 # playback smoothness and a responsive page during background work (MARCAM_PERF_SLACK
