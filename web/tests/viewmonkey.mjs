@@ -232,7 +232,10 @@ try {
       // at once (mid-update: often the next action comes before this one settles)
       await sleep(80);
       const now = await js("window.__monkey.audit()");
-      for (const x of now) fail(seed, i, `${a.name}: ${x} (at once)`);
+      if (now.length) {
+        const c = await js("JSON.stringify({ c: window.__monkey.census(), open: window.__marcam.machining.state.open, swapping: !!window.__marcam.machining.state.swapping, session: !!window.__marcam.machining.state.session, tree: { draft: !!window.__marcam.state.tree?.draft, picking: !!window.__marcam.state.tree?.picking, tab: !!window.__marcam.state.tree?.tabMode } })");
+        for (const x of now) fail(seed, i, `${a.name}: ${x} (at once) ${c}`);
+      }
       // (not waited for: what it may still change is the next one's to change too)
       if (r.chance(0.35)) {
         for (const k of a.may) carry.add(k);
@@ -287,7 +290,7 @@ try {
         if (lostPart && !may.has("view")) fail(seed, i, `${a.name}: the part vanished in ${frames.filter((f) => !f[0]).length} of ${frames.length} frames`);
         if (lostPath) fail(seed, i, `${a.name}: the toolpaths vanished in ${frames.filter((f) => !f[1]).length} of ${frames.length} frames`);
         const bad = frames.filter((f) => f[3]).map((f) => f[3]);
-        if (bad.length) fail(seed, i, `${a.name}: ${bad.length} of ${frames.length} frames drawn against the toggles (${[...new Set(bad)].join(" | ")})${VERBOSE ? ` ${await js("window.__monkey.frames.find((f) => f.census)?.census")}` : ""}`);
+        if (bad.length) fail(seed, i, `${a.name}: ${bad.length} of ${frames.length} frames drawn against the toggles (${[...new Set(bad)].join(" | ")}) ${await js("window.__monkey.frames.find((f) => f.census)?.census")}`);
       }
       const errs = app.pageErrors();
       if (errs.length > errs0) {

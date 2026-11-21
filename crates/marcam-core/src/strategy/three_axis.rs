@@ -70,14 +70,21 @@ pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> 
             regions: Vec::new(),
         };
         b.comment("--- facing (bounded by a face) ---");
-        return path_pocket(b, d, stock, safe, &p);
+        return path_pocket(b, d, stock, safe, &p, op.boundary_offset);
     }
     let r = d / 2.0;
     let top = stock.max[2];
     let bottom = top - op.depth;
-    // overhang the stock by the tool radius so the edges are cleared
-    let (x0, x1) = (stock.min[0] - r * 0.5, stock.max[0] + r * 0.5);
-    let (y0, y1) = (stock.min[1] + r * 0.5, stock.max[1] - r * 0.5);
+    // overhang the stock by the tool radius so the edges are cleared (and by the boundary
+    // offset: past the stock, or short of its edges)
+    let g = op.boundary_offset;
+    let (x0, x1) = (stock.min[0] - r * 0.5 - g, stock.max[0] + r * 0.5 + g);
+    let (y0, y1) = (stock.min[1] + r * 0.5 - g, stock.max[1] - r * 0.5 + g);
+    if x1 <= x0 || y1 <= y0 {
+        return Err(format!(
+            "facing: a boundary offset of {g} mm leaves nothing of the stock to face"
+        ));
+    }
     b.comment("--- facing ---");
     for z in levels(top, bottom, op.step_down) {
         if crate::budget::over() {
@@ -102,7 +109,7 @@ pub fn pocket(
         return adaptive_pocket(b, d, stock, safe, op);
     }
     if !op.paths.is_empty() {
-        return path_pocket(b, d, stock, safe, op);
+        return path_pocket(b, d, stock, safe, op, 0.0);
     }
     let r = d / 2.0;
     let [px0, py0, px1, py1] = op.rect;
@@ -281,16 +288,33 @@ pub fn pocket_loops(
     r: f64,
     step: f64,
 ) -> Result<Vec<Vec<[f64; 2]>>, String> {
-    let field = crate::offset::DistanceField::new(paths, POCKET_FIELD_CELL, f64::INFINITY);
+    pocket_loops_grown(paths, r, step, 0.0)
+}
+
+/// [`pocket_loops`] for the area `grow` mm past the outlines (shrunk when negative): the
+/// outermost loop `r - grow` in from them, holes in it smaller by as much.
+pub fn pocket_loops_grown(
+    paths: &[Vec<[f64; 2]>],
+    r: f64,
+    step: f64,
+    grow: f64,
+) -> Result<Vec<Vec<[f64; 2]>>, String> {
+    let field = crate::offset::DistanceField::padded(
+        paths,
+        POCKET_FIELD_CELL,
+        f64::INFINITY,
+        grow.max(0.0) + if grow > 0.0 { r } else { 0.0 },
+    );
     let deepest = field.max();
-    if deepest <= r + 1e-6 {
+    let first = r - grow;
+    if deepest <= first + 1e-6 {
         return Err(format!(
             "the pocket is nowhere wide enough for the {} mm tool",
             2.0 * r
         ));
     }
     let mut levels = Vec::new();
-    let mut l = r;
+    let mut l = first;
     while l < deepest {
         levels.push(l);
         l += step;
@@ -364,14 +388,16 @@ fn path_pocket(
     stock: &StockBox,
     safe: f64,
     op: &Pocket,
+    grow: f64,
 ) -> Result<(), String> {
     let r = d / 2.0;
     // Offset loops keep their corners sharp, so along a corner's diagonal they are √2 times
     // the spacing apart: more than 0.7 diameters would leave material there.
-    let loops = pocket_loops(
+    let loops = pocket_loops_grown(
         &op.paths,
         r,
         (op.stepover * d).clamp(0.01, MAX_LOOP_SPACING * d),
+        grow,
     )?;
     let top = op.top.unwrap_or(stock.max[2]);
     b.comment("--- pocket (outline) ---");
@@ -523,9 +549,12 @@ pub fn contour(
     }
     // (the outline as written: where tabs placed by hand are measured along)
     let src0 = src.clone();
+    // (and the boundary offset: out from the outline when positive, whichever side)
+    let g = op.boundary_offset;
     let mut path = match op.side.as_str() {
-        "outside" => offset_polygon(&src, r),
-        "inside" => offset_polygon(&src, -r),
+        "outside" => offset_polygon(&src, if g == 0.0 { r } else { r + g }),
+        "inside" => offset_polygon(&src, if g == 0.0 { -r } else { -r + g }),
+        _ if g != 0.0 => offset_polygon(&src, g),
         _ => src,
     };
     // Climb milling, spindle clockwise, keeps the wall it cuts on the tool's right: round an

@@ -21,8 +21,14 @@ pub struct DistanceField {
 impl DistanceField {
     /// Sample `paths` (even-odd) every `h` mm, distances capped at `cap`.
     pub fn new(paths: &[Path2], h: f64, cap: f64) -> DistanceField {
+        DistanceField::padded(paths, h, cap, 0.0)
+    }
+
+    /// [`DistanceField::new`] reaching `extra` mm farther out round the region (its loops
+    /// outside it, at negative levels down to `-extra`).
+    pub fn padded(paths: &[Path2], h: f64, cap: f64, extra: f64) -> DistanceField {
         let region = Region::new(paths, cap);
-        let pad = 2.0 * h;
+        let pad = 2.0 * h + extra.max(0.0);
         // uncapped: each sample's distance from the few segments that can be nearest in its
         // 1 mm cell, not from all of them (a billion for a large face at 0.05 mm: seconds);
         // the same values, bit for bit

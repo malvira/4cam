@@ -757,6 +757,10 @@ pub struct Face {
     /// Several faces, each faced in turn to its own depth (then `paths`/`depth` are unused).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<Region>,
+    /// Grow the faced area this far past its boundary (mm; the picked faces' outlines, or the
+    /// stock's), or shrink it (negative).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub boundary_offset: f64,
 }
 
 /// 3-axis: rectangular pocket `[x0, y0, x1, y1]`, `depth` below `top` (default: stock top).
@@ -931,6 +935,10 @@ pub struct Contour {
     /// Lead-out: a quarter arc of this radius (mm) off the contour to the waste side; 0: none.
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub lead_out: f64,
+    /// Move the contour this far out from the outline (mm; in, when negative), beyond the
+    /// tool's radius: a hole cut bigger, an outline left bigger. The tabs move with it.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub boundary_offset: f64,
 }
 
 fn is_zero_f64(v: &f64) -> bool {
