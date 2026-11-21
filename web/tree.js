@@ -182,22 +182,29 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (!t.doc) return;
     const s = setup();
     if (!s) {
-      box.innerHTML = '<div class="muted small" id="treeEmpty">No part yet: Import STL (or drop one on the page) to get a setup with a roughing and a finishing operation.</div>';
+      box.innerHTML = '<div class="muted small" id="treeEmpty">No part yet: Import STL (or drop one on the page) to get a setup, then add its operations.</div>';
       return;
     }
     const setupSel = t.doc.setups
       .map((x) => `<option value="${esc(x.id)}" ${x.id === t.setup ? "selected" : ""}>${esc(x.name || x.id)}</option>`)
       .join("");
-    let html = `<div class="row small"><label for="treeSetup">Setup</label><select id="treeSetup">${setupSel}</select>
-      <button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
-      <button type="button" id="treeAddSetup" title="Another setup for the same part (e.g. the other side, or a vise setup)">+ Setup</button>
-      <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button>
-      <button type="button" id="treeReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button></div>
-      <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
-      <div class="row small detected" id="detected"></div>
-      <div class="row small eyes"><span class="muted">Toolpaths shown:</span>
+    // (Mar) the setups as a tree, each with its operations under it; the selected item's
+    // details below the tree. (The setup chooser stays for scripts: not shown.)
+    // folded or not: as the person left each setup; by default the one worked on unfolded
+    t.fold ||= new Map();
+    let html = `<select id="treeSetup" class="hidden" aria-hidden="true" tabindex="-1">${setupSel}</select><div class="tree-list" id="treeList">`;
+    for (const x of t.doc.setups) {
+      if (x.id === s.id) {
+        html += setupHead(x, true);
+        html += `<div class="tree-setupbody" ${isOpen(x) ? "" : "hidden"}>`;
+        break;
+      }
+      html += setupHead(x, false) + otherOps(x) + `</div>`;
+    }
+    html += `<div class="row small eyes"><span class="muted">Toolpaths shown:</span>
         <button type="button" id="eyeAll" title="Show every toolpath of this setup">Show all</button>
-        <button type="button" id="eyeNone" title="Hide every toolpath of this setup (view only)">Hide all</button></div>`;
+        <button type="button" id="eyeNone" title="Hide every toolpath of this setup (view only)">Hide all</button></div>
+      <div class="row small detected" id="detected"></div>`;
     if (t.upgraded) html += `<div class="muted small">0.1 job shown as a 0.2 project; it is saved as 0.2 on the first edit.</div>`;
     let n = 0;
     // estimated times from the last Generate of this setup
@@ -237,13 +244,56 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       <button type="button" id="treeAdd">Add operation</button></div>`;
     if (t.problems.length) html += `<div class="error small">${t.problems.map(esc).join("<br>")}</div>`;
     if (t.draft) html += `<div class="muted small">New operation ${esc(t.draft.op.id)} (not saved until Apply)</div>`;
-    html += `<div id="opEditor"></div>`;
+    html += `</div></div>`;
+    // the setups after the one being worked on
+    for (const x of t.doc.setups.slice(t.doc.setups.indexOf(s) + 1)) html += setupHead(x, false) + otherOps(x) + `</div>`;
+    html += `<div class="row small"><button type="button" id="treeAddSetup" title="Another setup for the same part (e.g. the other side, or a vise setup)">+ Add setup</button></div></div>`;
+    // the details of what is selected: the setup (nothing else selected), or the operation
+    html += `<div class="tree-details" id="treeDetails">`;
+    if (!t.selected) {
+      html += `<div class="tree-outname">${esc(s.name || s.id)} <span class="muted">setup</span></div>
+        <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
+        <div class="row small"><button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
+        <button type="button" id="treeReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button>
+        <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>`;
+    }
+    html += `<div id="opEditor"></div></div>`;
     box.innerHTML = html;
     box.dataset.ops = String(n);
     renderStates();
     renderEditor();
     for (const [e, y] of scrolls) e.scrollTop = y;
     detectFeatures();
+  }
+
+  /** A setup's line in the tree (its `<div class="tree-setup">` left open): a fold button,
+   *  its name (selecting it shows the setup's details), its kind. */
+  function setupHead(x, active) {
+    const open = isOpen(x);
+    return `<div class="tree-setup ${active ? "active" : ""} ${active && !t.selected ? "sel" : ""}" data-setup="${esc(x.id)}">
+      <div class="tree-setuphead"><button type="button" class="twisty" data-act="fold" aria-expanded="${open}" aria-label="Show the operations of ${esc(x.name || x.id)}">${open ? "▾" : "▸"}</button>
+      <span class="tree-label" data-act="setup" title="This setup's details">${esc(x.name || x.id)}</span> <span class="muted">${esc(KIND_NAMES[kindOfSetup(x)])} · ${x.operations.length} op${x.operations.length === 1 ? "" : "s"}</span></div>`;
+  }
+  /** Another setup's operations (when unfolded): selecting one goes to that setup. */
+  function otherOps(x) {
+    if (!isOpen(x)) return "";
+    return `<div class="tree-setupbody">${x.outputs
+      .flatMap((o) => o.operations)
+      .map((id) => x.operations.find((o) => o.id === id))
+      .filter(Boolean)
+      .map((op) => `<div class="tree-op other ${op.enabled === false ? "off" : ""}" data-op="${esc(op.id)}"><span class="tree-label" data-act="select">${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(op.id)} · T${op.tool}</span></span></div>`)
+      .join("")}</div>`;
+  }
+  const isOpen = (x) => (t.fold?.has(x.id) ? t.fold.get(x.id) : x.id === t.setup);
+  /** Another setup is worked on: what was being edited here is dropped. */
+  function switchSetup(id) {
+    if (id === t.setup) return;
+    if (t.picking) endPicking(false);
+    t.setup = id;
+    t.selected = null;
+    t.draft = null;
+    t.retype = null;
+    t.typeNote = null;
   }
 
   /** The field focused inside `el`, with its caret (to be put back after drawing again). */
@@ -1012,6 +1062,30 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       await window.__marcam.project.editSetup(t.setup);
       return;
     }
+    const head = el.closest?.(".tree-setup");
+    if (el.dataset?.act === "fold" && head) {
+      const id = head.dataset.setup;
+      const x = t.doc.setups.find((y) => y.id === id);
+      if (x) t.fold.set(id, !isOpen(x));
+      return render();
+    }
+    if (el.dataset?.act === "setup" && head) {
+      // a setup's name: it is worked on, its details shown
+      if (t.picking) endPicking(false);
+      switchSetup(head.dataset.setup);
+      t.selected = null;
+      t.draft = null;
+      t.retype = null;
+      t.typeNote = null;
+      return render();
+    }
+    if (el.dataset?.act === "select" && head && head.dataset.setup !== t.setup) {
+      // an operation of another setup: that setup, the operation selected in it
+      const id = el.closest(".tree-op")?.dataset.op;
+      switchSetup(head.dataset.setup);
+      t.selected = id || null;
+      return render();
+    }
     if (el.id === "treeAddSetup") {
       await window.__marcam.project.addSetup();
       return;
@@ -1361,12 +1435,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (el.closest("#opForm") && el.name === "__axial" && t.draft) return refreshDefaults();
     if (el.id === "treeSetup") {
       // another setup: what was being edited here is dropped
-      if (t.picking) endPicking(false);
-      t.setup = el.value;
-      t.selected = null;
-      t.draft = null;
-      t.retype = null;
-      t.typeNote = null;
+      switchSetup(el.value);
       return render();
     }
     const row = el.closest(".tree-op");

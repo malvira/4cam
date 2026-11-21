@@ -182,6 +182,8 @@ function actions(r, app) {
       await js(`(() => { const s = document.getElementById('simRes'); s.value = '${want}'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
       return want;
     } },
+    { name: "setup", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=setup]')")) || null },
+    { name: "foldtree", w: 1, may: [], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=fold]')")) || null },
     { name: "generate", w: 1, may: ["pos"], run: async () => { await click("document.getElementById('generate')"); } },
   ];
 }

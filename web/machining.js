@@ -653,9 +653,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       // WASM playback sends base64, the GPU one typed arrays
       const { C } = dims();
       const [r0] = res.rows;
-      const h = m.xyz ? res.z : res.r;
-      m.r.set(f32(h), r0 * C);
-      m.op.set(u16(res.op), r0 * C);
+      const h = f32(m.xyz ? res.z : res.r);
+      const op = u16(res.op);
+      // (rows of a playback since replaced, another grid: dropped, never written past it)
+      if (r0 * C + h.length > m.r.length || r0 * C + op.length > m.op.length) return;
+      m.r.set(h, r0 * C);
+      m.op.set(op, r0 * C);
     }
     const k = m.stride;
     if (res.rows && m.stockMesh && m.xyz) {

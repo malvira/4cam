@@ -87,6 +87,17 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; }
 .tree-op .tree-label { flex: 1; cursor: pointer; min-width: 0; }
 .tree-op button { padding: 0 5px; font-size: 11px; }
 .tree-op input[type=color] { width: 22px; height: 18px; padding: 0; border: 1px solid var(--line); background: none; }
+/* the setups as a tree, each with its operations; the selected item's details below it */
+.tree-list { max-height: 48vh; overflow: auto; }
+.tree-setup { margin: 2px 0; }
+.tree-setuphead { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 4px; font-weight: 600; }
+.tree-setuphead .tree-label { cursor: pointer; }
+.tree-setuphead .muted { font-weight: 400; }
+.tree-setup.sel > .tree-setuphead { background: var(--bg); outline: 1px solid var(--accent); }
+.tree-setupbody { margin-left: 14px; }
+.tree-op.other .tree-label { padding-left: 2px; }
+.twisty { padding: 0 3px; font-size: 11px; border: none; background: none; cursor: pointer; }
+.tree-details { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
 .opform { display: grid; gap: 3px; padding: 6px; border: 1px solid var(--line); border-radius: 4px; margin-top: 6px; }
 .opform label { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
 .opform input, .opform select { width: 140px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }

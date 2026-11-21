@@ -2922,6 +2922,37 @@ try {
       `${JSON.stringify(h0)} ${JSON.stringify(h1)} off ${off}, deleted ${del}; in field ${inField}; ${JSON.stringify(back)}; ${JSON.stringify(fwd)}; redo gone ${redoGone}`);
   }
 
+  // 8z. (Mar) the setup tree: every setup with its operations under it, the selected item's
+  // details below the tree
+  {
+    const text = readFileSync(join(root, "examples", "knob", "knob_two_setups.marcam.toml"), "utf8");
+    await js(`await window.__marcam.project.openText(${JSON.stringify(text)}, "knob_two_setups.marcam.toml").then(() => true)`);
+    await settle();
+    await waitFor(() => js("document.querySelectorAll('#tree .tree-setup').length === 2"), "both setups in the tree", 30000);
+    const t0 = await js("(() => { const h = [...document.querySelectorAll('#tree .tree-setup')]; return { names: h.map((x) => x.querySelector('[data-act=setup]').textContent).join('|'), active: document.querySelector('#tree .tree-setup.active').dataset.setup, details: !!document.getElementById('treeEditSetup'), ops: document.querySelectorAll('#tree .tree-setup.active .tree-op').length }; })()");
+    // the second setup's name: it is worked on, its details shown
+    await js("document.querySelectorAll('#tree .tree-setup')[1].querySelector('[data-act=setup]').click(); true");
+    await settle();
+    const t1 = await js("({ active: document.querySelector('#tree .tree-setup.active').dataset.setup, chooser: document.getElementById('treeSetup').value, details: document.getElementById('setupSummary')?.textContent || '', selected: window.__marcam.state.tree.selected })");
+    // the first one unfolded: one of its operations selected goes back to it, its form below
+    await js("(() => { const b = document.querySelectorAll('#tree .tree-setup')[0].querySelector('[data-act=fold]'); if (b.getAttribute('aria-expanded') !== 'true') b.click(); return true; })()");
+    await settle();
+    const other = await js("document.querySelectorAll('#tree .tree-setup')[0].querySelectorAll('.tree-op').length");
+    await js("document.querySelectorAll('#tree .tree-setup')[0].querySelector('.tree-op [data-act=select]').click(); true");
+    await settle();
+    const t2 = await js("({ active: document.querySelector('#tree .tree-setup.active').dataset.setup, selected: window.__marcam.state.tree.selected, form: !!document.querySelector('#treeDetails #opForm'), setupDetails: !!document.getElementById('treeEditSetup') })");
+    // folding the setup worked on hides its operations
+    await js("document.querySelector('#tree .tree-setup.active [data-act=fold]').click(); true");
+    await settle();
+    const folded = await js("document.querySelector('#tree .tree-setup.active .tree-setupbody').hidden");
+    await js("document.querySelector('#tree .tree-setup.active [data-act=fold]').click(); true");
+    await settle();
+    check("setup tree: every setup listed with its operations under it; a setup's name selects it and shows its details below; an operation of another setup goes to it with its form below; folding hides a setup's operations",
+      t0.names.split("|").length === 2 && t0.details && t0.ops > 0 && t1.active !== t0.active && t1.chooser === t1.active && t1.details.length > 0 && !t1.selected && other > 0 && t2.active === t0.active && !!t2.selected && t2.form && !t2.setupDetails && folded,
+      `${JSON.stringify(t0)} ${JSON.stringify(t1)} other ${other} ${JSON.stringify(t2)} folded ${folded}`);
+    await shot("32_setup_tree");
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);
